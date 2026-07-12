@@ -73,6 +73,10 @@ _REQUIRED_DOCUMENTED_CODES: frozenset[str] = frozenset(
         "dependency_unavailable",
         "tool_execution_error",
         "llm_error",
+        "invalid_cursor",
+        "unauthorized_field",
+        "mock_validation_error",
+        "idempotency_key_reuse",
     }
 )
 
