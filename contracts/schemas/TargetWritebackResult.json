@@ -1,0 +1,69 @@
+{
+  "$defs": {
+    "TargetWritebackStatus": {
+      "enum": [
+        "pending",
+        "accepted",
+        "confirmed",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "TargetWritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Per-target writeback result (kept separate from outbound disposition result).",
+  "properties": {
+    "canonical_target": {
+      "title": "Canonical Target",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/TargetWritebackStatus"
+    },
+    "provider_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Code"
+    },
+    "message_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message Code"
+    },
+    "artifact_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact Ref"
+    }
+  },
+  "required": [
+    "canonical_target",
+    "status"
+  ],
+  "title": "TargetWritebackResult",
+  "type": "object"
+}

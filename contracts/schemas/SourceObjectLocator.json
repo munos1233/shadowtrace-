@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "SourceObjectKind": {
+      "description": "Canonical source object kind used for the internal discriminated union.",
+      "enum": [
+        "incident",
+        "alert",
+        "asset",
+        "log",
+        "connector"
+      ],
+      "title": "SourceObjectKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Minimal writeback locator (intro §4.3.5 / ISSUE-002).",
+  "properties": {
+    "source_product": {
+      "title": "Source Product",
+      "type": "string"
+    },
+    "source_tenant_id": {
+      "title": "Source Tenant Id",
+      "type": "string"
+    },
+    "connector_id": {
+      "title": "Connector Id",
+      "type": "string"
+    },
+    "source_kind": {
+      "$ref": "#/$defs/SourceObjectKind"
+    },
+    "source_object_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Object Type"
+    },
+    "source_object_id": {
+      "title": "Source Object Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_product",
+    "source_tenant_id",
+    "connector_id",
+    "source_kind",
+    "source_object_id"
+  ],
+  "title": "SourceObjectLocator",
+  "type": "object"
+}

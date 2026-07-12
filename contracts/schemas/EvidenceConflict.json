@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "EvidenceSource": {
+      "description": "Eight evidence sources.",
+      "enum": [
+        "identity",
+        "endpoint",
+        "data_security",
+        "network_flow",
+        "dns",
+        "asset",
+        "threat_intel",
+        "false_positive_match"
+      ],
+      "title": "EvidenceSource",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A detected contradiction between two or more pieces of evidence.",
+  "properties": {
+    "conflict_id": {
+      "title": "Conflict Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSource"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "detail": {
+      "additionalProperties": true,
+      "title": "Detail",
+      "type": "object"
+    }
+  },
+  "required": [
+    "conflict_id",
+    "event_id",
+    "description"
+  ],
+  "title": "EvidenceConflict",
+  "type": "object"
+}

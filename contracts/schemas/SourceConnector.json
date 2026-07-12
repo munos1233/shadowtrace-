@@ -1,0 +1,165 @@
+{
+  "$defs": {
+    "CapabilityState": {
+      "enum": [
+        "unknown",
+        "supported",
+        "unsupported"
+      ],
+      "title": "CapabilityState",
+      "type": "string"
+    },
+    "ConnectorCapability": {
+      "enum": [
+        "log_ingestion",
+        "query",
+        "event_disposition",
+        "entity_response"
+      ],
+      "title": "ConnectorCapability",
+      "type": "string"
+    },
+    "ConnectorStatus": {
+      "enum": [
+        "online",
+        "degraded",
+        "offline",
+        "unknown"
+      ],
+      "title": "ConnectorStatus",
+      "type": "string"
+    },
+    "DispositionPolicy": {
+      "enum": [
+        "required",
+        "not_required"
+      ],
+      "title": "DispositionPolicy",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Connector descriptor. Secrets are stored only as references (intro §4.3.5).",
+  "properties": {
+    "connector_id": {
+      "title": "Connector Id",
+      "type": "string"
+    },
+    "source_product": {
+      "title": "Source Product",
+      "type": "string"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "device_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Device Type"
+    },
+    "status": {
+      "$ref": "#/$defs/ConnectorStatus",
+      "default": "unknown"
+    },
+    "read_endpoint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Read Endpoint"
+    },
+    "disposition_endpoint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Disposition Endpoint"
+    },
+    "capabilities": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CapabilityState"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/ConnectorCapability"
+      },
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "disposition_policy_default": {
+      "$ref": "#/$defs/DispositionPolicy",
+      "default": "not_required"
+    },
+    "last_sync_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Sync At"
+    },
+    "schema_version": {
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "read_credential_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Read Credential Ref"
+    },
+    "disposition_credential_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Disposition Credential Ref"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "connector_id",
+    "source_product",
+    "display_name"
+  ],
+  "title": "SourceConnector",
+  "type": "object"
+}

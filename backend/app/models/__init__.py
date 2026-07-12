@@ -1,0 +1,104 @@
+"""Core data models package (ISSUE-002).
+
+``MODEL_REGISTRY`` maps model name -> Pydantic model class for every model whose
+JSON Schema is exported to ``contracts/schemas/``. The schema-export test compares
+the registry key set against the exported file set (no brittle fixed count).
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from app.models.action import Action, ImpactAssessment
+from app.models.context import EventContext
+from app.models.disposition import (
+    DispositionCommand,
+    DispositionOutboxRecord,
+    DispositionReceipt,
+    RecordCompensationParams,
+    RecordExecutionResultParams,
+    SetEventDispositionParams,
+    SourceObjectLocator,
+    SubmitEntityActionParams,
+    TargetDispositionResult,
+    TargetWritebackResult,
+    WritebackSummary,
+)
+from app.models.entities import (
+    AccountEntity,
+    DomainEntity,
+    EntitySet,
+    FileEntity,
+    HostEntity,
+    IPEntity,
+    ProcessEntity,
+)
+from app.models.evidence import Evidence, EvidenceConflict, EvidenceGap
+from app.models.execution import (
+    ActionExecutionJob,
+    ExecutionActionView,
+    ExecutionSummary,
+    TargetExecutionResult,
+)
+from app.models.report import InvestigationReport, ReportSection
+from app.models.security_event import SecurityEvent
+from app.models.source import (
+    SourceAlert,
+    SourceAsset,
+    SourceConnector,
+    SourceIncident,
+    SourceLog,
+    SourceObjectState,
+    SourceReference,
+)
+
+MODEL_REGISTRY: dict[str, type[BaseModel]] = {
+    # entities
+    "AccountEntity": AccountEntity,
+    "HostEntity": HostEntity,
+    "IPEntity": IPEntity,
+    "DomainEntity": DomainEntity,
+    "ProcessEntity": ProcessEntity,
+    "FileEntity": FileEntity,
+    "EntitySet": EntitySet,
+    # source
+    "SourceReference": SourceReference,
+    "SourceObjectState": SourceObjectState,
+    "SourceIncident": SourceIncident,
+    "SourceAlert": SourceAlert,
+    "SourceAsset": SourceAsset,
+    "SourceLog": SourceLog,
+    "SourceConnector": SourceConnector,
+    # evidence
+    "Evidence": Evidence,
+    "EvidenceConflict": EvidenceConflict,
+    "EvidenceGap": EvidenceGap,
+    # execution
+    "TargetExecutionResult": TargetExecutionResult,
+    "ActionExecutionJob": ActionExecutionJob,
+    "ExecutionActionView": ExecutionActionView,
+    "ExecutionSummary": ExecutionSummary,
+    # disposition
+    "SourceObjectLocator": SourceObjectLocator,
+    "SetEventDispositionParams": SetEventDispositionParams,
+    "SubmitEntityActionParams": SubmitEntityActionParams,
+    "RecordExecutionResultParams": RecordExecutionResultParams,
+    "RecordCompensationParams": RecordCompensationParams,
+    "TargetDispositionResult": TargetDispositionResult,
+    "DispositionCommand": DispositionCommand,
+    "TargetWritebackResult": TargetWritebackResult,
+    "DispositionReceipt": DispositionReceipt,
+    "DispositionOutboxRecord": DispositionOutboxRecord,
+    "WritebackSummary": WritebackSummary,
+    # action
+    "ImpactAssessment": ImpactAssessment,
+    "Action": Action,
+    # report
+    "ReportSection": ReportSection,
+    "InvestigationReport": InvestigationReport,
+    # security event + context
+    "SecurityEvent": SecurityEvent,
+    "EventContext": EventContext,
+}
+
+__all__ = ["MODEL_REGISTRY", *sorted(MODEL_REGISTRY.keys())]

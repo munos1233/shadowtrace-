@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "description": "One chapter of the structured report.",
+  "properties": {
+    "key": {
+      "title": "Key",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "content": {
+      "default": "",
+      "title": "Content",
+      "type": "string"
+    },
+    "data": {
+      "additionalProperties": true,
+      "title": "Data",
+      "type": "object"
+    }
+  },
+  "required": [
+    "key",
+    "title"
+  ],
+  "title": "ReportSection",
+  "type": "object"
+}

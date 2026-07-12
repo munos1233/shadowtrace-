@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "TargetExecutionStatus": {
+      "enum": [
+        "success",
+        "failed",
+        "unknown",
+        "skipped"
+      ],
+      "title": "TargetExecutionStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Outbound per-target result: allowlisted, no free message / raw_result.",
+  "properties": {
+    "canonical_target": {
+      "title": "Canonical Target",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/TargetExecutionStatus"
+    },
+    "provider_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Code"
+    },
+    "message_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message Code"
+    },
+    "artifact_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact Ref"
+    }
+  },
+  "required": [
+    "canonical_target",
+    "status"
+  ],
+  "title": "TargetDispositionResult",
+  "type": "object"
+}

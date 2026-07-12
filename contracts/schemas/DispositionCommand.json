@@ -1,0 +1,390 @@
+{
+  "$defs": {
+    "DispositionIntentKind": {
+      "description": "Internal envelope classification; not a vendor enum.",
+      "enum": [
+        "entity_action_submit",
+        "execution_result_record",
+        "compensation_record",
+        "event_status_update"
+      ],
+      "title": "DispositionIntentKind",
+      "type": "string"
+    },
+    "ExecutionOwner": {
+      "enum": [
+        "xdr_managed",
+        "direct_tool"
+      ],
+      "title": "ExecutionOwner",
+      "type": "string"
+    },
+    "RecordCompensationParams": {
+      "additionalProperties": false,
+      "description": "Params for COMPENSATION_RECORD (rollback compensation sync).",
+      "properties": {
+        "operation_code": {
+          "const": "record_compensation",
+          "default": "record_compensation",
+          "title": "Operation Code",
+          "type": "string"
+        },
+        "summary_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary Code"
+        }
+      },
+      "title": "RecordCompensationParams",
+      "type": "object"
+    },
+    "RecordExecutionResultParams": {
+      "additionalProperties": false,
+      "description": "Params for EXECUTION_RESULT_RECORD (DIRECT_TOOL result sync).",
+      "properties": {
+        "operation_code": {
+          "const": "record_execution_result",
+          "default": "record_execution_result",
+          "title": "Operation Code",
+          "type": "string"
+        },
+        "summary_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary Code"
+        }
+      },
+      "title": "RecordExecutionResultParams",
+      "type": "object"
+    },
+    "SetEventDispositionParams": {
+      "additionalProperties": false,
+      "description": "Params for EVENT_STATUS_UPDATE (the deferred terminal disposition).",
+      "properties": {
+        "operation_code": {
+          "const": "set_event_disposition",
+          "default": "set_event_disposition",
+          "title": "Operation Code",
+          "type": "string"
+        },
+        "target_disposition": {
+          "$ref": "#/$defs/SourceDisposition"
+        },
+        "comment_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment Code"
+        }
+      },
+      "required": [
+        "target_disposition"
+      ],
+      "title": "SetEventDispositionParams",
+      "type": "object"
+    },
+    "SourceDisposition": {
+      "description": "Normalized external disposition label; source_status_raw keeps the original.",
+      "enum": [
+        "pending",
+        "processing",
+        "contained",
+        "completed",
+        "suspended",
+        "ignored",
+        "unknown"
+      ],
+      "title": "SourceDisposition",
+      "type": "string"
+    },
+    "SourceObjectKind": {
+      "description": "Canonical source object kind used for the internal discriminated union.",
+      "enum": [
+        "incident",
+        "alert",
+        "asset",
+        "log",
+        "connector"
+      ],
+      "title": "SourceObjectKind",
+      "type": "string"
+    },
+    "SourceObjectLocator": {
+      "additionalProperties": false,
+      "description": "Minimal writeback locator (intro §4.3.5 / ISSUE-002).",
+      "properties": {
+        "source_product": {
+          "title": "Source Product",
+          "type": "string"
+        },
+        "source_tenant_id": {
+          "title": "Source Tenant Id",
+          "type": "string"
+        },
+        "connector_id": {
+          "title": "Connector Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/SourceObjectKind"
+        },
+        "source_object_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Object Type"
+        },
+        "source_object_id": {
+          "title": "Source Object Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_product",
+        "source_tenant_id",
+        "connector_id",
+        "source_kind",
+        "source_object_id"
+      ],
+      "title": "SourceObjectLocator",
+      "type": "object"
+    },
+    "SubmitEntityActionParams": {
+      "additionalProperties": false,
+      "description": "Params for ENTITY_ACTION_SUBMIT (XDR_MANAGED entity action).",
+      "properties": {
+        "operation_code": {
+          "const": "submit_entity_action",
+          "default": "submit_entity_action",
+          "title": "Operation Code",
+          "type": "string"
+        },
+        "entity_action_code": {
+          "title": "Entity Action Code",
+          "type": "string"
+        },
+        "canonical_target": {
+          "title": "Canonical Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_action_code",
+        "canonical_target"
+      ],
+      "title": "SubmitEntityActionParams",
+      "type": "object"
+    },
+    "TargetDispositionResult": {
+      "additionalProperties": false,
+      "description": "Outbound per-target result: allowlisted, no free message / raw_result.",
+      "properties": {
+        "canonical_target": {
+          "title": "Canonical Target",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TargetExecutionStatus"
+        },
+        "provider_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Code"
+        },
+        "message_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message Code"
+        },
+        "artifact_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Ref"
+        }
+      },
+      "required": [
+        "canonical_target",
+        "status"
+      ],
+      "title": "TargetDispositionResult",
+      "type": "object"
+    },
+    "TargetExecutionStatus": {
+      "enum": [
+        "success",
+        "failed",
+        "unknown",
+        "skipped"
+      ],
+      "title": "TargetExecutionStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Minimal outbound disposition envelope (strict allowlist).",
+  "properties": {
+    "disposition_id": {
+      "title": "Disposition Id",
+      "type": "string"
+    },
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "closure_cycle": {
+      "title": "Closure Cycle",
+      "type": "integer"
+    },
+    "intent_kind": {
+      "$ref": "#/$defs/DispositionIntentKind"
+    },
+    "source_locator": {
+      "$ref": "#/$defs/SourceObjectLocator"
+    },
+    "operation_code": {
+      "title": "Operation Code",
+      "type": "string"
+    },
+    "operation_params": {
+      "discriminator": {
+        "mapping": {
+          "record_compensation": "#/$defs/RecordCompensationParams",
+          "record_execution_result": "#/$defs/RecordExecutionResultParams",
+          "set_event_disposition": "#/$defs/SetEventDispositionParams",
+          "submit_entity_action": "#/$defs/SubmitEntityActionParams"
+        },
+        "propertyName": "operation_code"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SetEventDispositionParams"
+        },
+        {
+          "$ref": "#/$defs/SubmitEntityActionParams"
+        },
+        {
+          "$ref": "#/$defs/RecordExecutionResultParams"
+        },
+        {
+          "$ref": "#/$defs/RecordCompensationParams"
+        }
+      ],
+      "title": "Operation Params"
+    },
+    "target_results": {
+      "items": {
+        "$ref": "#/$defs/TargetDispositionResult"
+      },
+      "title": "Target Results",
+      "type": "array"
+    },
+    "operator_id": {
+      "title": "Operator Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "source_concurrency_token": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Concurrency Token"
+    },
+    "execution_owner": {
+      "$ref": "#/$defs/ExecutionOwner"
+    },
+    "parent_disposition_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Disposition Id"
+    },
+    "supersedes_disposition_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supersedes Disposition Id"
+    }
+  },
+  "required": [
+    "disposition_id",
+    "action_id",
+    "closure_cycle",
+    "intent_kind",
+    "source_locator",
+    "operation_code",
+    "operation_params",
+    "operator_id",
+    "idempotency_key",
+    "execution_owner"
+  ],
+  "title": "DispositionCommand",
+  "type": "object"
+}

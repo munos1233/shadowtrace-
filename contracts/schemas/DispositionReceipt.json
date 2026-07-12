@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "ConfirmationEvidence": {
+      "enum": [
+        "adapter_acknowledged",
+        "status_queried",
+        "readback_verified",
+        "manual_confirmed"
+      ],
+      "title": "ConfirmationEvidence",
+      "type": "string"
+    },
+    "TargetWritebackResult": {
+      "additionalProperties": false,
+      "description": "Per-target writeback result (kept separate from outbound disposition result).",
+      "properties": {
+        "canonical_target": {
+          "title": "Canonical Target",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TargetWritebackStatus"
+        },
+        "provider_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Code"
+        },
+        "message_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message Code"
+        },
+        "artifact_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Ref"
+        }
+      },
+      "required": [
+        "canonical_target",
+        "status"
+      ],
+      "title": "TargetWritebackResult",
+      "type": "object"
+    },
+    "TargetWritebackStatus": {
+      "enum": [
+        "pending",
+        "accepted",
+        "confirmed",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "TargetWritebackStatus",
+      "type": "string"
+    },
+    "WritebackStatus": {
+      "description": "Only valid once a writeback command exists; null otherwise.",
+      "enum": [
+        "pending",
+        "sending",
+        "accepted",
+        "confirmed",
+        "partial",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "WritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Append-only receipt keyed by ``(writeback_id, sequence)``; latest = max seq.",
+  "properties": {
+    "writeback_id": {
+      "title": "Writeback Id",
+      "type": "string"
+    },
+    "sequence": {
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "disposition_id": {
+      "title": "Disposition Id",
+      "type": "string"
+    },
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "source_record_id": {
+      "title": "Source Record Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/WritebackStatus"
+    },
+    "confirmation_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConfirmationEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "provider_record_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Record Id"
+    },
+    "provider_job_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Job Id"
+    },
+    "provider_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Code"
+    },
+    "provider_message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Message"
+    },
+    "observed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Observed At"
+    },
+    "submitted_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Submitted At"
+    },
+    "confirmed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Confirmed At"
+    },
+    "target_results": {
+      "items": {
+        "$ref": "#/$defs/TargetWritebackResult"
+      },
+      "title": "Target Results",
+      "type": "array"
+    },
+    "raw_result": {
+      "additionalProperties": true,
+      "title": "Raw Result",
+      "type": "object"
+    },
+    "truncated": {
+      "default": false,
+      "title": "Truncated",
+      "type": "boolean"
+    },
+    "simulated": {
+      "default": false,
+      "title": "Simulated",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "writeback_id",
+    "sequence",
+    "disposition_id",
+    "action_id",
+    "source_record_id",
+    "status"
+  ],
+  "title": "DispositionReceipt",
+  "type": "object"
+}

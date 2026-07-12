@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "SourceDisposition": {
+      "description": "Normalized external disposition label; source_status_raw keeps the original.",
+      "enum": [
+        "pending",
+        "processing",
+        "contained",
+        "completed",
+        "suspended",
+        "ignored",
+        "unknown"
+      ],
+      "title": "SourceDisposition",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Mutable current state of a source object; never overwrites the snapshot.",
+  "properties": {
+    "current_source_status_raw": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Source Status Raw"
+    },
+    "current_source_disposition": {
+      "$ref": "#/$defs/SourceDisposition",
+      "default": "unknown"
+    },
+    "current_concurrency_token": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Concurrency Token"
+    },
+    "source_sync_state": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Sync State"
+    },
+    "updated_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Updated At"
+    }
+  },
+  "title": "SourceObjectState",
+  "type": "object"
+}

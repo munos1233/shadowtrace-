@@ -1,0 +1,188 @@
+{
+  "$defs": {
+    "DispositionPolicy": {
+      "enum": [
+        "required",
+        "not_required"
+      ],
+      "title": "DispositionPolicy",
+      "type": "string"
+    },
+    "SourceDisposition": {
+      "description": "Normalized external disposition label; source_status_raw keeps the original.",
+      "enum": [
+        "pending",
+        "processing",
+        "contained",
+        "completed",
+        "suspended",
+        "ignored",
+        "unknown"
+      ],
+      "title": "SourceDisposition",
+      "type": "string"
+    },
+    "WritebackReadiness": {
+      "description": "Pre-submission condition; not an external receipt.",
+      "enum": [
+        "not_required",
+        "ready",
+        "source_unresolved",
+        "not_configured",
+        "capability_unknown",
+        "capability_unsupported",
+        "permission_denied",
+        "connector_unavailable"
+      ],
+      "title": "WritebackReadiness",
+      "type": "string"
+    },
+    "WritebackStatus": {
+      "description": "Only valid once a writeback command exists; null otherwise.",
+      "enum": [
+        "pending",
+        "sending",
+        "accepted",
+        "confirmed",
+        "partial",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "WritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Aggregate writeback view (single source of truth for the CLOSED gate).",
+  "properties": {
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "closure_cycle": {
+      "title": "Closure Cycle",
+      "type": "integer"
+    },
+    "disposition_policy": {
+      "$ref": "#/$defs/DispositionPolicy"
+    },
+    "required_action_count": {
+      "default": 0,
+      "title": "Required Action Count",
+      "type": "integer"
+    },
+    "applicable_action_count": {
+      "default": 0,
+      "title": "Applicable Action Count",
+      "type": "integer"
+    },
+    "blocked_action_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Action Ids",
+      "type": "array"
+    },
+    "readiness_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/WritebackReadiness"
+      },
+      "title": "Readiness Counts",
+      "type": "object"
+    },
+    "aggregate_readiness": {
+      "$ref": "#/$defs/WritebackReadiness",
+      "default": "not_required"
+    },
+    "writeback_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/WritebackStatus"
+      },
+      "title": "Writeback Counts",
+      "type": "object"
+    },
+    "aggregate_status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WritebackStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "terminal_event_action_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terminal Event Action Id"
+    },
+    "terminal_event_writeback_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terminal Event Writeback Id"
+    },
+    "terminal_event_disposition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceDisposition"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "terminal_event_confirmed": {
+      "default": false,
+      "title": "Terminal Event Confirmed",
+      "type": "boolean"
+    },
+    "external_unsynced": {
+      "default": false,
+      "title": "External Unsynced",
+      "type": "boolean"
+    },
+    "updated_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Updated At"
+    }
+  },
+  "required": [
+    "event_id",
+    "closure_cycle",
+    "disposition_policy"
+  ],
+  "title": "WritebackSummary",
+  "type": "object"
+}

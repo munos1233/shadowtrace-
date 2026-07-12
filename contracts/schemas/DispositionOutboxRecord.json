@@ -1,0 +1,278 @@
+{
+  "$defs": {
+    "DispositionIntentKind": {
+      "description": "Internal envelope classification; not a vendor enum.",
+      "enum": [
+        "entity_action_submit",
+        "execution_result_record",
+        "compensation_record",
+        "event_status_update"
+      ],
+      "title": "DispositionIntentKind",
+      "type": "string"
+    },
+    "OutboxDeliveryStatus": {
+      "description": "Local delivery queue state; never impersonates external fact.",
+      "enum": [
+        "ready",
+        "leased",
+        "waiting_retry",
+        "delivered",
+        "paused",
+        "dead_letter"
+      ],
+      "title": "OutboxDeliveryStatus",
+      "type": "string"
+    },
+    "WritebackStatus": {
+      "description": "Only valid once a writeback command exists; null otherwise.",
+      "enum": [
+        "pending",
+        "sending",
+        "accepted",
+        "confirmed",
+        "partial",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "WritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "PostgreSQL outbox record: the source of truth for writeback delivery.\n\n``command_payload`` is immutable after creation; superseding only updates\nlineage metadata, never the old payload/receipt.",
+  "properties": {
+    "outbox_id": {
+      "title": "Outbox Id",
+      "type": "string"
+    },
+    "writeback_id": {
+      "title": "Writeback Id",
+      "type": "string"
+    },
+    "disposition_id": {
+      "title": "Disposition Id",
+      "type": "string"
+    },
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "closure_cycle": {
+      "title": "Closure Cycle",
+      "type": "integer"
+    },
+    "source_record_id": {
+      "title": "Source Record Id",
+      "type": "string"
+    },
+    "source_locator_hash": {
+      "title": "Source Locator Hash",
+      "type": "string"
+    },
+    "source_sequence": {
+      "title": "Source Sequence",
+      "type": "integer"
+    },
+    "intent_kind": {
+      "$ref": "#/$defs/DispositionIntentKind"
+    },
+    "logical_slot": {
+      "title": "Logical Slot",
+      "type": "string"
+    },
+    "supersedes_disposition_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supersedes Disposition Id"
+    },
+    "superseded_by_disposition_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded By Disposition Id"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "command_payload": {
+      "additionalProperties": true,
+      "title": "Command Payload",
+      "type": "object"
+    },
+    "command_payload_sha256": {
+      "title": "Command Payload Sha256",
+      "type": "string"
+    },
+    "delivery_status": {
+      "$ref": "#/$defs/OutboxDeliveryStatus",
+      "default": "ready"
+    },
+    "latest_writeback_status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WritebackStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "attempt": {
+      "default": 0,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "next_retry_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Retry At"
+    },
+    "locked_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Locked By"
+    },
+    "locked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Locked At"
+    },
+    "lease_expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lease Expires At"
+    },
+    "last_error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error Code"
+    },
+    "last_error_detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error Detail"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created At"
+    },
+    "updated_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Updated At"
+    },
+    "delivered_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delivered At"
+    }
+  },
+  "required": [
+    "outbox_id",
+    "writeback_id",
+    "disposition_id",
+    "action_id",
+    "event_id",
+    "closure_cycle",
+    "source_record_id",
+    "source_locator_hash",
+    "source_sequence",
+    "intent_kind",
+    "logical_slot",
+    "idempotency_key",
+    "command_payload_sha256"
+  ],
+  "title": "DispositionOutboxRecord",
+  "type": "object"
+}

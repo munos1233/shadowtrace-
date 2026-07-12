@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "Params for EXECUTION_RESULT_RECORD (DIRECT_TOOL result sync).",
+  "properties": {
+    "operation_code": {
+      "const": "record_execution_result",
+      "default": "record_execution_result",
+      "title": "Operation Code",
+      "type": "string"
+    },
+    "summary_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Summary Code"
+    }
+  },
+  "title": "RecordExecutionResultParams",
+  "type": "object"
+}

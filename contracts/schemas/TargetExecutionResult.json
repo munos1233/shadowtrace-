@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "TargetExecutionStatus": {
+      "enum": [
+        "success",
+        "failed",
+        "unknown",
+        "skipped"
+      ],
+      "title": "TargetExecutionStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Per-target execution result kept on a job (internal; may retain raw_result).",
+  "properties": {
+    "canonical_target": {
+      "title": "Canonical Target",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/TargetExecutionStatus"
+    },
+    "code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Code"
+    },
+    "message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message"
+    },
+    "artifact_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact Id"
+    },
+    "raw_result": {
+      "additionalProperties": true,
+      "title": "Raw Result",
+      "type": "object"
+    }
+  },
+  "required": [
+    "canonical_target",
+    "status"
+  ],
+  "title": "TargetExecutionResult",
+  "type": "object"
+}
