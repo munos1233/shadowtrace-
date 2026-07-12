@@ -1,0 +1,29 @@
+[
+  {
+    "record_id": "ti-key-42-0011",
+    "channel": "threat_intel",
+    "logged_at": "2024-06-15T09:08:20+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "indicator": "203.0.113.88",
+    "indicator_type": "ip",
+    "confidence": 0.91,
+    "tags": [
+      "exfil",
+      "unknown_infra"
+    ]
+  },
+  {
+    "record_id": "ti-key-42-0012",
+    "channel": "threat_intel",
+    "logged_at": "2024-06-15T09:08:30+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "indicator": "unknown-upload-example.com",
+    "indicator_type": "domain",
+    "confidence": 0.88,
+    "tags": [
+      "newly_observed"
+    ]
+  }
+]

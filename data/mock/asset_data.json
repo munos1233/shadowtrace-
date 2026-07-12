@@ -1,0 +1,36 @@
+[
+  {
+    "record_id": "asset-key-42-0013",
+    "channel": "asset",
+    "logged_at": "2024-06-15T09:00:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "numeric_asset_id": "1023",
+    "hostname": "PC-FIN-023",
+    "ip": "10.20.30.23",
+    "agent_status": "online",
+    "owner": "zhangsan"
+  },
+  {
+    "record_id": "asset-key-42-0014",
+    "channel": "asset",
+    "logged_at": "2024-06-15T09:00:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "numeric_asset_id": "2048",
+    "hostname": "PC-FIN-099",
+    "agent_status": "not_installed",
+    "variant": "agent_not_installed"
+  },
+  {
+    "record_id": "asset-key-42-0015",
+    "channel": "asset",
+    "logged_at": "2024-06-15T09:00:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "numeric_asset_id": "4096",
+    "hostname": "PC-FIN-077",
+    "agent_status": "offline",
+    "variant": "device_offline"
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "record_id": "id-noise-42-0001",
+    "channel": "identity",
+    "logged_at": "2024-06-15T09:00:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "account": "ops-bot",
+    "event_type": "login",
+    "src_ip": "10.0.0.8",
+    "result": "success"
+  },
+  {
+    "record_id": "id-conflict-42-0002",
+    "channel": "identity",
+    "logged_at": "2024-06-15T09:01:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": true,
+    "account": "zhangsan",
+    "event_type": "login_lookup",
+    "src_ip": null,
+    "result": "no_record",
+    "note": "no interactive login for account in window"
+  },
+  {
+    "record_id": "id-provider-42-0091",
+    "channel": "identity",
+    "logged_at": "2024-06-15T09:15:20+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "account": "system",
+    "event_type": "provider_error",
+    "result": "capacity_limit_exceeded",
+    "provider_error_code": "capacity_limit_exceeded",
+    "variant": "capacity_limit_exceeded"
+  }
+]

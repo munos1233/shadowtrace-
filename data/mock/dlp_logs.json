@@ -1,0 +1,27 @@
+[
+  {
+    "record_id": "dlp-key-42-0006",
+    "channel": "dlp",
+    "logged_at": "2024-06-15T09:05:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "file_name": "finance_report.zip",
+    "action": "archive",
+    "bytes": 52428800,
+    "account": "zhangsan",
+    "hostname": "PC-FIN-023"
+  },
+  {
+    "record_id": "dlp-key-42-0007",
+    "channel": "dlp",
+    "logged_at": "2024-06-15T09:06:00+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "file_name": "finance_report.zip",
+    "action": "upload",
+    "bytes": 52428800,
+    "account": "zhangsan",
+    "hostname": "PC-FIN-023",
+    "destination": "unknown-upload-example.com"
+  }
+]

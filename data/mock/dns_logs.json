@@ -1,0 +1,14 @@
+[
+  {
+    "record_id": "dns-key-42-0008",
+    "channel": "dns",
+    "logged_at": "2024-06-15T09:06:10+00:00",
+    "is_key_event": true,
+    "is_conflict_seed": false,
+    "query": "unknown-upload-example.com",
+    "qtype": "A",
+    "rcode": "NOERROR",
+    "answer": "203.0.113.88",
+    "hostname": "PC-FIN-023"
+  }
+]

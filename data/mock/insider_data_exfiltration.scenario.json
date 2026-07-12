@@ -1,0 +1,953 @@
+{
+  "scenario_id": "insider_data_exfiltration",
+  "name": "Insider data exfiltration (finance endpoint)",
+  "base_time": "2024-06-15T09:00:00Z",
+  "source_tenant_id": "tenant-demo",
+  "incidents": [
+    {
+      "reference": {
+        "source_kind": "incident",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "security_incident",
+        "source_object_id": "88442201",
+        "parent_source_object_id": null,
+        "source_status_raw": "investigating",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {},
+      "normalized": {
+        "account": "zhangsan",
+        "hostname": "PC-FIN-023",
+        "risk_score": 92
+      },
+      "title": "Finance endpoint suspected data exfiltration",
+      "level": "critical",
+      "gpt_verdict_label": "suspected_insider_threat",
+      "impacted_asset_refs": [
+        {
+          "source_kind": "asset",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": "endpoint",
+          "source_object_id": "1023",
+          "parent_source_object_id": null,
+          "source_status_raw": "managed",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        },
+        {
+          "source_kind": "asset",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": null,
+          "source_object_id": "2048",
+          "parent_source_object_id": null,
+          "source_status_raw": "unmanaged",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        },
+        {
+          "source_kind": "asset",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": null,
+          "source_object_id": "4096",
+          "parent_source_object_id": null,
+          "source_status_raw": "offline",
+          "source_disposition": "unknown",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        }
+      ],
+      "related_alert_refs": [
+        {
+          "source_kind": "alert",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": "dlp_alert",
+          "source_object_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "parent_source_object_id": null,
+          "source_status_raw": "open",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        },
+        {
+          "source_kind": "alert",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": "endpoint_alert",
+          "source_object_id": "xdr_alert_fin_exfil_endpoint_activity_20240615",
+          "parent_source_object_id": null,
+          "source_status_raw": "open",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        },
+        {
+          "source_kind": "alert",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": "network_alert",
+          "source_object_id": "99110022",
+          "parent_source_object_id": null,
+          "source_status_raw": "open",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        }
+      ]
+    }
+  ],
+  "alerts": [
+    {
+      "reference": {
+        "source_kind": "alert",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "dlp_alert",
+        "source_object_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "parent_source_object_id": null,
+        "source_status_raw": "open",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {
+        "rule": "sensitive_file_upload"
+      },
+      "normalized": {
+        "level": "critical",
+        "gpt_tag": "suspected_data_exfil",
+        "account": "zhangsan",
+        "file": "finance_report.zip"
+      },
+      "incident_ref": {
+        "source_kind": "incident",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "security_incident",
+        "source_object_id": "88442201",
+        "parent_source_object_id": null,
+        "source_status_raw": "investigating",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "xff": null,
+      "source_ip": "10.20.30.23",
+      "related_log_refs": [
+        {
+          "source_kind": "log",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-log-only",
+          "source_object_type": null,
+          "source_object_id": "log_dlp_finance_upload_001",
+          "parent_source_object_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "source_status_raw": "indexed",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        }
+      ],
+      "sub_alert_refs": []
+    },
+    {
+      "reference": {
+        "source_kind": "alert",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "endpoint_alert",
+        "source_object_id": "xdr_alert_fin_exfil_endpoint_activity_20240615",
+        "parent_source_object_id": null,
+        "source_status_raw": "open",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {},
+      "normalized": {
+        "level": "high",
+        "gpt_tag": "suspicious_process_chain",
+        "processes": [
+          "powershell.exe",
+          "7z.exe"
+        ]
+      },
+      "incident_ref": {
+        "source_kind": "incident",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "security_incident",
+        "source_object_id": "88442201",
+        "parent_source_object_id": null,
+        "source_status_raw": "investigating",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "xff": null,
+      "source_ip": "10.20.30.23",
+      "related_log_refs": [
+        {
+          "source_kind": "log",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-disposition",
+          "source_object_type": null,
+          "source_object_id": "log_edr_proc_chain_001",
+          "parent_source_object_id": "xdr_alert_fin_exfil_endpoint_activity_20240615",
+          "source_status_raw": "indexed",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        }
+      ],
+      "sub_alert_refs": []
+    },
+    {
+      "reference": {
+        "source_kind": "alert",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "network_alert",
+        "source_object_id": "99110022",
+        "parent_source_object_id": null,
+        "source_status_raw": "open",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {},
+      "normalized": {
+        "level": "high",
+        "gpt_tag": "c2_like_egress",
+        "dst_ip": "203.0.113.88",
+        "domain": "unknown-upload-example.com"
+      },
+      "incident_ref": {
+        "source_kind": "incident",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "security_incident",
+        "source_object_id": "88442201",
+        "parent_source_object_id": null,
+        "source_status_raw": "investigating",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "xff": null,
+      "source_ip": "10.20.30.23",
+      "related_log_refs": [
+        {
+          "source_kind": "log",
+          "source_product": "mock_xdr",
+          "source_tenant_id": "tenant-demo",
+          "connector_id": "conn-log-only",
+          "source_object_type": null,
+          "source_object_id": "550011",
+          "parent_source_object_id": "99110022",
+          "source_status_raw": "indexed",
+          "source_disposition": "pending",
+          "source_concurrency_token": null,
+          "source_updated_at": "2024-06-15T09:00:00Z",
+          "schema_version": "1",
+          "ingested_at": null,
+          "raw_payload_hash": null
+        }
+      ],
+      "sub_alert_refs": []
+    }
+  ],
+  "assets": [
+    {
+      "reference": {
+        "source_kind": "asset",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": "endpoint",
+        "source_object_id": "1023",
+        "parent_source_object_id": null,
+        "source_status_raw": "managed",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {},
+      "normalized": {
+        "variant": "primary"
+      },
+      "numeric_asset_id": "1023",
+      "ip": "10.20.30.23",
+      "hostname": "PC-FIN-023",
+      "asset_name": "PC-FIN-023",
+      "asset_group": "finance",
+      "owner": "zhangsan",
+      "business_system": "finance_erp",
+      "importance": "critical",
+      "agent_status": "online",
+      "first_seen_at": "2024-06-15T09:00:00Z",
+      "last_seen_at": "2024-06-15T09:00:00Z"
+    },
+    {
+      "reference": {
+        "source_kind": "asset",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": null,
+        "source_object_id": "2048",
+        "parent_source_object_id": null,
+        "source_status_raw": "unmanaged",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {},
+      "normalized": {
+        "variant": "agent_not_installed"
+      },
+      "numeric_asset_id": "2048",
+      "ip": "10.20.30.99",
+      "hostname": "PC-FIN-099",
+      "asset_name": null,
+      "asset_group": null,
+      "owner": null,
+      "business_system": null,
+      "importance": null,
+      "agent_status": "not_installed",
+      "first_seen_at": null,
+      "last_seen_at": null
+    },
+    {
+      "reference": {
+        "source_kind": "asset",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": null,
+        "source_object_id": "4096",
+        "parent_source_object_id": null,
+        "source_status_raw": "offline",
+        "source_disposition": "unknown",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {},
+      "normalized": {
+        "variant": "device_offline"
+      },
+      "numeric_asset_id": "4096",
+      "ip": "10.20.30.77",
+      "hostname": "PC-FIN-077",
+      "asset_name": null,
+      "asset_group": null,
+      "owner": null,
+      "business_system": null,
+      "importance": null,
+      "agent_status": "offline",
+      "first_seen_at": null,
+      "last_seen_at": null
+    }
+  ],
+  "logs": [
+    {
+      "reference": {
+        "source_kind": "log",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-log-only",
+        "source_object_type": null,
+        "source_object_id": "log_dlp_finance_upload_001",
+        "parent_source_object_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "source_status_raw": "indexed",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {
+        "file": "finance_report.zip",
+        "account": "zhangsan"
+      },
+      "normalized": {},
+      "device_source": "dlp",
+      "logged_at": "2024-06-15T09:00:00Z",
+      "src_ip": "10.20.30.23",
+      "src_port": null,
+      "dst_ip": "203.0.113.88",
+      "dst_port": 443,
+      "category": "data_exfiltration"
+    },
+    {
+      "reference": {
+        "source_kind": "log",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-disposition",
+        "source_object_type": null,
+        "source_object_id": "log_edr_proc_chain_001",
+        "parent_source_object_id": "xdr_alert_fin_exfil_endpoint_activity_20240615",
+        "source_status_raw": "indexed",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {
+        "process": "powershell.exe",
+        "account": "zhangsan",
+        "host": "PC-FIN-023"
+      },
+      "normalized": {},
+      "device_source": "edr",
+      "logged_at": "2024-06-15T09:00:00Z",
+      "src_ip": "10.20.30.23",
+      "src_port": null,
+      "dst_ip": null,
+      "dst_port": null,
+      "category": "process"
+    },
+    {
+      "reference": {
+        "source_kind": "log",
+        "source_product": "mock_xdr",
+        "source_tenant_id": "tenant-demo",
+        "connector_id": "conn-log-only",
+        "source_object_type": null,
+        "source_object_id": "550011",
+        "parent_source_object_id": "99110022",
+        "source_status_raw": "indexed",
+        "source_disposition": "pending",
+        "source_concurrency_token": null,
+        "source_updated_at": "2024-06-15T09:00:00Z",
+        "schema_version": "1",
+        "ingested_at": null,
+        "raw_payload_hash": null
+      },
+      "raw_payload": {
+        "domain": "unknown-upload-example.com"
+      },
+      "normalized": {},
+      "device_source": "nfw",
+      "logged_at": "2024-06-15T09:00:00Z",
+      "src_ip": "10.20.30.23",
+      "src_port": null,
+      "dst_ip": "203.0.113.88",
+      "dst_port": 443,
+      "category": "egress"
+    }
+  ],
+  "connectors": [
+    {
+      "connector_id": "conn-log-only",
+      "source_product": "mock_xdr",
+      "display_name": "Mock Log Ingestion Only",
+      "device_type": "syslog",
+      "status": "online",
+      "read_endpoint": null,
+      "disposition_endpoint": null,
+      "capabilities": {
+        "log_ingestion": "supported",
+        "query": "unsupported",
+        "event_disposition": "unsupported",
+        "entity_response": "unsupported"
+      },
+      "disposition_policy_default": "not_required",
+      "last_sync_at": null,
+      "schema_version": "1",
+      "read_credential_ref": null,
+      "disposition_credential_ref": null,
+      "metadata": {
+        "role": "log_only"
+      }
+    },
+    {
+      "connector_id": "conn-disposition",
+      "source_product": "mock_xdr",
+      "display_name": "Mock Disposition / Response Connector",
+      "device_type": "xdr_console",
+      "status": "online",
+      "read_endpoint": null,
+      "disposition_endpoint": "mock://disposition",
+      "capabilities": {
+        "log_ingestion": "unsupported",
+        "query": "supported",
+        "event_disposition": "supported",
+        "entity_response": "supported"
+      },
+      "disposition_policy_default": "required",
+      "last_sync_at": null,
+      "schema_version": "1",
+      "read_credential_ref": null,
+      "disposition_credential_ref": "secret://mock/disposition",
+      "metadata": {
+        "role": "disposition"
+      }
+    },
+    {
+      "connector_id": "conn-capability-gap",
+      "source_product": "mock_xdr",
+      "display_name": "Mock Query-Only (capability gap)",
+      "device_type": null,
+      "status": "degraded",
+      "read_endpoint": null,
+      "disposition_endpoint": null,
+      "capabilities": {
+        "query": "supported",
+        "event_disposition": "unknown",
+        "entity_response": "unsupported"
+      },
+      "disposition_policy_default": "not_required",
+      "last_sync_at": null,
+      "schema_version": "1",
+      "read_credential_ref": null,
+      "disposition_credential_ref": null,
+      "metadata": {
+        "role": "capability_gap",
+        "provider_error_codes": [
+          "capacity_limit_exceeded"
+        ]
+      }
+    }
+  ],
+  "telemetry_timeline": [
+    {
+      "record_id": "id-noise-42-0001",
+      "channel": "identity",
+      "logged_at": "2024-06-15T09:00:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "account": "ops-bot",
+      "event_type": "login",
+      "src_ip": "10.0.0.8",
+      "result": "success"
+    },
+    {
+      "record_id": "id-conflict-42-0002",
+      "channel": "identity",
+      "logged_at": "2024-06-15T09:01:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": true,
+      "account": "zhangsan",
+      "event_type": "login_lookup",
+      "src_ip": null,
+      "result": "no_record",
+      "note": "no interactive login for account in window"
+    },
+    {
+      "record_id": "ep-conflict-42-0003",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:02:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": true,
+      "hostname": "PC-FIN-023",
+      "process": "powershell.exe",
+      "account": "zhangsan",
+      "action": "process_create",
+      "cmdline": "powershell.exe -enc <compressed>"
+    },
+    {
+      "record_id": "ep-key-42-0004",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:03:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "7z.exe",
+      "account": "zhangsan",
+      "action": "process_create",
+      "cmdline": "7z.exe a finance_report.zip"
+    },
+    {
+      "record_id": "ep-key-42-0005",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:04:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "powershell.exe",
+      "account": "zhangsan",
+      "action": "file_access",
+      "file_name": "finance_report.zip"
+    },
+    {
+      "record_id": "dlp-key-42-0006",
+      "channel": "dlp",
+      "logged_at": "2024-06-15T09:05:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "file_name": "finance_report.zip",
+      "action": "archive",
+      "bytes": 52428800,
+      "account": "zhangsan",
+      "hostname": "PC-FIN-023"
+    },
+    {
+      "record_id": "dlp-key-42-0007",
+      "channel": "dlp",
+      "logged_at": "2024-06-15T09:06:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "file_name": "finance_report.zip",
+      "action": "upload",
+      "bytes": 52428800,
+      "account": "zhangsan",
+      "hostname": "PC-FIN-023",
+      "destination": "unknown-upload-example.com"
+    },
+    {
+      "record_id": "dns-key-42-0008",
+      "channel": "dns",
+      "logged_at": "2024-06-15T09:06:10+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "query": "unknown-upload-example.com",
+      "qtype": "A",
+      "rcode": "NOERROR",
+      "answer": "203.0.113.88",
+      "hostname": "PC-FIN-023"
+    },
+    {
+      "record_id": "net-key-42-0009",
+      "channel": "network",
+      "logged_at": "2024-06-15T09:06:40+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "src_ip": "10.20.30.23",
+      "dst_ip": "203.0.113.88",
+      "dst_port": 443,
+      "bytes_out": 52000000,
+      "hostname": "PC-FIN-023",
+      "domain": "unknown-upload-example.com"
+    },
+    {
+      "record_id": "net-key-42-0010",
+      "channel": "network",
+      "logged_at": "2024-06-15T09:07:40+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "src_ip": "10.20.30.23",
+      "dst_ip": "203.0.113.88",
+      "dst_port": 443,
+      "bytes_out": 400000,
+      "hostname": "PC-FIN-023",
+      "domain": "unknown-upload-example.com"
+    },
+    {
+      "record_id": "ti-key-42-0011",
+      "channel": "threat_intel",
+      "logged_at": "2024-06-15T09:08:20+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "indicator": "203.0.113.88",
+      "indicator_type": "ip",
+      "confidence": 0.91,
+      "tags": [
+        "exfil",
+        "unknown_infra"
+      ]
+    },
+    {
+      "record_id": "ti-key-42-0012",
+      "channel": "threat_intel",
+      "logged_at": "2024-06-15T09:08:30+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "indicator": "unknown-upload-example.com",
+      "indicator_type": "domain",
+      "confidence": 0.88,
+      "tags": [
+        "newly_observed"
+      ]
+    },
+    {
+      "record_id": "asset-key-42-0013",
+      "channel": "asset",
+      "logged_at": "2024-06-15T09:00:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "numeric_asset_id": "1023",
+      "hostname": "PC-FIN-023",
+      "ip": "10.20.30.23",
+      "agent_status": "online",
+      "owner": "zhangsan"
+    },
+    {
+      "record_id": "asset-key-42-0014",
+      "channel": "asset",
+      "logged_at": "2024-06-15T09:00:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "numeric_asset_id": "2048",
+      "hostname": "PC-FIN-099",
+      "agent_status": "not_installed",
+      "variant": "agent_not_installed"
+    },
+    {
+      "record_id": "asset-key-42-0015",
+      "channel": "asset",
+      "logged_at": "2024-06-15T09:00:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "numeric_asset_id": "4096",
+      "hostname": "PC-FIN-077",
+      "agent_status": "offline",
+      "variant": "device_offline"
+    },
+    {
+      "record_id": "ep-key-42-0016",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:10:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "powershell.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0017",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:10:30+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "7z.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0018",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:11:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "powershell.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0019",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:11:30+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "7z.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0020",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:12:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "powershell.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0021",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:12:30+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "7z.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0022",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:13:00+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "powershell.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "ep-key-42-0023",
+      "channel": "endpoint",
+      "logged_at": "2024-06-15T09:13:30+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "hostname": "PC-FIN-023",
+      "process": "7z.exe",
+      "account": "zhangsan",
+      "action": "network_connect",
+      "dst_ip": "203.0.113.88"
+    },
+    {
+      "record_id": "net-noise-42-0090",
+      "channel": "network",
+      "logged_at": "2024-06-15T09:15:00+00:00",
+      "is_key_event": false,
+      "is_conflict_seed": false,
+      "src_ip": "10.20.30.23",
+      "dst_ip": "192.0.2.53",
+      "dst_port": 53,
+      "bytes_out": 120
+    },
+    {
+      "record_id": "id-provider-42-0091",
+      "channel": "identity",
+      "logged_at": "2024-06-15T09:15:20+00:00",
+      "is_key_event": true,
+      "is_conflict_seed": false,
+      "account": "system",
+      "event_type": "provider_error",
+      "result": "capacity_limit_exceeded",
+      "provider_error_code": "capacity_limit_exceeded",
+      "variant": "capacity_limit_exceeded"
+    }
+  ],
+  "ticks": [
+    {
+      "offset_seconds": 3600,
+      "operation": "upsert",
+      "object_type": "alert",
+      "object_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "patch": {
+        "reference": {
+          "source_status_raw": "in_progress"
+        }
+      }
+    },
+    {
+      "offset_seconds": 7200,
+      "operation": "connector_change",
+      "object_type": "connector",
+      "object_id": "conn-disposition",
+      "patch": {
+        "status": "degraded"
+      }
+    }
+  ],
+  "failure_profile": {
+    "seed": 42,
+    "fixed_delay_ms": 0,
+    "jitter_delay_ms": 0,
+    "rate_limit_every_n": null,
+    "server_error_every_n": null,
+    "timeout_every_n": null,
+    "duplicate_page": false,
+    "late_data": false,
+    "out_of_order_updates": false,
+    "missing_fields": [],
+    "schema_version_override": null,
+    "async_disposition": false,
+    "force_token_conflict": false,
+    "force_partial_targets": true,
+    "reject_unauthorized_fields": true,
+    "control_plane_enabled": true
+  },
+  "expected_outcome": {
+    "expected_verdict": "confirmed_threat",
+    "expected_severity": "critical",
+    "risk_score": 92,
+    "disposition_policy": "required",
+    "variants": [
+      "agent_not_installed",
+      "device_offline",
+      "capability_gap",
+      "partial_success",
+      "capacity_limit_exceeded"
+    ],
+    "provider_error_codes": [
+      "capacity_limit_exceeded"
+    ]
+  }
+}

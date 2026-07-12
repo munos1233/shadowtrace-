@@ -1,4 +1,4 @@
-"""CLI: export Mock telemetry files and/or seed a MockXDRState (ISSUE-010)."""
+"""CLI: export Mock telemetry files and/or seed a MockXDRState (ISSUE-010/011)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 from app.data_generators import default_generators, write_telemetry_files  # noqa: E402
+from app.data_generators.scenarios import (  # noqa: E402
+    SCENARIO_BUILDERS,
+    SCENARIO_REGISTRY,
+    build_scenario,
+    write_scenario_artifacts,
+)
 from app.mock_xdr.models import MockFailureProfile, MockXDRScenario  # noqa: E402
 from app.mock_xdr.state import MockXDRState  # noqa: E402
 from app.models.enums import (  # noqa: E402
@@ -38,7 +44,7 @@ logger = logging.getLogger("generate_mock_data")
 
 
 def _minimal_scenario(*, seed: int, tenant: str = "tenant-demo") -> MockXDRScenario:
-    """Tiny self-consistent seed used to smoke-check MockXDRState (ISSUE-010)."""
+    """Tiny self-consistent seed used when no scenario pack is provided."""
     base = datetime(2024, 6, 1, 8, 0, 0, tzinfo=UTC)
     connector = SourceConnector(
         connector_id="conn-mock-1",
@@ -142,10 +148,17 @@ def _log_state(scenario: MockXDRScenario) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate Mock telemetry / seed MockXDRState")
+    parser = argparse.ArgumentParser(description="Generate Mock telemetry / seed MockXDR")
     parser.add_argument("--out", type=Path, default=Path("data/mock"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--count", type=int, default=10)
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        choices=sorted(SCENARIO_BUILDERS),
+        help="ISSUE-011 demo scenario pack id (writes 7 telemetry files from the pack).",
+    )
     parser.add_argument(
         "--seed-server-state",
         action="store_true",
@@ -155,21 +168,37 @@ def main(argv: list[str] | None = None) -> int:
         "--dump-scenario",
         type=Path,
         default=None,
-        help="Optional path to write the minimal scenario JSON.",
+        help="Optional path to write the scenario JSON.",
     )
     args = parser.parse_args(argv)
 
-    gens = default_generators(seed=args.seed)
-    written = write_telemetry_files(gens, args.out, count=args.count)
-    logger.info(
-        "wrote %s telemetry files seed=%s count=%s schema_version=1",
-        len(written),
-        args.seed,
-        args.count,
-    )
-    for path in written:
-        logger.info("  %s", path)
-    scenario = _minimal_scenario(seed=args.seed)
+    if args.scenario is not None:
+        scenario = build_scenario(args.scenario, seed=args.seed)
+        written = write_scenario_artifacts(
+            scenario,
+            args.out,
+            write_scenario_json=False,
+        )
+        logger.info(
+            "wrote %s telemetry files scenario=%s seed=%s",
+            len(written),
+            scenario.scenario_id,
+            args.seed,
+        )
+        for path in written:
+            logger.info("  %s", path)
+    else:
+        gens = default_generators(seed=args.seed)
+        written = write_telemetry_files(gens, args.out, count=args.count)
+        logger.info(
+            "wrote %s telemetry files seed=%s count=%s schema_version=1",
+            len(written),
+            args.seed,
+            args.count,
+        )
+        for path in written:
+            logger.info("  %s", path)
+        scenario = _minimal_scenario(seed=args.seed)
 
     if args.dump_scenario is not None:
         args.dump_scenario.parent.mkdir(parents=True, exist_ok=True)
@@ -186,4 +215,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Re-export registry for discovery / smoke checks.
+    _ = SCENARIO_REGISTRY
     raise SystemExit(main())
