@@ -14,6 +14,26 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.auth import AuthenticationError, AuthorizationError
+from app.models.workflow import (
+    InvalidStateTransitionError,
+    InvalidVerdictStatusCombinationError,
+)
+
+# Re-export domain state-machine errors so API modules keep a stable import path.
+__all__ = [
+    "APIError",
+    "EventNotFoundError",
+    "InvalidStateTransitionError",
+    "InvalidVerdictStatusCombinationError",
+    "ApprovalRequiredError",
+    "WritebackPendingError",
+    "WritebackFailedError",
+    "WritebackConflictError",
+    "WritebackUnsupportedError",
+    "DispositionPermissionDenied",
+    "ResourceNotFoundError",
+    "register_exception_handlers",
+]
 
 
 class APIError(Exception):
@@ -31,11 +51,6 @@ class APIError(Exception):
 class EventNotFoundError(APIError):
     status_code = 404
     error_code = "event_not_found"
-
-
-class InvalidStateTransitionError(APIError):
-    status_code = 400
-    error_code = "invalid_state_transition"
 
 
 class ApprovalRequiredError(APIError):
@@ -84,6 +99,24 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(APIError)
     async def _handle_api_error(_: Request, exc: APIError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_error_body(exc.error_code, exc.error_message, exc.details),
+        )
+
+    @app.exception_handler(InvalidStateTransitionError)
+    async def _handle_invalid_transition(
+        _: Request, exc: InvalidStateTransitionError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_error_body(exc.error_code, exc.error_message, exc.details),
+        )
+
+    @app.exception_handler(InvalidVerdictStatusCombinationError)
+    async def _handle_invalid_verdict(
+        _: Request, exc: InvalidVerdictStatusCombinationError
+    ) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(exc.error_code, exc.error_message, exc.details),
