@@ -117,6 +117,9 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "unauthorized_field": ErrorCategory.USER_INPUT,
     "mock_validation_error": ErrorCategory.USER_INPUT,
     "idempotency_key_reuse": ErrorCategory.USER_INPUT,
+    # Adapters (ISSUE-012)
+    "adapter_not_found": ErrorCategory.USER_INPUT,
+    "adapter_validation_error": ErrorCategory.USER_INPUT,
 }
 
 
@@ -360,6 +363,15 @@ class ResourceNotFoundError(ShadowTraceError):
 
     status_code = 404
     default_error_code = "not_found"
+    default_category = ErrorCategory.USER_INPUT
+    default_retryable = False
+
+
+class AdapterNotFoundError(ShadowTraceError):
+    """No adapter registered under the requested name (ISSUE-012)."""
+
+    status_code = 404
+    default_error_code = "adapter_not_found"
     default_category = ErrorCategory.USER_INPUT
     default_retryable = False
 

@@ -139,6 +139,17 @@ def idempotency_key_hash(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``patch`` into ``base`` without clobbering nested dict keys."""
+    out = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 def find_forbidden_analysis_keys(obj: Any, *, path: str = "$") -> list[str]:
     """Return dotted paths of forbidden analysis/report/prompt/evidence keys."""
     hits: list[str] = []
@@ -365,7 +376,7 @@ class MockXDRState:
         if tick.operation is TickOperation.UPSERT:
             key = (typed_kind, tick.object_id)
             base = dict(self.objects[key].body) if key in self.objects else {}
-            base.update(tick.patch)
+            base = _deep_merge(base, tick.patch)
             self.upsert_object(typed_kind, tick.object_id, base)
 
     # ---------------------------------------------------- disposition edges

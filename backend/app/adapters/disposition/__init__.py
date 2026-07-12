@@ -1,0 +1,1 @@
+"""Disposition adapter package."""

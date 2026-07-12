@@ -77,6 +77,8 @@ _REQUIRED_DOCUMENTED_CODES: frozenset[str] = frozenset(
         "unauthorized_field",
         "mock_validation_error",
         "idempotency_key_reuse",
+        "adapter_not_found",
+        "adapter_validation_error",
     }
 )
 

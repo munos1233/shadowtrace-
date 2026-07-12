@@ -1,0 +1,317 @@
+"""Adapter contract tests (ISSUE-012) — Mock facts, not vendor API facts."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import httpx
+import pytest
+
+from app.adapters.disposition.base import BaseDispositionAdapter
+from app.adapters.file_source import FileSourceAdapter
+from app.adapters.mock_xdr import (
+    LiveDispositionAdapterStub,
+    MockXDRDispositionAdapter,
+    MockXDRSourceAdapter,
+)
+from app.adapters.normalizers import CHANNEL_NORMALIZERS, normalize_record
+from app.adapters.registry import DispositionAdapterRegistry, SourceAdapterRegistry
+from app.adapters.source.base import BaseSourceAdapter, InMemoryDataQualityRecorder
+from app.core.errors import AdapterNotFoundError, WritebackUnsupportedError
+from app.data_generators.scenarios import build_scenario
+from app.mock_xdr.state import MockXDRState
+from app.models.enums import (
+    CapabilityState,
+    ConnectorCapability,
+    ConnectorStatus,
+    SourceObjectKind,
+    WritebackStatus,
+)
+from app.models.source import SourceAlert, SourceAsset, SourceIncident, SourceLog
+from tests.test_adapters.conftest import event_disposition_command
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+MOCK_DIR = REPO_ROOT / "data" / "mock"
+
+
+def test_agent_modules_do_not_import_adapters() -> None:
+    agents_root = REPO_ROOT / "backend" / "app" / "agents"
+    if not agents_root.exists():
+        pytest.skip("agents package not present yet")
+    for path in agents_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "adapters" not in alias.name, path
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                assert not mod.startswith("app.adapters"), path
+
+
+@pytest.mark.asyncio
+async def test_source_round_trip_preserves_ids_and_raw(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    quality = InMemoryDataQualityRecorder()
+    adapter = MockXDRSourceAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+        quality=quality,
+    )
+    page = await adapter.list_objects(
+        [
+            SourceObjectKind.INCIDENT,
+            SourceObjectKind.ALERT,
+            SourceObjectKind.ASSET,
+            SourceObjectKind.LOG,
+        ],
+        limit=100,
+    )
+    incidents = [i for i in page.items if isinstance(i, SourceIncident)]
+    alerts = [i for i in page.items if isinstance(i, SourceAlert)]
+    assets = [i for i in page.items if isinstance(i, SourceAsset)]
+    logs = [i for i in page.items if isinstance(i, SourceLog)]
+    assert incidents and alerts and assets and logs
+
+    scenario = build_scenario("insider_data_exfiltration", seed=42)
+    assert {i.reference.source_object_id for i in incidents} == {
+        i.reference.source_object_id for i in scenario.incidents
+    }
+    # Parent/child refs survive.
+    for alert in alerts:
+        if alert.incident_ref is not None:
+            assert alert.incident_ref.source_object_id in {
+                i.reference.source_object_id for i in incidents
+            }
+    for log in logs:
+        parent = log.reference.parent_source_object_id
+        if parent:
+            assert parent in {a.reference.source_object_id for a in alerts} or parent in {
+                a.reference.source_object_id for a in assets
+            }
+    # raw_payload / mock metadata retained
+    assert any("_mock" in (i.raw_payload or {}) for i in incidents + alerts)
+
+    fetched = await adapter.get_object(SourceObjectKind.INCIDENT, "88442201")
+    assert isinstance(fetched, SourceIncident)
+    assert fetched.reference.source_object_id == "88442201"
+    assert fetched.raw_payload is not None
+
+
+@pytest.mark.asyncio
+async def test_disposition_idempotent_submit(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    adapter = MockXDRDispositionAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+    )
+    # Use current concurrency token from store.
+    stored = mock_state.objects[("incident", "88442201")]
+    cmd = event_disposition_command(token=stored.concurrency_token)
+    first = await adapter.submit(cmd)
+    second = await adapter.submit(cmd)
+    assert first.writeback_id == second.writeback_id
+    assert first.status == second.status
+    assert first.status in {WritebackStatus.ACCEPTED, WritebackStatus.PARTIAL}
+
+
+@pytest.mark.asyncio
+async def test_disposition_concurrency_token_conflict(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    adapter = MockXDRDispositionAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+    )
+    cmd = event_disposition_command(
+        token="stale-token",
+        idempotency_key="idem-conflict-1",
+        disposition_id="disp-conflict-1",
+    )
+    receipt = await adapter.submit(cmd)
+    assert receipt.status is WritebackStatus.CONFLICT
+    assert receipt.provider_code == "version_conflict"
+
+
+@pytest.mark.asyncio
+async def test_disposition_rejects_analysis_fields(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    stored = mock_state.objects[("incident", "88442201")]
+    cmd = event_disposition_command(token=stored.concurrency_token)
+    dumped = cmd.model_dump(mode="json")
+    dumped["operation_params"]["decision_trace"] = "secret analysis"
+    resp = await mock_client.post(
+        "/mock-xdr/v1/dispositions",
+        headers={"Authorization": f"Bearer {mock_state.write_token}"},
+        json=dumped,
+    )
+    assert resp.status_code == 422
+    body = resp.json()
+    # FastAPI HTTPException wraps the Mock error envelope under ``detail``.
+    detail = body.get("detail", body)
+    assert detail["error_code"] == "unauthorized_field"
+
+
+@pytest.mark.asyncio
+async def test_lost_response_returns_unknown_then_lookup(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    adapter = MockXDRDispositionAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+    )
+    stored = mock_state.objects[("incident", "88442201")]
+    cmd = event_disposition_command(
+        token=stored.concurrency_token,
+        idempotency_key="idem-lost-1",
+        disposition_id="disp-lost-1",
+    )
+    # First succeed so lookup can find it after a simulated loss.
+    accepted = await adapter.submit(cmd)
+    assert accepted.status is not WritebackStatus.FAILED
+
+    lost = await adapter._unknown_after_loss(cmd)
+    # Lookup recovers the prior acceptance — never re-executes entity action.
+    assert lost.writeback_id == accepted.writeback_id
+    assert lost.status == accepted.status
+
+
+@pytest.mark.asyncio
+async def test_file_source_has_no_writeback() -> None:
+    adapter = FileSourceAdapter(scenario_id="insider_data_exfiltration", mock_dir=MOCK_DIR)
+    assert adapter.writeback_required is False
+    assert not isinstance(adapter, BaseDispositionAdapter)
+    assert (
+        adapter.capabilities()[ConnectorCapability.EVENT_DISPOSITION] is CapabilityState.UNSUPPORTED
+    )
+    page = await adapter.list_objects([SourceObjectKind.INCIDENT, SourceObjectKind.ALERT])
+    assert page.items
+    telemetry = adapter.load_telemetry()
+    assert "identity" in telemetry
+    assert any(normalize_record(r).channel == "identity" for r in telemetry["identity"])
+
+
+def test_normalizers_cover_six_plus_threat_intel_channels() -> None:
+    # Six deep-dive channels + threat_intel used by Evidence — not six XDR adapters.
+    assert set(CHANNEL_NORMALIZERS) >= {
+        "identity",
+        "endpoint",
+        "dlp",
+        "network",
+        "dns",
+        "asset",
+        "threat_intel",
+    }
+
+
+def test_registries_and_adapter_not_found() -> None:
+    sources = SourceAdapterRegistry()
+    dispositions = DispositionAdapterRegistry()
+    file_adapter = FileSourceAdapter(scenario_id="account_anomaly_fp")
+    sources.register("file", file_adapter)
+    assert sources.get("file") is file_adapter
+    with pytest.raises(AdapterNotFoundError):
+        sources.get("missing")
+    with pytest.raises(AdapterNotFoundError):
+        dispositions.get("missing")
+
+
+def test_live_stub_capabilities_are_unknown() -> None:
+    stub = LiveDispositionAdapterStub()
+    caps = stub.capabilities()
+    assert all(v is CapabilityState.UNKNOWN for v in caps.intents.values())
+    cmd = event_disposition_command()
+    with pytest.raises(WritebackUnsupportedError):
+        stub.validate_command(cmd)
+
+
+def test_mock_requires_separated_credentials() -> None:
+    with pytest.raises(ValueError, match="separated"):
+        MockXDRSourceAdapter(read_token="same", write_token="same")
+
+
+@pytest.mark.asyncio
+async def test_schema_unsupported_halts_kind_watermark(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    quality = InMemoryDataQualityRecorder()
+    adapter = MockXDRSourceAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+        quality=quality,
+        supported_schema_versions=frozenset({"999"}),
+    )
+    page = await adapter.list_objects([SourceObjectKind.INCIDENT], limit=10)
+    assert page.items == []
+    assert any(r["error_category"] == "schema_unsupported" for r in quality.rows)
+    assert await adapter.health_check() is ConnectorStatus.DEGRADED
+
+
+@pytest.mark.asyncio
+async def test_list_objects_paginates_single_kind(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    adapter = MockXDRSourceAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+    )
+    scenario = build_scenario("insider_data_exfiltration", seed=42)
+    expected = {a.reference.source_object_id for a in scenario.alerts}
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(10):  # safety bound against runaway pagination
+        page = await adapter.list_objects([SourceObjectKind.ALERT], cursor=cursor, limit=1)
+        seen.extend(a.reference.source_object_id for a in page.items if isinstance(a, SourceAlert))
+        if not page.has_more:
+            break
+        cursor = page.next_cursor
+    assert set(seen) == expected  # every alert retrieved
+    assert len(seen) == len(set(seen))  # no duplicates across pages
+
+
+@pytest.mark.asyncio
+async def test_list_objects_multi_kind_pagination_is_isolated(
+    mock_client: httpx.AsyncClient, mock_state: MockXDRState
+) -> None:
+    adapter = MockXDRSourceAdapter(
+        read_token=mock_state.read_token,
+        write_token=mock_state.write_token,
+        client=mock_client,
+    )
+    scenario = build_scenario("insider_data_exfiltration", seed=42)
+    expected_alerts = {a.reference.source_object_id for a in scenario.alerts}
+    expected_assets = {a.reference.source_object_id for a in scenario.assets}
+    got_alerts: set[str] = set()
+    got_assets: set[str] = set()
+    cursor: str | None = None
+    for _ in range(20):
+        page = await adapter.list_objects(
+            [SourceObjectKind.ALERT, SourceObjectKind.ASSET], cursor=cursor, limit=1
+        )
+        for it in page.items:
+            if isinstance(it, SourceAlert):
+                got_alerts.add(it.reference.source_object_id)
+            elif isinstance(it, SourceAsset):
+                got_assets.add(it.reference.source_object_id)
+        if not page.has_more:
+            break
+        cursor = page.next_cursor
+    # Per-kind cursors keep the two kinds isolated — no cross-contamination or loss.
+    assert got_alerts == expected_alerts
+    assert got_assets == expected_assets
+
+
+def test_source_adapter_has_no_write_methods() -> None:
+    writeish = {"submit", "write", "delete", "update", "dispose"}
+    public = {name for name in dir(BaseSourceAdapter) if not name.startswith("_")}
+    assert public.isdisjoint(writeish)
