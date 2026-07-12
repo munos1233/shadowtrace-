@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "node_id": {
+      "title": "Node Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "entity_type": {
+      "title": "Entity Type",
+      "type": "string"
+    },
+    "entity_value": {
+      "title": "Entity Value",
+      "type": "string"
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Properties"
+    }
+  },
+  "required": [
+    "node_id",
+    "event_id",
+    "entity_type",
+    "entity_value"
+  ],
+  "title": "GraphNode",
+  "type": "object"
+}

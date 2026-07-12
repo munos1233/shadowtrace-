@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "EffectStatus": {
+      "enum": [
+        "verified",
+        "failed",
+        "skipped",
+        "unverifiable"
+      ],
+      "title": "EffectStatus",
+      "type": "string"
+    },
+    "VerificationActionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "effect_status": {
+          "$ref": "#/$defs/EffectStatus"
+        },
+        "writeback_required": {
+          "title": "Writeback Required",
+          "type": "boolean"
+        },
+        "writeback_readiness": {
+          "$ref": "#/$defs/WritebackReadiness"
+        },
+        "writeback_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WritebackStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "writeback_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Writeback Ids",
+          "type": "array"
+        },
+        "verification_action_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Action Id"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "required": [
+        "action_id",
+        "effect_status",
+        "writeback_required",
+        "writeback_readiness"
+      ],
+      "title": "VerificationActionResult",
+      "type": "object"
+    },
+    "VerificationOverallStatus": {
+      "enum": [
+        "success",
+        "partial",
+        "failed",
+        "waiting",
+        "manual_resolution"
+      ],
+      "title": "VerificationOverallStatus",
+      "type": "string"
+    },
+    "VerificationPhase": {
+      "enum": [
+        "effect",
+        "disposition"
+      ],
+      "title": "VerificationPhase",
+      "type": "string"
+    },
+    "WritebackReadiness": {
+      "description": "Pre-submission condition; not an external receipt.",
+      "enum": [
+        "not_required",
+        "ready",
+        "source_unresolved",
+        "not_configured",
+        "capability_unknown",
+        "capability_unsupported",
+        "permission_denied",
+        "connector_unavailable"
+      ],
+      "title": "WritebackReadiness",
+      "type": "string"
+    },
+    "WritebackStatus": {
+      "description": "Only valid once a writeback command exists; null otherwise.",
+      "enum": [
+        "pending",
+        "sending",
+        "accepted",
+        "confirmed",
+        "partial",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "WritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "results": {
+      "items": {
+        "$ref": "#/$defs/VerificationActionResult"
+      },
+      "title": "Results",
+      "type": "array"
+    },
+    "overall_status": {
+      "$ref": "#/$defs/VerificationOverallStatus"
+    },
+    "failed_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Failed Actions",
+      "type": "array"
+    },
+    "failed_writebacks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Failed Writebacks",
+      "type": "array"
+    },
+    "blocked_writebacks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Writebacks",
+      "type": "array"
+    },
+    "need_action_replan": {
+      "default": false,
+      "title": "Need Action Replan",
+      "type": "boolean"
+    },
+    "need_writeback_recovery": {
+      "default": false,
+      "title": "Need Writeback Recovery",
+      "type": "boolean"
+    },
+    "need_manual_resolution": {
+      "default": false,
+      "title": "Need Manual Resolution",
+      "type": "boolean"
+    },
+    "verification_phase": {
+      "$ref": "#/$defs/VerificationPhase"
+    }
+  },
+  "required": [
+    "overall_status",
+    "verification_phase"
+  ],
+  "title": "VerificationResult",
+  "type": "object"
+}

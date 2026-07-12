@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "PlanBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_tool_calls": {
+          "default": 30,
+          "title": "Max Tool Calls",
+          "type": "integer"
+        },
+        "max_llm_calls": {
+          "default": 20,
+          "title": "Max Llm Calls",
+          "type": "integer"
+        },
+        "max_duration_s": {
+          "default": 300,
+          "title": "Max Duration S",
+          "type": "integer"
+        }
+      },
+      "title": "PlanBudget",
+      "type": "object"
+    },
+    "PlanStep": {
+      "additionalProperties": false,
+      "properties": {
+        "step_order": {
+          "title": "Step Order",
+          "type": "integer"
+        },
+        "step_goal": {
+          "title": "Step Goal",
+          "type": "string"
+        },
+        "assigned_agent": {
+          "enum": [
+            "super_agent",
+            "planner_agent",
+            "triage_agent",
+            "evidence_agent",
+            "graph_agent",
+            "rag_agent",
+            "risk_agent",
+            "response_agent",
+            "verify_agent",
+            "report_agent",
+            "memory_agent",
+            "tool_agent"
+          ],
+          "title": "Assigned Agent",
+          "type": "string"
+        },
+        "required_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Tools",
+          "type": "array"
+        },
+        "success_criteria": {
+          "default": "",
+          "title": "Success Criteria",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_order",
+        "step_goal",
+        "assigned_agent"
+      ],
+      "title": "PlanStep",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/PlanStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "budget": {
+      "$ref": "#/$defs/PlanBudget"
+    },
+    "revision": {
+      "default": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "revise_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Revise Reason"
+    },
+    "degraded": {
+      "default": false,
+      "title": "Degraded",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "plan_id",
+    "event_id"
+  ],
+  "title": "ExecutionPlan",
+  "type": "object"
+}

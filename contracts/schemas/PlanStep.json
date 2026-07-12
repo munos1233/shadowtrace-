@@ -1,0 +1,50 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "step_order": {
+      "title": "Step Order",
+      "type": "integer"
+    },
+    "step_goal": {
+      "title": "Step Goal",
+      "type": "string"
+    },
+    "assigned_agent": {
+      "enum": [
+        "super_agent",
+        "planner_agent",
+        "triage_agent",
+        "evidence_agent",
+        "graph_agent",
+        "rag_agent",
+        "risk_agent",
+        "response_agent",
+        "verify_agent",
+        "report_agent",
+        "memory_agent",
+        "tool_agent"
+      ],
+      "title": "Assigned Agent",
+      "type": "string"
+    },
+    "required_tools": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Tools",
+      "type": "array"
+    },
+    "success_criteria": {
+      "default": "",
+      "title": "Success Criteria",
+      "type": "string"
+    }
+  },
+  "required": [
+    "step_order",
+    "step_goal",
+    "assigned_agent"
+  ],
+  "title": "PlanStep",
+  "type": "object"
+}

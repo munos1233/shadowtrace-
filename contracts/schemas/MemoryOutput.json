@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "CaseRecordSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Id"
+        },
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        },
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "case_id"
+      ],
+      "title": "CaseRecordSummary",
+      "type": "object"
+    },
+    "FpRuleCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "rule_summary": {
+          "title": "Rule Summary",
+          "type": "string"
+        },
+        "alert_signature": {
+          "title": "Alert Signature",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "source_event_id": {
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "pending_review": {
+          "default": true,
+          "title": "Pending Review",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rule_summary",
+        "alert_signature",
+        "confidence",
+        "source_event_id"
+      ],
+      "title": "FpRuleCandidate",
+      "type": "object"
+    },
+    "ProfileUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_type": {
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "entity_value": {
+          "title": "Entity Value",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "risk_score": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Risk Score"
+        },
+        "behavior_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Behavior Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity_type",
+        "entity_value",
+        "event_id"
+      ],
+      "title": "ProfileUpdate",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "case_records": {
+      "items": {
+        "$ref": "#/$defs/CaseRecordSummary"
+      },
+      "title": "Case Records",
+      "type": "array"
+    },
+    "fp_rules": {
+      "items": {
+        "$ref": "#/$defs/FpRuleCandidate"
+      },
+      "title": "Fp Rules",
+      "type": "array"
+    },
+    "profile_updates": {
+      "items": {
+        "$ref": "#/$defs/ProfileUpdate"
+      },
+      "title": "Profile Updates",
+      "type": "array"
+    },
+    "sigma_drafts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Sigma Drafts",
+      "type": "array"
+    }
+  },
+  "title": "MemoryOutput",
+  "type": "object"
+}

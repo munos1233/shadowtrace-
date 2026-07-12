@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "rule_summary": {
+      "title": "Rule Summary",
+      "type": "string"
+    },
+    "alert_signature": {
+      "title": "Alert Signature",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "source_event_id": {
+      "title": "Source Event Id",
+      "type": "string"
+    },
+    "pending_review": {
+      "default": true,
+      "title": "Pending Review",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "rule_summary",
+    "alert_signature",
+    "confidence",
+    "source_event_id"
+  ],
+  "title": "FpRuleCandidate",
+  "type": "object"
+}

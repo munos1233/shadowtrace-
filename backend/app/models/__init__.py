@@ -10,6 +10,34 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from app.models.action import Action, ImpactAssessment
+from app.models.agent_io import (
+    AttackStoryline,
+    AttackTechniqueMatch,
+    CaseRecordSummary,
+    Citation,
+    EvidenceOutput,
+    ExecutionPlan,
+    FpRuleCandidate,
+    FpSimilarity,
+    GraphEdge,
+    GraphNode,
+    GraphOutput,
+    InvestigationResult,
+    MemoryOutput,
+    PlanBudget,
+    PlanStep,
+    ProfileUpdate,
+    RAGOutput,
+    ResponsePlan,
+    RiskAssessment,
+    RiskFactor,
+    SimilarCaseSummary,
+    StorylinePhase,
+    TimelineEntry,
+    TriageResult,
+    VerificationActionResult,
+    VerificationResult,
+)
 from app.models.context import EventContext
 from app.models.disposition import (
     DispositionCommand,
@@ -99,6 +127,33 @@ MODEL_REGISTRY: dict[str, type[BaseModel]] = {
     # security event + context
     "SecurityEvent": SecurityEvent,
     "EventContext": EventContext,
+    # agent stage I/O (ISSUE-005)
+    "TriageResult": TriageResult,
+    "EvidenceOutput": EvidenceOutput,
+    "TimelineEntry": TimelineEntry,
+    "StorylinePhase": StorylinePhase,
+    "AttackStoryline": AttackStoryline,
+    "GraphNode": GraphNode,
+    "GraphEdge": GraphEdge,
+    "GraphOutput": GraphOutput,
+    "AttackTechniqueMatch": AttackTechniqueMatch,
+    "FpSimilarity": FpSimilarity,
+    "SimilarCaseSummary": SimilarCaseSummary,
+    "Citation": Citation,
+    "RAGOutput": RAGOutput,
+    "RiskFactor": RiskFactor,
+    "RiskAssessment": RiskAssessment,
+    "ResponsePlan": ResponsePlan,
+    "VerificationActionResult": VerificationActionResult,
+    "VerificationResult": VerificationResult,
+    "CaseRecordSummary": CaseRecordSummary,
+    "FpRuleCandidate": FpRuleCandidate,
+    "ProfileUpdate": ProfileUpdate,
+    "MemoryOutput": MemoryOutput,
+    "PlanBudget": PlanBudget,
+    "PlanStep": PlanStep,
+    "ExecutionPlan": ExecutionPlan,
+    "InvestigationResult": InvestigationResult,
 }
 
 __all__ = ["MODEL_REGISTRY", *sorted(MODEL_REGISTRY.keys())]

@@ -1,0 +1,132 @@
+"""BaseAgent and generic Agent I/O envelopes (ISSUE-005).
+
+Concrete Agents implement ``_run``; the base class ``execute`` template method
+wraps timing, trace recording, guardrails, budget checks and working-memory
+access. Real logic for those wrappers lands in later Issues:
+
+- ``_record_trace`` → ISSUE-028
+- ``_apply_guardrails`` → ISSUE-030
+- ``_check_budget`` → ISSUE-029
+- WorkingMemory product field R/W → ISSUE-014
+"""
+
+from __future__ import annotations
+
+import time
+from abc import ABC, abstractmethod
+from typing import Any, Generic, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field
+
+TIn = TypeVar("TIn", bound="AgentInput")
+TOut = TypeVar("TOut", bound=BaseModel)
+
+
+class AgentInput(BaseModel):
+    """Generic agent input envelope. Stage-specific payloads live in ``data``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentOutput(BaseModel):
+    """Generic agent output envelope for agents without a dedicated stage model.
+
+    Stage Agents normally return their dedicated model from ``agent_io``
+    (``TriageResult``, ``EvidenceOutput``, …) rather than this envelope.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str
+    success: bool = True
+    degraded: bool = False
+    error_detail: str | None = None
+    duration_ms: int | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class BaseAgent(ABC, Generic[TIn, TOut]):
+    """Abstract base for all 12 Agents (intro §4.4).
+
+    Subclasses must set ``agent_name`` and implement ``_run``. Optional
+    dependencies are injected as placeholders until their Issues land.
+    """
+
+    agent_name: str = ""
+
+    def __init__(
+        self,
+        *,
+        llm_client: Any | None = None,
+        tool_executor: Any | None = None,
+        context_store: Any | None = None,
+        working_memory: Any | None = None,
+        budget_service: Any | None = None,
+        output_guard: Any | None = None,
+    ) -> None:
+        self.llm_client = llm_client
+        self.tool_executor = tool_executor
+        self.context_store = context_store
+        self.working_memory = working_memory
+        self.budget_service = budget_service
+        self.output_guard = output_guard
+        # Per-instance hook lists (default empty); subclasses may append.
+        self.pre_hooks: list[Any] = []
+        self.post_hooks: list[Any] = []
+
+    async def execute(self, input: TIn) -> TOut:
+        """Template method: budget → pre_hooks → _run → guardrails → post_hooks → trace."""
+        await self._check_budget(input)
+        for hook in self.pre_hooks:
+            await hook(self, input)
+
+        started = time.perf_counter()
+        status = "completed"
+        error_detail: str | None = None
+        output: TOut | None = None
+        try:
+            output = await self._run(input)
+            output = await self._apply_guardrails(output)
+            for hook in self.post_hooks:
+                await hook(self, input)
+            return output
+        except Exception as exc:
+            status = "failed"
+            error_detail = str(exc)
+            raise
+        finally:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            await self._record_trace(
+                input=input,
+                output=output,
+                status=status,
+                duration_ms=duration_ms,
+                error_detail=error_detail,
+            )
+
+    @abstractmethod
+    async def _run(self, input: TIn) -> TOut:
+        """Subclass-implemented agent body. Must return the stage output model."""
+
+    async def _record_trace(
+        self,
+        *,
+        input: TIn,
+        output: TOut | None,
+        status: str,
+        duration_ms: int,
+        error_detail: str | None = None,
+    ) -> None:
+        """Placeholder for AgentTraceService (ISSUE-028)."""
+        return None
+
+    async def _apply_guardrails(self, output: TOut) -> TOut:
+        """Placeholder for OutputGuard (ISSUE-030). Passes through unchanged."""
+        return output
+
+    async def _check_budget(self, input: TIn) -> None:
+        """Placeholder for BudgetService (ISSUE-029). No-op until wired."""
+        return None

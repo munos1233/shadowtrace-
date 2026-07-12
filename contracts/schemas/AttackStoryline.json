@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "Severity": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "StorylineGeneratedBy": {
+      "enum": [
+        "llm",
+        "rule"
+      ],
+      "title": "StorylineGeneratedBy",
+      "type": "string"
+    },
+    "StorylinePhase": {
+      "additionalProperties": false,
+      "properties": {
+        "phase_order": {
+          "title": "Phase Order",
+          "type": "integer"
+        },
+        "phase_name": {
+          "$ref": "#/$defs/StorylinePhaseName"
+        },
+        "tactic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tactic"
+        },
+        "narrative": {
+          "default": "",
+          "title": "Narrative",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Entries",
+          "type": "array"
+        }
+      },
+      "required": [
+        "phase_order",
+        "phase_name"
+      ],
+      "title": "StorylinePhase",
+      "type": "object"
+    },
+    "StorylinePhaseName": {
+      "enum": [
+        "initial_access",
+        "collection",
+        "staging",
+        "exfiltration",
+        "post_action"
+      ],
+      "title": "StorylinePhaseName",
+      "type": "string"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "technique_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Technique Id"
+        },
+        "severity_hint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Severity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "timestamp",
+        "description",
+        "evidence_id"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "storyline_id": {
+      "title": "Storyline Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "narrative_summary": {
+      "title": "Narrative Summary",
+      "type": "string"
+    },
+    "phases": {
+      "items": {
+        "$ref": "#/$defs/StorylinePhase"
+      },
+      "title": "Phases",
+      "type": "array"
+    },
+    "generated_by": {
+      "$ref": "#/$defs/StorylineGeneratedBy"
+    }
+  },
+  "required": [
+    "storyline_id",
+    "event_id",
+    "narrative_summary",
+    "generated_by"
+  ],
+  "title": "AttackStoryline",
+  "type": "object"
+}

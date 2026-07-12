@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "RiskFactor": {
+      "additionalProperties": false,
+      "properties": {
+        "factor_name": {
+          "title": "Factor Name",
+          "type": "string"
+        },
+        "weight": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "raw_score": {
+          "title": "Raw Score",
+          "type": "number"
+        },
+        "weighted_score": {
+          "title": "Weighted Score",
+          "type": "number"
+        },
+        "reasoning": {
+          "default": "",
+          "title": "Reasoning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "factor_name",
+        "weight",
+        "raw_score",
+        "weighted_score"
+      ],
+      "title": "RiskFactor",
+      "type": "object"
+    },
+    "ScoringMode": {
+      "enum": [
+        "llm_and_rule",
+        "rule_only"
+      ],
+      "title": "ScoringMode",
+      "type": "string"
+    },
+    "Severity": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "risk_score": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Risk Score",
+      "type": "integer"
+    },
+    "severity": {
+      "$ref": "#/$defs/Severity"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "risk_factors": {
+      "items": {
+        "$ref": "#/$defs/RiskFactor"
+      },
+      "title": "Risk Factors",
+      "type": "array"
+    },
+    "possible_false_positive": {
+      "default": false,
+      "title": "Possible False Positive",
+      "type": "boolean"
+    },
+    "scoring_mode": {
+      "$ref": "#/$defs/ScoringMode"
+    }
+  },
+  "required": [
+    "risk_score",
+    "severity",
+    "confidence",
+    "scoring_mode"
+  ],
+  "title": "RiskAssessment",
+  "type": "object"
+}
