@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -170,6 +172,41 @@ def test_opaque_external_id_shapes_across_fixtures() -> None:
             elif len(oid) >= 20 and "-" not in oid[:8]:
                 seen_long = True
     assert seen_digit and seen_uuid and seen_long
+
+
+_DOC_NETS = [
+    ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+]
+
+
+def _iter_ipv4(obj: Any) -> list[str]:
+    found: list[str] = []
+    if isinstance(obj, dict):
+        for value in obj.values():
+            found.extend(_iter_ipv4(value))
+    elif isinstance(obj, list):
+        for item in obj:
+            found.extend(_iter_ipv4(item))
+    elif isinstance(obj, str):
+        try:
+            ipaddress.IPv4Address(obj)
+        except ipaddress.AddressValueError:
+            return found
+        found.append(obj)
+    return found
+
+
+@pytest.mark.parametrize("scenario_id", SCENARIO_IDS)
+def test_fixtures_use_documentation_or_private_ips(scenario_id: str) -> None:
+    """No real-looking public IOC ships in fixtures — only RFC5737/private IPs."""
+    scenario = build_scenario(scenario_id, seed=42)
+    for ip_str in _iter_ipv4(scenario.model_dump(mode="json")):
+        ip = ipaddress.IPv4Address(ip_str)
+        if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_multicast:
+            continue
+        assert any(ip in net for net in _DOC_NETS), (
+            f"non-documentation public IP {ip_str} in scenario {scenario_id}"
+        )
 
 
 def test_write_seven_telemetry_files(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@
     "is_key_event": true,
     "is_conflict_seed": false,
     "src_ip": "10.20.30.23",
-    "dst_ip": "45.153.12.88",
+    "dst_ip": "203.0.113.88",
     "dst_port": 443,
     "bytes_out": 52000000,
     "hostname": "PC-FIN-023",
@@ -19,7 +19,7 @@
     "is_key_event": true,
     "is_conflict_seed": false,
     "src_ip": "10.20.30.23",
-    "dst_ip": "45.153.12.88",
+    "dst_ip": "203.0.113.88",
     "dst_port": 443,
     "bytes_out": 400000,
     "hostname": "PC-FIN-023",
@@ -32,7 +32,7 @@
     "is_key_event": false,
     "is_conflict_seed": false,
     "src_ip": "10.20.30.23",
-    "dst_ip": "1.1.1.1",
+    "dst_ip": "192.0.2.53",
     "dst_port": 53,
     "bytes_out": 120
   }

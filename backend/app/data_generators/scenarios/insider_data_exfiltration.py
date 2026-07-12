@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from app.data_generators.scenarios._common import (
@@ -22,7 +23,8 @@ SCENARIO_ID = "insider_data_exfiltration"
 # Fixed demo entities (only allowed inside scenario packs / generated artifacts).
 ACCOUNT = "zhangsan"
 HOST = "PC-FIN-023"
-EXFIL_IP = "45.153.12.88"
+# RFC5737 documentation range — never ship a real-looking IOC in fixtures/logs.
+EXFIL_IP = "203.0.113.88"
 EXFIL_DOMAIN = "unknown-upload-example.com"
 PROC_PS = "powershell.exe"
 PROC_7Z = "7z.exe"
@@ -304,11 +306,8 @@ def build_insider_data_exfiltration(*, seed: int = 42) -> MockXDRScenario:
     )
 
 
-def _build_timeline(*, base: object, seed: int) -> list[dict[str, Any]]:
+def _build_timeline(*, base: datetime, seed: int) -> list[dict[str, Any]]:
     """≥20 key events spanning identity/endpoint/dlp/network/dns/asset/ti."""
-    from datetime import datetime
-
-    assert isinstance(base, datetime)
     rows: list[dict[str, Any]] = []
     # Background identity noise for other users — zhangsan has NO successful login.
     rows.append(
@@ -547,7 +546,7 @@ def _build_timeline(*, base: object, seed: int) -> list[dict[str, Any]]:
             offset_s=900,
             base_time=base,
             src_ip="10.20.30.23",
-            dst_ip="1.1.1.1",
+            dst_ip="192.0.2.53",
             dst_port=53,
             bytes_out=120,
             is_key_event=False,

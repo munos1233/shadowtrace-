@@ -282,7 +282,7 @@
       "normalized": {
         "level": "high",
         "gpt_tag": "c2_like_egress",
-        "dst_ip": "45.153.12.88",
+        "dst_ip": "203.0.113.88",
         "domain": "unknown-upload-example.com"
       },
       "incident_ref": {
@@ -452,7 +452,7 @@
       "logged_at": "2024-06-15T09:00:00Z",
       "src_ip": "10.20.30.23",
       "src_port": null,
-      "dst_ip": "45.153.12.88",
+      "dst_ip": "203.0.113.88",
       "dst_port": 443,
       "category": "data_exfiltration"
     },
@@ -512,7 +512,7 @@
       "logged_at": "2024-06-15T09:00:00Z",
       "src_ip": "10.20.30.23",
       "src_port": null,
-      "dst_ip": "45.153.12.88",
+      "dst_ip": "203.0.113.88",
       "dst_port": 443,
       "category": "egress"
     }
@@ -684,7 +684,7 @@
       "query": "unknown-upload-example.com",
       "qtype": "A",
       "rcode": "NOERROR",
-      "answer": "45.153.12.88",
+      "answer": "203.0.113.88",
       "hostname": "PC-FIN-023"
     },
     {
@@ -694,7 +694,7 @@
       "is_key_event": true,
       "is_conflict_seed": false,
       "src_ip": "10.20.30.23",
-      "dst_ip": "45.153.12.88",
+      "dst_ip": "203.0.113.88",
       "dst_port": 443,
       "bytes_out": 52000000,
       "hostname": "PC-FIN-023",
@@ -707,7 +707,7 @@
       "is_key_event": true,
       "is_conflict_seed": false,
       "src_ip": "10.20.30.23",
-      "dst_ip": "45.153.12.88",
+      "dst_ip": "203.0.113.88",
       "dst_port": 443,
       "bytes_out": 400000,
       "hostname": "PC-FIN-023",
@@ -719,7 +719,7 @@
       "logged_at": "2024-06-15T09:08:20+00:00",
       "is_key_event": true,
       "is_conflict_seed": false,
-      "indicator": "45.153.12.88",
+      "indicator": "203.0.113.88",
       "indicator_type": "ip",
       "confidence": 0.91,
       "tags": [
@@ -784,7 +784,7 @@
       "process": "powershell.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0017",
@@ -796,7 +796,7 @@
       "process": "7z.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0018",
@@ -808,7 +808,7 @@
       "process": "powershell.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0019",
@@ -820,7 +820,7 @@
       "process": "7z.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0020",
@@ -832,7 +832,7 @@
       "process": "powershell.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0021",
@@ -844,7 +844,7 @@
       "process": "7z.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0022",
@@ -856,7 +856,7 @@
       "process": "powershell.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "ep-key-42-0023",
@@ -868,7 +868,7 @@
       "process": "7z.exe",
       "account": "zhangsan",
       "action": "network_connect",
-      "dst_ip": "45.153.12.88"
+      "dst_ip": "203.0.113.88"
     },
     {
       "record_id": "net-noise-42-0090",
@@ -877,7 +877,7 @@
       "is_key_event": false,
       "is_conflict_seed": false,
       "src_ip": "10.20.30.23",
-      "dst_ip": "1.1.1.1",
+      "dst_ip": "192.0.2.53",
       "dst_port": 53,
       "bytes_out": 120
     },
