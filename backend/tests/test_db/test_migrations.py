@@ -93,9 +93,7 @@ async def _seed_connector_source(session: AsyncSession, sfx: str) -> tuple[str, 
     connector_id = f"conn-{sfx}"
     source_record_id = f"src-{sfx}"
     session.add(
-        m.SourceConnector(
-            connector_id=connector_id, source_product="mock_xdr", display_name="Mock"
-        )
+        m.SourceConnector(connector_id=connector_id, source_product="mock_xdr", display_name="Mock")
     )
     await session.flush()
     session.add(
@@ -340,9 +338,9 @@ async def test_transaction_rollback(session: AsyncSession) -> None:
     event_id = await _seed_event(session, sfx)
     await session.rollback()
     found = await session.execute(
-        select(func.count()).select_from(m.SecurityEvent).where(
-            m.SecurityEvent.event_id == event_id
-        )
+        select(func.count())
+        .select_from(m.SecurityEvent)
+        .where(m.SecurityEvent.event_id == event_id)
     )
     assert found.scalar_one() == 0
 

@@ -134,12 +134,19 @@ def test_event_list_declares_mandated_query_params() -> None:
     # intro §4.2 / ISSUE-004 naming §3: the event list contract must expose the
     # full documented filter/sort/pagination parameter set.
     schema = app.openapi()
-    params = {
-        p["name"] for p in schema["paths"]["/api/v1/events"]["get"].get("parameters", [])
-    }
+    params = {p["name"] for p in schema["paths"]["/api/v1/events"]["get"].get("parameters", [])}
     expected = {
-        "page", "page_size", "status", "severity", "event_type", "final_verdict",
-        "keyword", "start_time", "end_time", "sort_by", "sort_order",
+        "page",
+        "page_size",
+        "status",
+        "severity",
+        "event_type",
+        "final_verdict",
+        "keyword",
+        "start_time",
+        "end_time",
+        "sort_by",
+        "sort_order",
     }
     assert expected <= params, {"missing": expected - params}
 

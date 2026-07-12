@@ -206,9 +206,7 @@ async def get_actions(
     _require_event(event_id)
     # Paginated + status-filterable to stay contract-stable for the real
     # implementation (ISSUE-038/039), which must not change these fields.
-    return s.ActionListResponse(
-        total=1, page=page, page_size=page_size, items=[s.example_action()]
-    )
+    return s.ActionListResponse(total=1, page=page, page_size=page_size, items=[s.example_action()])
 
 
 @router.put(

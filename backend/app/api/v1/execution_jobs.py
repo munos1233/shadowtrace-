@@ -16,9 +16,7 @@ _KNOWN_JOBS = {"job-0a1b2c3d"}
 @router.get("/execution-jobs/{job_id}", response_model=s.ExecutionJobResponse)
 async def get_execution_job(job_id: str, principal: CurrentPrincipal) -> s.ExecutionJobResponse:
     if job_id not in _KNOWN_JOBS:
-        raise ResourceNotFoundError(
-            f"execution job {job_id} not found", details={"job_id": job_id}
-        )
+        raise ResourceNotFoundError(f"execution job {job_id} not found", details={"job_id": job_id})
     return s.ExecutionJobResponse(
         job_id=job_id,
         event_id=s.EXAMPLE_EVENT_ID,

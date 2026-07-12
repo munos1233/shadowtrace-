@@ -95,8 +95,8 @@ class ToolMeta(BaseModel):
     routing_kind: RoutingKind
     supported_execution_owners: list[ExecutionOwner] = Field(default_factory=list)
     # Owner -> required disposition intent when that owner is frozen on an Action.
-    required_disposition_intent_by_owner: dict[ExecutionOwner, DispositionIntentKind] = (
-        Field(default_factory=dict)
+    required_disposition_intent_by_owner: dict[ExecutionOwner, DispositionIntentKind] = Field(
+        default_factory=dict
     )
     required_capabilities: list[str] = Field(default_factory=list)
     side_effect_level: SideEffectLevel = SideEffectLevel.NONE
@@ -134,13 +134,9 @@ class ToolMeta(BaseModel):
             if self.action_category is not ActionCategory.VERIFICATION:
                 raise ValueError("verification tools require action_category=verification")
             if owners:
-                raise ValueError(
-                    "verification tools must have empty supported_execution_owners"
-                )
+                raise ValueError("verification tools must have empty supported_execution_owners")
             if self.routing_kind is not RoutingKind.TOOL_PROVIDER_ONLY:
-                raise ValueError(
-                    "verification tools must use routing_kind=tool_provider_only"
-                )
+                raise ValueError("verification tools must use routing_kind=tool_provider_only")
 
         if self.tool_name == TERMINAL_DISPOSITION_TOOL:
             if self.routing_kind is not RoutingKind.DISPOSITION_ONLY:
@@ -148,13 +144,9 @@ class ToolMeta(BaseModel):
                     f"{TERMINAL_DISPOSITION_TOOL} must be routing_kind=disposition_only"
                 )
             if self.action_category is not ActionCategory.RESPONSE:
-                raise ValueError(
-                    f"{TERMINAL_DISPOSITION_TOOL} must be action_category=response"
-                )
+                raise ValueError(f"{TERMINAL_DISPOSITION_TOOL} must be action_category=response")
             if self.execution_phase is not ActionExecutionPhase.POST_VERIFY:
-                raise ValueError(
-                    f"{TERMINAL_DISPOSITION_TOOL} must be execution_phase=POST_VERIFY"
-                )
+                raise ValueError(f"{TERMINAL_DISPOSITION_TOOL} must be execution_phase=POST_VERIFY")
             if self.activation_condition != "after_effect_resolution":
                 raise ValueError(
                     f"{TERMINAL_DISPOSITION_TOOL} requires "
@@ -165,30 +157,21 @@ class ToolMeta(BaseModel):
                     f"{TERMINAL_DISPOSITION_TOOL} is virtual and must set executable=false"
                 )
             if self.async_mode:
-                raise ValueError(
-                    f"{TERMINAL_DISPOSITION_TOOL} must not declare async_mode execute"
-                )
+                raise ValueError(f"{TERMINAL_DISPOSITION_TOOL} must not declare async_mode execute")
             if owners != [ExecutionOwner.XDR_MANAGED]:
-                raise ValueError(
-                    f"{TERMINAL_DISPOSITION_TOOL} supports only XDR_MANAGED"
-                )
+                raise ValueError(f"{TERMINAL_DISPOSITION_TOOL} supports only XDR_MANAGED")
             expected = DispositionIntentKind.EVENT_STATUS_UPDATE
             if intents.get(ExecutionOwner.XDR_MANAGED) is not expected:
                 raise ValueError(
-                    f"{TERMINAL_DISPOSITION_TOOL} requires "
-                    "XDR_MANAGED→EVENT_STATUS_UPDATE"
+                    f"{TERMINAL_DISPOSITION_TOOL} requires XDR_MANAGED→EVENT_STATUS_UPDATE"
                 )
             return self
 
         if self.tool_category in (ToolCategory.RESPONSE, ToolCategory.ROLLBACK):
             if self.routing_kind is not RoutingKind.OWNER_ROUTED:
-                raise ValueError(
-                    "side-effect response/rollback tools must use owner_routed"
-                )
+                raise ValueError("side-effect response/rollback tools must use owner_routed")
             if self.action_category is None:
-                raise ValueError(
-                    "response/rollback tools require a non-null action_category"
-                )
+                raise ValueError("response/rollback tools require a non-null action_category")
             if not owners:
                 raise ValueError(
                     "owner_routed tools must declare at least one supported_execution_owner"
@@ -206,15 +189,11 @@ class ToolMeta(BaseModel):
                     if self.tool_category is ToolCategory.RESPONSE and intent is not (
                         DispositionIntentKind.ENTITY_ACTION_SUBMIT
                     ):
-                        raise ValueError(
-                            "response XDR_MANAGED must map to ENTITY_ACTION_SUBMIT"
-                        )
+                        raise ValueError("response XDR_MANAGED must map to ENTITY_ACTION_SUBMIT")
                     if self.tool_category is ToolCategory.ROLLBACK and intent is not (
                         DispositionIntentKind.COMPENSATION_RECORD
                     ):
-                        raise ValueError(
-                            "rollback XDR_MANAGED must map to COMPENSATION_RECORD"
-                        )
+                        raise ValueError("rollback XDR_MANAGED must map to COMPENSATION_RECORD")
                 if owner is ExecutionOwner.DIRECT_TOOL:
                     if intent is not DispositionIntentKind.EXECUTION_RESULT_RECORD:
                         raise ValueError(
@@ -233,9 +212,7 @@ class ToolMeta(BaseModel):
         Forbidden to "dispatch both" — callers pass exactly one owner.
         """
         if owner not in self.supported_execution_owners:
-            raise ValueError(
-                f"execution_owner {owner.value} is not supported by {self.tool_name}"
-            )
+            raise ValueError(f"execution_owner {owner.value} is not supported by {self.tool_name}")
         return owner
 
 

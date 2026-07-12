@@ -41,9 +41,7 @@ def test_new_event_id_is_idempotent_for_same_input() -> None:
 
 def test_new_event_id_differs_for_different_identity() -> None:
     occurred = datetime(2026, 7, 12, tzinfo=UTC)
-    assert new_event_id(_identity("INC-1"), occurred) != new_event_id(
-        _identity("INC-2"), occurred
-    )
+    assert new_event_id(_identity("INC-1"), occurred) != new_event_id(_identity("INC-2"), occurred)
 
 
 def test_new_event_id_no_cross_tenant_collision() -> None:

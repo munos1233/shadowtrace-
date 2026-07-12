@@ -42,8 +42,8 @@ def _response_meta(
     rollback_tool_name: str | None = None,
 ) -> ToolMeta:
     input_model = TOOL_INPUT_MODELS[name]
-    rollback = rollback_tool_name if rollback_tool_name is not None else RESPONSE_ROLLBACK_MAP.get(
-        name
+    rollback = (
+        rollback_tool_name if rollback_tool_name is not None else RESPONSE_ROLLBACK_MAP.get(name)
     )
     return ToolMeta(
         tool_name=name,

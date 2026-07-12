@@ -348,9 +348,7 @@ class VerificationActionResult(BaseModel):
                 raise ValueError("writeback_required=false requires writeback_status=null")
         elif self.writeback_readiness is WritebackReadiness.NOT_REQUIRED:
             # required must never be silently downgraded to "not required".
-            raise ValueError(
-                "writeback_required=true forbids writeback_readiness=NOT_REQUIRED"
-            )
+            raise ValueError("writeback_required=true forbids writeback_readiness=NOT_REQUIRED")
         return self
 
 
@@ -498,11 +496,7 @@ class InvestigationResult(BaseModel):
                     "writeback_required=false requires writeback_readiness=NOT_REQUIRED"
                 )
             if self.writeback_overall_status is not None:
-                raise ValueError(
-                    "writeback_required=false requires writeback_overall_status=null"
-                )
+                raise ValueError("writeback_required=false requires writeback_overall_status=null")
         elif self.writeback_readiness is WritebackReadiness.NOT_REQUIRED:
-            raise ValueError(
-                "writeback_required=true forbids writeback_readiness=NOT_REQUIRED"
-            )
+            raise ValueError("writeback_required=true forbids writeback_readiness=NOT_REQUIRED")
         return self

@@ -182,12 +182,8 @@ def test_partial_success_and_conflict_targets() -> None:
         source_record_id="INC-1",
         status=WritebackStatus.PARTIAL,
         target_results=[
-            TargetWritebackResult(
-                canonical_target="ip:1", status=TargetWritebackStatus.CONFIRMED
-            ),
-            TargetWritebackResult(
-                canonical_target="ip:2", status=TargetWritebackStatus.CONFLICT
-            ),
+            TargetWritebackResult(canonical_target="ip:1", status=TargetWritebackStatus.CONFIRMED),
+            TargetWritebackResult(canonical_target="ip:2", status=TargetWritebackStatus.CONFLICT),
         ],
     )
     statuses = {t.status for t in r.target_results}

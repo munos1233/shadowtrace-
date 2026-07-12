@@ -43,8 +43,7 @@ def merge_provider_tools(
         prior = merged.get(meta.tool_name)
         if prior is not None and prior.input_schema != meta.input_schema:
             raise ValueError(
-                f"refusing to overwrite tool {meta.tool_name!r} with a different "
-                "input Schema"
+                f"refusing to overwrite tool {meta.tool_name!r} with a different input Schema"
             )
         if prior is None:
             merged[meta.tool_name] = meta
@@ -68,9 +67,7 @@ def export_baseline_tool_schemas(out_dir: Path) -> list[Path]:
         doc = {
             "tool_name": meta.tool_name,
             "tool_category": meta.tool_category.value,
-            "action_category": (
-                meta.action_category.value if meta.action_category else None
-            ),
+            "action_category": (meta.action_category.value if meta.action_category else None),
             "routing_kind": meta.routing_kind.value,
             "async_mode": meta.async_mode,
             "executable": meta.executable,
