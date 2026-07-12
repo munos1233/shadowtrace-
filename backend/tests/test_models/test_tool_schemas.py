@@ -400,9 +400,7 @@ def test_disposition_command_writeback_field_allowlist() -> None:
             source_object_id="INC-1",
         ),
         operation_code="set_event_disposition",
-        operation_params=SetEventDispositionParams(
-            target_disposition=SourceDisposition.CONTAINED
-        ),
+        operation_params=SetEventDispositionParams(target_disposition=SourceDisposition.CONTAINED),
         operator_id="system",
         idempotency_key="idem-1",
         execution_owner=ExecutionOwner.XDR_MANAGED,

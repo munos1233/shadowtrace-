@@ -111,9 +111,7 @@ class Action(BaseModel):
         # Only the terminal disposition tool is POST_VERIFY; all others IMMEDIATE.
         if self.tool_name == TERMINAL_DISPOSITION_TOOL:
             if self.execution_phase is not ActionExecutionPhase.POST_VERIFY:
-                raise ValueError(
-                    f"{TERMINAL_DISPOSITION_TOOL} must be POST_VERIFY"
-                )
+                raise ValueError(f"{TERMINAL_DISPOSITION_TOOL} must be POST_VERIFY")
             if self.activation_condition != "after_effect_resolution":
                 raise ValueError(
                     f"{TERMINAL_DISPOSITION_TOOL} requires "

@@ -84,9 +84,7 @@ def test_resolve_writeback_requires_admin(client: TestClient) -> None:
         "/api/v1/writebacks/wbk-0a1b2c3d/resolve", headers=_hdr("operator"), json=body
     )
     assert forbidden.status_code == 403
-    ok = client.post(
-        "/api/v1/writebacks/wbk-0a1b2c3d/resolve", headers=_hdr("admin"), json=body
-    )
+    ok = client.post("/api/v1/writebacks/wbk-0a1b2c3d/resolve", headers=_hdr("admin"), json=body)
     assert ok.status_code == 200
 
 
@@ -96,9 +94,7 @@ def test_force_local_close_requires_admin(client: TestClient) -> None:
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/close", headers=_hdr("analyst"), json=body
     )
     assert forbidden.status_code == 403
-    ok = client.post(
-        f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/close", headers=_hdr("admin"), json=body
-    )
+    ok = client.post(f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/close", headers=_hdr("admin"), json=body)
     assert ok.status_code == 200
     assert ok.json()["external_unsynced"] is True
 

@@ -164,9 +164,7 @@ class ShadowTraceError(Exception):
         elif self.default_retryable is not None and error_code is None:
             # Subclass default applies only when the caller did not override the
             # code; overridden codes follow registry category + overlays.
-            self.retryable = _retryable_for_code(
-                self.error_code, self.default_retryable
-            )
+            self.retryable = _retryable_for_code(self.error_code, self.default_retryable)
         else:
             cat_default = _category_retryable_default(self.category)
             self.retryable = _retryable_for_code(self.error_code, cat_default)
@@ -217,14 +215,8 @@ class InvalidStateTransitionError(ShadowTraceError):
     ) -> None:
         merged = {
             **(details or {}),
-            **(
-                {"current": getattr(current, "value", current)}
-                if current is not None
-                else {}
-            ),
-            **(
-                {"target": getattr(target, "value", target)} if target is not None else {}
-            ),
+            **({"current": getattr(current, "value", current)} if current is not None else {}),
+            **({"target": getattr(target, "value", target)} if target is not None else {}),
         }
         self.current = current
         self.target = target

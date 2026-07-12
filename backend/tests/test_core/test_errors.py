@@ -103,11 +103,7 @@ def test_error_category_has_eight_values() -> None:
 
 
 def test_nine_subclasses_category_and_retryable() -> None:
-    permanent = [
-        cls
-        for cls, cat, _ in _FIXED_SUBCLASSES
-        if cat is ErrorCategory.PERMANENT
-    ]
+    permanent = [cls for cls, cat, _ in _FIXED_SUBCLASSES if cat is ErrorCategory.PERMANENT]
     assert len(_FIXED_SUBCLASSES) == 9
     assert len(permanent) == 2
     assert set(permanent) == {
@@ -195,24 +191,9 @@ def test_writeback_retry_rules() -> None:
     assert ERROR_CODE_REGISTRY["writeback_pending"] is ErrorCategory.PERMANENT
 
     # Non-auto-retry overlays
-    assert (
-        is_retryable(
-            ToolExecutionError("denied", error_code="permission_denied")
-        )
-        is False
-    )
-    assert (
-        is_retryable(
-            ToolExecutionError("cas", error_code="version_conflict")
-        )
-        is False
-    )
-    assert (
-        is_retryable(
-            DependencyUnavailableError("unk", error_code="unknown_delivery")
-        )
-        is False
-    )
+    assert is_retryable(ToolExecutionError("denied", error_code="permission_denied")) is False
+    assert is_retryable(ToolExecutionError("cas", error_code="version_conflict")) is False
+    assert is_retryable(DependencyUnavailableError("unk", error_code="unknown_delivery")) is False
     rl = ToolExecutionError("rl", error_code="rate_limited")
     assert rl.category is ErrorCategory.TRANSIENT
     assert is_retryable(rl) is True

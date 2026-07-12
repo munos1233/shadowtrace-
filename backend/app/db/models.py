@@ -333,8 +333,7 @@ class DispositionOutbox(Base):
             "logical_slot",
             unique=True,
             postgresql_where=text(
-                "superseded_by_disposition_id IS NULL "
-                "AND intent_kind = 'event_status_update'"
+                "superseded_by_disposition_id IS NULL AND intent_kind = 'event_status_update'"
             ),
         ),
         Index("ix_disposition_outbox_delivery_status", "delivery_status"),

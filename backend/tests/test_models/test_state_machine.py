@@ -453,8 +453,11 @@ def test_execution_substate_verifying_waiting_writeback() -> None:
         ExecutionSubstate.WAITING_WRITEBACK,
     )
     # Writeback wait must NOT be modeled as REPLANNING EventStatus.
-    assert EventStatus.WAITING_APPROVAL not in (
-        # sanity: waiting_writeback is substate only
+    assert (
+        EventStatus.WAITING_APPROVAL
+        not in (
+            # sanity: waiting_writeback is substate only
+        )
     )
 
 
@@ -472,9 +475,7 @@ def test_job_and_outbox_and_writeback_edges() -> None:
         provider_confirmed_terminal=True,
     )
 
-    validate_outbox_delivery_transition(
-        OutboxDeliveryStatus.READY, OutboxDeliveryStatus.LEASED
-    )
+    validate_outbox_delivery_transition(OutboxDeliveryStatus.READY, OutboxDeliveryStatus.LEASED)
     with pytest.raises(InvalidStateTransitionError, match="PAUSED"):
         validate_outbox_delivery_transition(
             OutboxDeliveryStatus.LEASED,
@@ -483,13 +484,14 @@ def test_job_and_outbox_and_writeback_edges() -> None:
         )
 
     validate_writeback_status_transition(WritebackStatus.PENDING, WritebackStatus.SENDING)
-    assert WritebackStatus.CONFIRMED not in (
-        # confirmed is terminal
+    assert (
+        WritebackStatus.CONFIRMED
+        not in (
+            # confirmed is terminal
+        )
     )
     with pytest.raises(InvalidStateTransitionError):
-        validate_writeback_status_transition(
-            WritebackStatus.CONFIRMED, WritebackStatus.PENDING
-        )
+        validate_writeback_status_transition(WritebackStatus.CONFIRMED, WritebackStatus.PENDING)
     validate_writeback_status_transition(
         WritebackStatus.UNKNOWN,
         WritebackStatus.CONFIRMED,
@@ -527,10 +529,7 @@ def test_late_fp_three_tiers() -> None:
         )
         is LateFalsePositiveTier.VERIFIED_EFFECTS
     )
-    assert (
-        late_fp_allowed_substate(EventStatus.VERIFYING)
-        is ExecutionSubstate.MANUAL_RESOLUTION
-    )
+    assert late_fp_allowed_substate(EventStatus.VERIFYING) is ExecutionSubstate.MANUAL_RESOLUTION
     assert late_fp_allowed_substate(EventStatus.TRIAGING) is None
 
 

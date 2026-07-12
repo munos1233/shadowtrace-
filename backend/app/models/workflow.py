@@ -136,9 +136,7 @@ STATE_TRANSITIONS: dict[EventStatus, set[EventStatus]] = {
     ),
     EventStatus.COLLECTING_EVIDENCE: _with_failed({EventStatus.ANALYZING}),
     EventStatus.ANALYZING: _with_failed({EventStatus.SCORING}),
-    EventStatus.SCORING: _with_failed(
-        {EventStatus.PLANNING_RESPONSE, EventStatus.REPORTING}
-    ),
+    EventStatus.SCORING: _with_failed({EventStatus.PLANNING_RESPONSE, EventStatus.REPORTING}),
     EventStatus.PLANNING_RESPONSE: _with_failed(
         {EventStatus.WAITING_APPROVAL, EventStatus.EXECUTING_RESPONSE}
     ),

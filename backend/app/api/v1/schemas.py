@@ -467,9 +467,7 @@ def example_disposition_command() -> DispositionCommand:
             source_object_id="INC-1001",
         ),
         operation_code="set_event_disposition",
-        operation_params=SetEventDispositionParams(
-            target_disposition=SourceDisposition.CONTAINED
-        ),
+        operation_params=SetEventDispositionParams(target_disposition=SourceDisposition.CONTAINED),
         operator_id="system",
         idempotency_key="idem-example",
         execution_owner=ExecutionOwner.XDR_MANAGED,
