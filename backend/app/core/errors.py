@@ -112,6 +112,10 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "dependency_unavailable": ErrorCategory.TRANSIENT,
     "tool_execution_error": ErrorCategory.TOOL,
     "llm_error": ErrorCategory.LLM,
+    # Mock XDR (ISSUE-010) — fixture-only codes, not vendor facts
+    "invalid_cursor": ErrorCategory.USER_INPUT,
+    "unauthorized_field": ErrorCategory.USER_INPUT,
+    "mock_validation_error": ErrorCategory.USER_INPUT,
 }
 
 
