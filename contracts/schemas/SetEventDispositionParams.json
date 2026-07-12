@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "SourceDisposition": {
+      "description": "Normalized external disposition label; source_status_raw keeps the original.",
+      "enum": [
+        "pending",
+        "processing",
+        "contained",
+        "completed",
+        "suspended",
+        "ignored",
+        "unknown"
+      ],
+      "title": "SourceDisposition",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Params for EVENT_STATUS_UPDATE (the deferred terminal disposition).",
+  "properties": {
+    "operation_code": {
+      "const": "set_event_disposition",
+      "default": "set_event_disposition",
+      "title": "Operation Code",
+      "type": "string"
+    },
+    "target_disposition": {
+      "$ref": "#/$defs/SourceDisposition"
+    },
+    "comment_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Comment Code"
+    }
+  },
+  "required": [
+    "target_disposition"
+  ],
+  "title": "SetEventDispositionParams",
+  "type": "object"
+}

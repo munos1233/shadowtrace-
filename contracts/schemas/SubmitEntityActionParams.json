@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "Params for ENTITY_ACTION_SUBMIT (XDR_MANAGED entity action).",
+  "properties": {
+    "operation_code": {
+      "const": "submit_entity_action",
+      "default": "submit_entity_action",
+      "title": "Operation Code",
+      "type": "string"
+    },
+    "entity_action_code": {
+      "title": "Entity Action Code",
+      "type": "string"
+    },
+    "canonical_target": {
+      "title": "Canonical Target",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entity_action_code",
+    "canonical_target"
+  ],
+  "title": "SubmitEntityActionParams",
+  "type": "object"
+}

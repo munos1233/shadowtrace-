@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "EvidenceSource": {
+      "description": "Eight evidence sources.",
+      "enum": [
+        "identity",
+        "endpoint",
+        "data_security",
+        "network_flow",
+        "dns",
+        "asset",
+        "threat_intel",
+        "false_positive_match"
+      ],
+      "title": "EvidenceSource",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A required evidence source that could not be collected.",
+  "properties": {
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "missing_source": {
+      "$ref": "#/$defs/EvidenceSource"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "detail": {
+      "additionalProperties": true,
+      "title": "Detail",
+      "type": "object"
+    }
+  },
+  "required": [
+    "event_id",
+    "missing_source",
+    "reason"
+  ],
+  "title": "EvidenceGap",
+  "type": "object"
+}

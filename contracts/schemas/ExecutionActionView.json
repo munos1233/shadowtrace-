@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "ActionExecutionPhase": {
+      "enum": [
+        "immediate",
+        "post_verify"
+      ],
+      "title": "ActionExecutionPhase",
+      "type": "string"
+    },
+    "ActionStatus": {
+      "description": "Action lifecycle state (11 states).",
+      "enum": [
+        "pending",
+        "waiting_approval",
+        "approved",
+        "rejected",
+        "superseded",
+        "executing",
+        "partial_success",
+        "success",
+        "failed",
+        "unknown",
+        "rolled_back"
+      ],
+      "title": "ActionStatus",
+      "type": "string"
+    },
+    "TargetExecutionResult": {
+      "additionalProperties": false,
+      "description": "Per-target execution result kept on a job (internal; may retain raw_result).",
+      "properties": {
+        "canonical_target": {
+          "title": "Canonical Target",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TargetExecutionStatus"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "artifact_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Id"
+        },
+        "raw_result": {
+          "additionalProperties": true,
+          "title": "Raw Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "canonical_target",
+        "status"
+      ],
+      "title": "TargetExecutionResult",
+      "type": "object"
+    },
+    "TargetExecutionStatus": {
+      "enum": [
+        "success",
+        "failed",
+        "unknown",
+        "skipped"
+      ],
+      "title": "TargetExecutionStatus",
+      "type": "string"
+    },
+    "WritebackReadiness": {
+      "description": "Pre-submission condition; not an external receipt.",
+      "enum": [
+        "not_required",
+        "ready",
+        "source_unresolved",
+        "not_configured",
+        "capability_unknown",
+        "capability_unsupported",
+        "permission_denied",
+        "connector_unavailable"
+      ],
+      "title": "WritebackReadiness",
+      "type": "string"
+    },
+    "WritebackStatus": {
+      "description": "Only valid once a writeback command exists; null otherwise.",
+      "enum": [
+        "pending",
+        "sending",
+        "accepted",
+        "confirmed",
+        "partial",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "WritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Per-action projection used inside ExecutionSummary.",
+  "properties": {
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "action_status": {
+      "$ref": "#/$defs/ActionStatus"
+    },
+    "execution_phase": {
+      "$ref": "#/$defs/ActionExecutionPhase"
+    },
+    "writeback_required": {
+      "title": "Writeback Required",
+      "type": "boolean"
+    },
+    "writeback_applicable": {
+      "title": "Writeback Applicable",
+      "type": "boolean"
+    },
+    "writeback_readiness": {
+      "$ref": "#/$defs/WritebackReadiness"
+    },
+    "writeback_status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WritebackStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "target_results": {
+      "items": {
+        "$ref": "#/$defs/TargetExecutionResult"
+      },
+      "title": "Target Results",
+      "type": "array"
+    }
+  },
+  "required": [
+    "action_id",
+    "action_status",
+    "execution_phase",
+    "writeback_required",
+    "writeback_applicable",
+    "writeback_readiness"
+  ],
+  "title": "ExecutionActionView",
+  "type": "object"
+}

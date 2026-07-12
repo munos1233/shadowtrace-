@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "Severity": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Estimated blast radius / reversibility of an action (detailed in ISSUE-079).",
+  "properties": {
+    "impact_level": {
+      "$ref": "#/$defs/Severity",
+      "default": "low"
+    },
+    "reversible": {
+      "default": true,
+      "title": "Reversible",
+      "type": "boolean"
+    },
+    "affected_entity_count": {
+      "default": 0,
+      "title": "Affected Entity Count",
+      "type": "integer"
+    },
+    "affected_targets": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Affected Targets",
+      "type": "array"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notes"
+    },
+    "assessed_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assessed By"
+    }
+  },
+  "title": "ImpactAssessment",
+  "type": "object"
+}
