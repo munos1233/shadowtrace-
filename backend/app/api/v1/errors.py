@@ -1,8 +1,9 @@
-"""Domain API exceptions and the unified error handler (ISSUE-004).
+"""Domain API exceptions and the unified error handler (ISSUE-004 / ISSUE-008).
 
-Every handled error serializes to ``ErrorResponse`` (``error_code`` /
-``error_message`` / ``details``). ``details`` never contains secrets or raw
-configuration; for writeback-unsupported it enumerates the blocking reason.
+Every handled error serializes via ``ShadowTraceError.to_response()`` to
+``error_code`` / ``error_message`` / ``details``. ``details`` never contains
+secrets or raw configuration; for writeback-unsupported it enumerates the
+blocking reason.
 """
 
 from __future__ import annotations
@@ -14,14 +15,25 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.auth import AuthenticationError, AuthorizationError
-from app.models.workflow import (
+from app.core.errors import (
+    APIError,
+    ApprovalRequiredError,
+    DispositionPermissionDenied,
+    EventNotFoundError,
     InvalidStateTransitionError,
     InvalidVerdictStatusCombinationError,
+    ResourceNotFoundError,
+    ShadowTraceError,
+    WritebackConflictError,
+    WritebackFailedError,
+    WritebackPendingError,
+    WritebackUnsupportedError,
 )
 
-# Re-export domain state-machine errors so API modules keep a stable import path.
+# Re-export domain errors so API modules keep a stable import path.
 __all__ = [
     "APIError",
+    "ShadowTraceError",
     "EventNotFoundError",
     "InvalidStateTransitionError",
     "InvalidVerdictStatusCombinationError",
@@ -36,60 +48,6 @@ __all__ = [
 ]
 
 
-class APIError(Exception):
-    """Base class for handled API errors."""
-
-    status_code: int = 400
-    error_code: str = "error"
-
-    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
-        self.error_message = message
-        self.details = details or {}
-        super().__init__(message)
-
-
-class EventNotFoundError(APIError):
-    status_code = 404
-    error_code = "event_not_found"
-
-
-class ApprovalRequiredError(APIError):
-    status_code = 409
-    error_code = "approval_required"
-
-
-class WritebackPendingError(APIError):
-    status_code = 409
-    error_code = "writeback_pending"
-
-
-class WritebackFailedError(APIError):
-    status_code = 409
-    error_code = "writeback_failed"
-
-
-class WritebackConflictError(APIError):
-    status_code = 409
-    error_code = "writeback_conflict"
-
-
-class WritebackUnsupportedError(APIError):
-    status_code = 422
-    error_code = "writeback_unsupported"
-
-
-class DispositionPermissionDenied(APIError):
-    status_code = 403
-    error_code = "disposition_permission_denied"
-
-
-class ResourceNotFoundError(APIError):
-    """Generic 404 for non-event resources (jobs, dispositions, etc.)."""
-
-    status_code = 404
-    error_code = "not_found"
-
-
 def _error_body(error_code: str, error_message: str, details: dict[str, Any]) -> dict[str, Any]:
     return {"error_code": error_code, "error_message": error_message, "details": details}
 
@@ -97,30 +55,9 @@ def _error_body(error_code: str, error_message: str, details: dict[str, Any]) ->
 def register_exception_handlers(app: FastAPI) -> None:
     """Register the unified error handlers on the FastAPI app."""
 
-    @app.exception_handler(APIError)
-    async def _handle_api_error(_: Request, exc: APIError) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=_error_body(exc.error_code, exc.error_message, exc.details),
-        )
-
-    @app.exception_handler(InvalidStateTransitionError)
-    async def _handle_invalid_transition(
-        _: Request, exc: InvalidStateTransitionError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=_error_body(exc.error_code, exc.error_message, exc.details),
-        )
-
-    @app.exception_handler(InvalidVerdictStatusCombinationError)
-    async def _handle_invalid_verdict(
-        _: Request, exc: InvalidVerdictStatusCombinationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=_error_body(exc.error_code, exc.error_message, exc.details),
-        )
+    @app.exception_handler(ShadowTraceError)
+    async def _handle_shadowtrace(_: Request, exc: ShadowTraceError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content=exc.to_response())
 
     @app.exception_handler(AuthenticationError)
     async def _handle_authn(_: Request, exc: AuthenticationError) -> JSONResponse:
@@ -140,8 +77,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _handle_validation(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content=_error_body("validation_error", "request validation failed",
-                                {"errors": exc.errors()}),
+            content=_error_body(
+                "validation_error",
+                "request validation failed",
+                {"errors": exc.errors()},
+            ),
         )
 
     @app.exception_handler(Exception)

@@ -18,6 +18,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.errors import (
+    InvalidStateTransitionError,
+    InvalidVerdictStatusCombinationError,
+)
 from app.models.enums import (
     TERMINAL_SOURCE_DISPOSITIONS,
     ActionCategory,
@@ -38,58 +42,8 @@ from app.models.enums import (
     WritebackStatus,
 )
 
-# --------------------------------------------------------------------------- #
-# Exceptions
-# --------------------------------------------------------------------------- #
-
-
-class InvalidStateTransitionError(Exception):
-    """Illegal EventStatus / sub-state / job / outbox / writeback edge."""
-
-    status_code = 400
-    error_code = "invalid_state_transition"
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        current: Any | None = None,
-        target: Any | None = None,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        self.error_message = message
-        self.current = current
-        self.target = target
-        self.details = {
-            **(details or {}),
-            **(
-                {"current": getattr(current, "value", current)}
-                if current is not None
-                else {}
-            ),
-            **(
-                {"target": getattr(target, "value", target)} if target is not None else {}
-            ),
-        }
-        super().__init__(message)
-
-
-class InvalidVerdictStatusCombinationError(Exception):
-    """``FinalVerdict`` incompatible with the current EventStatus / plan shape."""
-
-    status_code = 400
-    error_code = "invalid_verdict_status_combination"
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        self.error_message = message
-        self.details = details or {}
-        super().__init__(message)
-
+# InvalidStateTransitionError / InvalidVerdictStatusCombinationError are defined
+# in ``app.core.errors`` (ISSUE-008) and re-exported here for ISSUE-007 imports.
 
 # --------------------------------------------------------------------------- #
 # Workflow constants (intro §4.8 / §4.10 / §4.12)
