@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_tool_calls": {
+      "default": 30,
+      "title": "Max Tool Calls",
+      "type": "integer"
+    },
+    "max_llm_calls": {
+      "default": 20,
+      "title": "Max Llm Calls",
+      "type": "integer"
+    },
+    "max_duration_s": {
+      "default": 300,
+      "title": "Max Duration S",
+      "type": "integer"
+    }
+  },
+  "title": "PlanBudget",
+  "type": "object"
+}

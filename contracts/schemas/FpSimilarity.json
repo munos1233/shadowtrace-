@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_score": {
+      "default": 0.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Max Score",
+      "type": "number"
+    },
+    "matched_case_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Matched Case Id"
+    },
+    "matched_pattern": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Matched Pattern"
+    }
+  },
+  "title": "FpSimilarity",
+  "type": "object"
+}

@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "citation_id": {
+      "title": "Citation Id",
+      "type": "string"
+    },
+    "chunk_id": {
+      "title": "Chunk Id",
+      "type": "string"
+    },
+    "kb_name": {
+      "title": "Kb Name",
+      "type": "string"
+    },
+    "quoted_text": {
+      "title": "Quoted Text",
+      "type": "string"
+    },
+    "relevance_score": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Relevance Score",
+      "type": "number"
+    }
+  },
+  "required": [
+    "citation_id",
+    "chunk_id",
+    "kb_name",
+    "quoted_text",
+    "relevance_score"
+  ],
+  "title": "Citation",
+  "type": "object"
+}

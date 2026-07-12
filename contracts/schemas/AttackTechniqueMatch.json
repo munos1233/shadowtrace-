@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "technique_id": {
+      "title": "Technique Id",
+      "type": "string"
+    },
+    "technique_name": {
+      "title": "Technique Name",
+      "type": "string"
+    },
+    "tactics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tactics",
+      "type": "array"
+    },
+    "match_confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Match Confidence",
+      "type": "number"
+    },
+    "citation_id": {
+      "title": "Citation Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "technique_id",
+    "technique_name",
+    "match_confidence",
+    "citation_id"
+  ],
+  "title": "AttackTechniqueMatch",
+  "type": "object"
+}

@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "GraphRelationType": {
+      "enum": [
+        "logged_in_from",
+        "logged_in_to",
+        "executed",
+        "accessed",
+        "connected_to",
+        "resolved",
+        "requested",
+        "uploaded_to"
+      ],
+      "title": "GraphRelationType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "edge_id": {
+      "title": "Edge Id",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "source_node_id": {
+      "title": "Source Node Id",
+      "type": "string"
+    },
+    "target_node_id": {
+      "title": "Target Node Id",
+      "type": "string"
+    },
+    "relation_type": {
+      "$ref": "#/$defs/GraphRelationType"
+    },
+    "evidence_id": {
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Occurred At"
+    }
+  },
+  "required": [
+    "edge_id",
+    "event_id",
+    "source_node_id",
+    "target_node_id",
+    "relation_type",
+    "evidence_id"
+  ],
+  "title": "GraphEdge",
+  "type": "object"
+}

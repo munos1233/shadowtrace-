@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "factor_name": {
+      "title": "Factor Name",
+      "type": "string"
+    },
+    "weight": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Weight",
+      "type": "number"
+    },
+    "raw_score": {
+      "title": "Raw Score",
+      "type": "number"
+    },
+    "weighted_score": {
+      "title": "Weighted Score",
+      "type": "number"
+    },
+    "reasoning": {
+      "default": "",
+      "title": "Reasoning",
+      "type": "string"
+    }
+  },
+  "required": [
+    "factor_name",
+    "weight",
+    "raw_score",
+    "weighted_score"
+  ],
+  "title": "RiskFactor",
+  "type": "object"
+}

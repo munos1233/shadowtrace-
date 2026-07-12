@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "EventType": {
+      "description": "Supported security event types (intro §1); extensible via scenario packs.",
+      "enum": [
+        "account_anomaly",
+        "host_compromise",
+        "data_exfiltration",
+        "insider_threat",
+        "malicious_process",
+        "suspicious_domain",
+        "lateral_movement",
+        "other"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "FinalVerdict": {
+      "description": "Verdict label, independent from EventStatus.",
+      "enum": [
+        "none",
+        "possible_false_positive",
+        "false_positive",
+        "confirmed_threat"
+      ],
+      "title": "FinalVerdict",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Compact HistoryCase digest for RAG similar_cases (full model lands later).",
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "event_type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EventType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "summary": {
+      "default": "",
+      "title": "Summary",
+      "type": "string"
+    },
+    "final_verdict": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FinalVerdict"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "risk_score": {
+      "anyOf": [
+        {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Risk Score"
+    },
+    "score": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Score"
+    }
+  },
+  "required": [
+    "case_id"
+  ],
+  "title": "SimilarCaseSummary",
+  "type": "object"
+}

@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "EffectStatus": {
+      "enum": [
+        "verified",
+        "failed",
+        "skipped",
+        "unverifiable"
+      ],
+      "title": "EffectStatus",
+      "type": "string"
+    },
+    "WritebackReadiness": {
+      "description": "Pre-submission condition; not an external receipt.",
+      "enum": [
+        "not_required",
+        "ready",
+        "source_unresolved",
+        "not_configured",
+        "capability_unknown",
+        "capability_unsupported",
+        "permission_denied",
+        "connector_unavailable"
+      ],
+      "title": "WritebackReadiness",
+      "type": "string"
+    },
+    "WritebackStatus": {
+      "description": "Only valid once a writeback command exists; null otherwise.",
+      "enum": [
+        "pending",
+        "sending",
+        "accepted",
+        "confirmed",
+        "partial",
+        "failed",
+        "conflict",
+        "unknown"
+      ],
+      "title": "WritebackStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "effect_status": {
+      "$ref": "#/$defs/EffectStatus"
+    },
+    "writeback_required": {
+      "title": "Writeback Required",
+      "type": "boolean"
+    },
+    "writeback_readiness": {
+      "$ref": "#/$defs/WritebackReadiness"
+    },
+    "writeback_status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WritebackStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "writeback_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Writeback Ids",
+      "type": "array"
+    },
+    "verification_action_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Verification Action Id"
+    },
+    "detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Detail"
+    }
+  },
+  "required": [
+    "action_id",
+    "effect_status",
+    "writeback_required",
+    "writeback_readiness"
+  ],
+  "title": "VerificationActionResult",
+  "type": "object"
+}
