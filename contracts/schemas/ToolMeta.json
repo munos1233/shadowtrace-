@@ -1,0 +1,222 @@
+{
+  "$defs": {
+    "ActionCategory": {
+      "enum": [
+        "system",
+        "response",
+        "verification",
+        "rollback"
+      ],
+      "title": "ActionCategory",
+      "type": "string"
+    },
+    "ActionExecutionPhase": {
+      "enum": [
+        "immediate",
+        "post_verify"
+      ],
+      "title": "ActionExecutionPhase",
+      "type": "string"
+    },
+    "ActionLevel": {
+      "enum": [
+        "l0",
+        "l1",
+        "l2",
+        "l3",
+        "l4",
+        "l5"
+      ],
+      "title": "ActionLevel",
+      "type": "string"
+    },
+    "DispositionIntentKind": {
+      "description": "Internal envelope classification; not a vendor enum.",
+      "enum": [
+        "entity_action_submit",
+        "execution_result_record",
+        "compensation_record",
+        "event_status_update"
+      ],
+      "title": "DispositionIntentKind",
+      "type": "string"
+    },
+    "ExecutionOwner": {
+      "enum": [
+        "xdr_managed",
+        "direct_tool"
+      ],
+      "title": "ExecutionOwner",
+      "type": "string"
+    },
+    "RoutingKind": {
+      "description": "How an Action for this tool is routed at execution time.",
+      "enum": [
+        "tool_provider_only",
+        "owner_routed",
+        "disposition_only"
+      ],
+      "title": "RoutingKind",
+      "type": "string"
+    },
+    "SideEffectLevel": {
+      "enum": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "SideEffectLevel",
+      "type": "string"
+    },
+    "ToolCategory": {
+      "enum": [
+        "query",
+        "response",
+        "verification",
+        "rollback"
+      ],
+      "title": "ToolCategory",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Canonical tool metadata. Provider-agnostic; no vendor operation_code.",
+  "properties": {
+    "tool_name": {
+      "title": "Tool Name",
+      "type": "string"
+    },
+    "tool_category": {
+      "$ref": "#/$defs/ToolCategory"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "action_category": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionCategory"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "routing_kind": {
+      "$ref": "#/$defs/RoutingKind"
+    },
+    "supported_execution_owners": {
+      "items": {
+        "$ref": "#/$defs/ExecutionOwner"
+      },
+      "title": "Supported Execution Owners",
+      "type": "array"
+    },
+    "required_disposition_intent_by_owner": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DispositionIntentKind"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/ExecutionOwner"
+      },
+      "title": "Required Disposition Intent By Owner",
+      "type": "object"
+    },
+    "required_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Capabilities",
+      "type": "array"
+    },
+    "side_effect_level": {
+      "$ref": "#/$defs/SideEffectLevel",
+      "default": "none"
+    },
+    "action_level": {
+      "$ref": "#/$defs/ActionLevel",
+      "default": "l0"
+    },
+    "idempotency": {
+      "default": true,
+      "title": "Idempotency",
+      "type": "boolean"
+    },
+    "async_mode": {
+      "default": false,
+      "title": "Async Mode",
+      "type": "boolean"
+    },
+    "rollback_supported": {
+      "default": false,
+      "title": "Rollback Supported",
+      "type": "boolean"
+    },
+    "rollback_tool_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rollback Tool Name"
+    },
+    "default_timeout_s": {
+      "default": 30.0,
+      "title": "Default Timeout S",
+      "type": "number"
+    },
+    "execution_phase": {
+      "$ref": "#/$defs/ActionExecutionPhase",
+      "default": "immediate"
+    },
+    "activation_condition": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Activation Condition"
+    },
+    "executable": {
+      "default": true,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "target_types": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Target Types",
+      "type": "array"
+    },
+    "input_schema": {
+      "additionalProperties": true,
+      "title": "Input Schema",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "title": "Output Schema",
+      "type": "object"
+    }
+  },
+  "required": [
+    "tool_name",
+    "tool_category",
+    "routing_kind"
+  ],
+  "title": "ToolMeta",
+  "type": "object"
+}

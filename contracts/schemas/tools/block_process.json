@@ -1,0 +1,521 @@
+{
+  "tool_name": "block_process",
+  "tool_category": "response",
+  "action_category": "response",
+  "routing_kind": "owner_routed",
+  "async_mode": true,
+  "executable": true,
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "target_type": {
+        "default": "process",
+        "title": "Target Type",
+        "type": "string"
+      },
+      "target": {
+        "title": "Target",
+        "type": "string"
+      },
+      "parameters": {
+        "additionalProperties": true,
+        "title": "Parameters",
+        "type": "object"
+      }
+    },
+    "required": [
+      "target"
+    ],
+    "title": "BlockProcessInput",
+    "type": "object"
+  },
+  "tool_result_schema": {
+    "$defs": {
+      "TargetExecutionResult": {
+        "additionalProperties": false,
+        "description": "Per-target execution result kept on a job (internal; may retain raw_result).",
+        "properties": {
+          "canonical_target": {
+            "title": "Canonical Target",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/TargetExecutionStatus"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "raw_result": {
+            "additionalProperties": true,
+            "title": "Raw Result",
+            "type": "object"
+          }
+        },
+        "required": [
+          "canonical_target",
+          "status"
+        ],
+        "title": "TargetExecutionResult",
+        "type": "object"
+      },
+      "TargetExecutionStatus": {
+        "enum": [
+          "success",
+          "failed",
+          "unknown",
+          "skipped"
+        ],
+        "title": "TargetExecutionStatus",
+        "type": "string"
+      },
+      "ToolResultStatus": {
+        "enum": [
+          "accepted",
+          "success",
+          "partial_success",
+          "failed",
+          "unknown",
+          "validation_error",
+          "auth_error",
+          "rate_limited",
+          "timeout",
+          "remote_error",
+          "circuit_open",
+          "unsupported"
+        ],
+        "title": "ToolResultStatus",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Normalized tool call result. Provider codes stay local (never outbound).",
+    "properties": {
+      "call_id": {
+        "title": "Call Id",
+        "type": "string"
+      },
+      "tool_name": {
+        "title": "Tool Name",
+        "type": "string"
+      },
+      "provider_name": {
+        "title": "Provider Name",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/ToolResultStatus"
+      },
+      "job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Job Id"
+      },
+      "provider_job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Job Id"
+      },
+      "data": {
+        "additionalProperties": true,
+        "title": "Data",
+        "type": "object"
+      },
+      "target_results": {
+        "items": {
+          "$ref": "#/$defs/TargetExecutionResult"
+        },
+        "title": "Target Results",
+        "type": "array"
+      },
+      "provider_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Code"
+      },
+      "provider_message": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Message"
+      },
+      "raw_result": {
+        "additionalProperties": true,
+        "title": "Raw Result",
+        "type": "object"
+      },
+      "error_detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Error Detail"
+      },
+      "execution_time_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Execution Time Ms"
+      },
+      "confidence": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Confidence"
+      }
+    },
+    "required": [
+      "call_id",
+      "tool_name",
+      "provider_name",
+      "status"
+    ],
+    "title": "ToolResult",
+    "type": "object"
+  },
+  "async_job_schema": {
+    "$defs": {
+      "ExecutionJobStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "partial_success",
+          "success",
+          "failed",
+          "timed_out",
+          "cancelled",
+          "unknown"
+        ],
+        "title": "ExecutionJobStatus",
+        "type": "string"
+      },
+      "TargetExecutionResult": {
+        "additionalProperties": false,
+        "description": "Per-target execution result kept on a job (internal; may retain raw_result).",
+        "properties": {
+          "canonical_target": {
+            "title": "Canonical Target",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/TargetExecutionStatus"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "raw_result": {
+            "additionalProperties": true,
+            "title": "Raw Result",
+            "type": "object"
+          }
+        },
+        "required": [
+          "canonical_target",
+          "status"
+        ],
+        "title": "TargetExecutionResult",
+        "type": "object"
+      },
+      "TargetExecutionStatus": {
+        "enum": [
+          "success",
+          "failed",
+          "unknown",
+          "skipped"
+        ],
+        "title": "TargetExecutionStatus",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "job_id": {
+        "title": "Job Id",
+        "type": "string"
+      },
+      "event_id": {
+        "title": "Event Id",
+        "type": "string"
+      },
+      "action_id": {
+        "title": "Action Id",
+        "type": "string"
+      },
+      "provider_name": {
+        "title": "Provider Name",
+        "type": "string"
+      },
+      "idempotency_key": {
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "provider_job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Job Id"
+      },
+      "status": {
+        "$ref": "#/$defs/ExecutionJobStatus",
+        "default": "queued"
+      },
+      "claimed_by": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Claimed By"
+      },
+      "lease_expires_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Lease Expires At"
+      },
+      "created_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Created At"
+      },
+      "updated_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Updated At"
+      },
+      "started_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Started At"
+      },
+      "finished_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Finished At"
+      },
+      "poll_after_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Poll After Ms"
+      },
+      "attempt": {
+        "default": 0,
+        "title": "Attempt",
+        "type": "integer"
+      },
+      "target_results": {
+        "items": {
+          "$ref": "#/$defs/TargetExecutionResult"
+        },
+        "title": "Target Results",
+        "type": "array"
+      },
+      "provider_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Code"
+      },
+      "provider_message": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Message"
+      },
+      "raw_result": {
+        "additionalProperties": true,
+        "title": "Raw Result",
+        "type": "object"
+      }
+    },
+    "required": [
+      "job_id",
+      "event_id",
+      "action_id",
+      "provider_name",
+      "idempotency_key"
+    ],
+    "title": "ActionExecutionJob",
+    "type": "object"
+  },
+  "async_job_schema_ref": "ActionExecutionJob"
+}

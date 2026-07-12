@@ -1,0 +1,182 @@
+{
+  "$defs": {
+    "CapabilityBindingEntry": {
+      "additionalProperties": false,
+      "description": "Per intent+operation(+source) capability probe result.",
+      "properties": {
+        "intent_kind": {
+          "$ref": "#/$defs/DispositionIntentKind"
+        },
+        "operation_code": {
+          "title": "Operation Code",
+          "type": "string"
+        },
+        "source_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceObjectKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "native_source_object_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Source Object Type"
+        },
+        "state": {
+          "$ref": "#/$defs/CapabilityState",
+          "default": "unknown"
+        }
+      },
+      "required": [
+        "intent_kind",
+        "operation_code"
+      ],
+      "title": "CapabilityBindingEntry",
+      "type": "object"
+    },
+    "CapabilityState": {
+      "enum": [
+        "unknown",
+        "supported",
+        "unsupported"
+      ],
+      "title": "CapabilityState",
+      "type": "string"
+    },
+    "DispositionIntentKind": {
+      "description": "Internal envelope classification; not a vendor enum.",
+      "enum": [
+        "entity_action_submit",
+        "execution_result_record",
+        "compensation_record",
+        "event_status_update"
+      ],
+      "title": "DispositionIntentKind",
+      "type": "string"
+    },
+    "SourceObjectKind": {
+      "description": "Canonical source object kind used for the internal discriminated union.",
+      "enum": [
+        "incident",
+        "alert",
+        "asset",
+        "log",
+        "connector"
+      ],
+      "title": "SourceObjectKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Provider/Adapter capability surface (internal ShadowTrace terms only).\n\nOnline / readable / writable / executable are expressed separately so a\nreadable-but-not-writable Adapter cannot be mistaken for a full loop.\nLive defaults every probe to UNKNOWN until verified.",
+  "properties": {
+    "provider_name": {
+      "title": "Provider Name",
+      "type": "string"
+    },
+    "online": {
+      "default": false,
+      "title": "Online",
+      "type": "boolean"
+    },
+    "source_read": {
+      "$ref": "#/$defs/CapabilityState",
+      "default": "unknown"
+    },
+    "event_disposition": {
+      "$ref": "#/$defs/CapabilityState",
+      "default": "unknown"
+    },
+    "entity_response": {
+      "$ref": "#/$defs/CapabilityState",
+      "default": "unknown"
+    },
+    "allowed_intents": {
+      "items": {
+        "$ref": "#/$defs/DispositionIntentKind"
+      },
+      "title": "Allowed Intents",
+      "type": "array"
+    },
+    "allowed_operations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Operations",
+      "type": "array"
+    },
+    "allowed_target_types": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Target Types",
+      "type": "array"
+    },
+    "allowed_source_kinds": {
+      "items": {
+        "$ref": "#/$defs/SourceObjectKind"
+      },
+      "title": "Allowed Source Kinds",
+      "type": "array"
+    },
+    "allowed_native_source_object_types": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Allowed Native Source Object Types"
+    },
+    "supports_status_query": {
+      "default": false,
+      "title": "Supports Status Query",
+      "type": "boolean"
+    },
+    "supports_lookup_by_idempotency": {
+      "default": false,
+      "title": "Supports Lookup By Idempotency",
+      "type": "boolean"
+    },
+    "supports_idempotency": {
+      "default": false,
+      "title": "Supports Idempotency",
+      "type": "boolean"
+    },
+    "supports_concurrency_control": {
+      "default": false,
+      "title": "Supports Concurrency Control",
+      "type": "boolean"
+    },
+    "bindings": {
+      "items": {
+        "$ref": "#/$defs/CapabilityBindingEntry"
+      },
+      "title": "Bindings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "provider_name"
+  ],
+  "title": "CapabilityManifest",
+  "type": "object"
+}

@@ -79,6 +79,13 @@ from app.models.source import (
     SourceObjectState,
     SourceReference,
 )
+from app.models.tool_meta import (
+    CapabilityBindingEntry,
+    CapabilityManifest,
+    ProviderToolBinding,
+    ToolMeta,
+    ToolResult,
+)
 
 MODEL_REGISTRY: dict[str, type[BaseModel]] = {
     # entities
@@ -154,6 +161,12 @@ MODEL_REGISTRY: dict[str, type[BaseModel]] = {
     "PlanStep": PlanStep,
     "ExecutionPlan": ExecutionPlan,
     "InvestigationResult": InvestigationResult,
+    # tool contracts (ISSUE-006)
+    "ToolMeta": ToolMeta,
+    "ToolResult": ToolResult,
+    "ProviderToolBinding": ProviderToolBinding,
+    "CapabilityBindingEntry": CapabilityBindingEntry,
+    "CapabilityManifest": CapabilityManifest,
 }
 
 __all__ = ["MODEL_REGISTRY", *sorted(MODEL_REGISTRY.keys())]

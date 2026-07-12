@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "CapabilityState": {
+      "enum": [
+        "unknown",
+        "supported",
+        "unsupported"
+      ],
+      "title": "CapabilityState",
+      "type": "string"
+    },
+    "DispositionIntentKind": {
+      "description": "Internal envelope classification; not a vendor enum.",
+      "enum": [
+        "entity_action_submit",
+        "execution_result_record",
+        "compensation_record",
+        "event_status_update"
+      ],
+      "title": "DispositionIntentKind",
+      "type": "string"
+    },
+    "SourceObjectKind": {
+      "description": "Canonical source object kind used for the internal discriminated union.",
+      "enum": [
+        "incident",
+        "alert",
+        "asset",
+        "log",
+        "connector"
+      ],
+      "title": "SourceObjectKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Per intent+operation(+source) capability probe result.",
+  "properties": {
+    "intent_kind": {
+      "$ref": "#/$defs/DispositionIntentKind"
+    },
+    "operation_code": {
+      "title": "Operation Code",
+      "type": "string"
+    },
+    "source_kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceObjectKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "native_source_object_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Source Object Type"
+    },
+    "state": {
+      "$ref": "#/$defs/CapabilityState",
+      "default": "unknown"
+    }
+  },
+  "required": [
+    "intent_kind",
+    "operation_code"
+  ],
+  "title": "CapabilityBindingEntry",
+  "type": "object"
+}

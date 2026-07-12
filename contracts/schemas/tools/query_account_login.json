@@ -1,0 +1,271 @@
+{
+  "tool_name": "query_account_login",
+  "tool_category": "query",
+  "action_category": null,
+  "routing_kind": "tool_provider_only",
+  "async_mode": false,
+  "executable": true,
+  "input_schema": {
+    "$defs": {
+      "TimeRange": {
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeRange",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "account": {
+        "title": "Account",
+        "type": "string"
+      },
+      "time_range": {
+        "$ref": "#/$defs/TimeRange"
+      }
+    },
+    "required": [
+      "account",
+      "time_range"
+    ],
+    "title": "QueryAccountLoginInput",
+    "type": "object"
+  },
+  "tool_result_schema": {
+    "$defs": {
+      "TargetExecutionResult": {
+        "additionalProperties": false,
+        "description": "Per-target execution result kept on a job (internal; may retain raw_result).",
+        "properties": {
+          "canonical_target": {
+            "title": "Canonical Target",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/TargetExecutionStatus"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "raw_result": {
+            "additionalProperties": true,
+            "title": "Raw Result",
+            "type": "object"
+          }
+        },
+        "required": [
+          "canonical_target",
+          "status"
+        ],
+        "title": "TargetExecutionResult",
+        "type": "object"
+      },
+      "TargetExecutionStatus": {
+        "enum": [
+          "success",
+          "failed",
+          "unknown",
+          "skipped"
+        ],
+        "title": "TargetExecutionStatus",
+        "type": "string"
+      },
+      "ToolResultStatus": {
+        "enum": [
+          "accepted",
+          "success",
+          "partial_success",
+          "failed",
+          "unknown",
+          "validation_error",
+          "auth_error",
+          "rate_limited",
+          "timeout",
+          "remote_error",
+          "circuit_open",
+          "unsupported"
+        ],
+        "title": "ToolResultStatus",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Normalized tool call result. Provider codes stay local (never outbound).",
+    "properties": {
+      "call_id": {
+        "title": "Call Id",
+        "type": "string"
+      },
+      "tool_name": {
+        "title": "Tool Name",
+        "type": "string"
+      },
+      "provider_name": {
+        "title": "Provider Name",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/ToolResultStatus"
+      },
+      "job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Job Id"
+      },
+      "provider_job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Job Id"
+      },
+      "data": {
+        "additionalProperties": true,
+        "title": "Data",
+        "type": "object"
+      },
+      "target_results": {
+        "items": {
+          "$ref": "#/$defs/TargetExecutionResult"
+        },
+        "title": "Target Results",
+        "type": "array"
+      },
+      "provider_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Code"
+      },
+      "provider_message": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Message"
+      },
+      "raw_result": {
+        "additionalProperties": true,
+        "title": "Raw Result",
+        "type": "object"
+      },
+      "error_detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Error Detail"
+      },
+      "execution_time_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Execution Time Ms"
+      },
+      "confidence": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Confidence"
+      }
+    },
+    "required": [
+      "call_id",
+      "tool_name",
+      "provider_name",
+      "status"
+    ],
+    "title": "ToolResult",
+    "type": "object"
+  }
+}
