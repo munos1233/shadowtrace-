@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "ExecutionChannel": {
+      "description": "Concrete channel declared on a ProviderToolBinding.",
+      "enum": [
+        "tool_provider",
+        "disposition_adapter"
+      ],
+      "title": "ExecutionChannel",
+      "type": "string"
+    },
+    "ExecutionOwner": {
+      "enum": [
+        "xdr_managed",
+        "direct_tool"
+      ],
+      "title": "ExecutionOwner",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Concrete Provider channel binding for one (tool, owner) pair.",
+  "properties": {
+    "tool_name": {
+      "title": "Tool Name",
+      "type": "string"
+    },
+    "provider_name": {
+      "title": "Provider Name",
+      "type": "string"
+    },
+    "execution_owner": {
+      "$ref": "#/$defs/ExecutionOwner"
+    },
+    "execution_channel": {
+      "$ref": "#/$defs/ExecutionChannel"
+    },
+    "capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    }
+  },
+  "required": [
+    "tool_name",
+    "provider_name",
+    "execution_owner",
+    "execution_channel"
+  ],
+  "title": "ProviderToolBinding",
+  "type": "object"
+}
