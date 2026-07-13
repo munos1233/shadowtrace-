@@ -77,7 +77,12 @@ class FileSourceAdapter(BaseSourceAdapter):
         updated_after: datetime | None = None,
         limit: int = 100,
     ) -> SourcePage:
-        _ = cursor  # File adapter is a single snapshot; cursors are unused.
+        """Return a page from the offline snapshot.
+
+        File adapters are snapshot sources, but still speak the shared cursor
+        contract so ``SourceIngester`` can page without ``invalid_pagination``.
+        Cursor is a decimal offset into the filtered object list.
+        """
         items: list[SourceIncident | SourceAlert | SourceAsset | SourceLog] = []
         for raw_kind in object_types:
             kind = raw_kind.value if isinstance(raw_kind, SourceObjectKind) else str(raw_kind)
@@ -87,13 +92,24 @@ class FileSourceAdapter(BaseSourceAdapter):
                     if obj.reference.source_updated_at <= updated_after:
                         continue
                 items.append(obj)
+
+        offset = 0
+        if cursor is not None and str(cursor).strip():
+            try:
+                offset = max(0, int(str(cursor).strip()))
+            except ValueError:
+                offset = 0
+        if limit < 1:
+            limit = 1
         page_items: list[
             SourceIncident | SourceAlert | SourceAsset | SourceLog | SourceConnector
-        ] = list(items[:limit])
+        ] = list(items[offset : offset + limit])
+        next_offset = offset + len(page_items)
+        has_more = next_offset < len(items)
         return SourcePage(
             items=page_items,
-            next_cursor=None,
-            has_more=len(items) > limit,
+            next_cursor=str(next_offset) if has_more else None,
+            has_more=has_more,
             server_time=datetime.now(UTC),
             schema_version="1",
         )
