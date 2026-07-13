@@ -147,9 +147,8 @@ class SourceConnector(Base):
     read_endpoint: Mapped[str | None] = mapped_column(String, nullable=True)
     disposition_endpoint: Mapped[str | None] = mapped_column(String, nullable=True)
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    disposition_policy_default: Mapped[str] = mapped_column(
-        String, default="not_required", nullable=False
-    )
+    # NULL = not explicitly provisioned (live must fail closed; mock/file set a value).
+    disposition_policy_default: Mapped[str | None] = mapped_column(String, nullable=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
     watermark: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     schema_version: Mapped[str] = mapped_column(String, default="1", nullable=False)

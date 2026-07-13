@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -149,6 +150,7 @@ async def test_init_context_writes_version_journal_and_redis(
     assert isinstance(result, InitResult)
     assert result.redis_ok is True
     assert result.version == 1
+    assert result.initialized is True
 
     async with session_factory() as session:
         ver = await session.get(orm.EventContextFieldVersion, (event_id, "event"))
@@ -174,6 +176,37 @@ async def test_init_context_writes_version_journal_and_redis(
     assert got["event_id"] == event_id
     full = await store.get_full_context(event_id)
     assert full.replan_count == 0
+
+
+@pytest.mark.asyncio
+async def test_init_context_is_atomic_and_idempotent(
+    store: EventContextStore,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    event_id = await _seed_event(session_factory)
+    summary = _summary(event_id)
+    first, second = await asyncio.gather(
+        store.init_context(event_id, summary),
+        store.init_context(event_id, summary),
+    )
+    assert {first.initialized, second.initialized} == {True, False}
+    assert first.version == second.version == 1
+
+    async with session_factory() as session:
+        journals = (
+            await session.scalars(
+                select(orm.EventContextJournal).where(
+                    orm.EventContextJournal.event_id == event_id,
+                    orm.EventContextJournal.field_name == "event",
+                )
+            )
+        ).all()
+        version = await session.get(
+            orm.EventContextFieldVersion,
+            (event_id, "event"),
+        )
+    assert len(journals) == 1
+    assert version is not None and version.current_version == 1
 
 
 @pytest.mark.asyncio

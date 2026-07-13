@@ -47,6 +47,7 @@ CONTEXT_FIELD_NAMES: frozenset[str] = frozenset(EventContext.model_fields.keys()
 class InitResult:
     redis_ok: bool
     version: int
+    initialized: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,14 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
     """Build the EventContext ``event`` field (EventSummary) from the ORM row."""
     policy = DispositionPolicy(row.disposition_policy)
     writeback_required = policy is DispositionPolicy.REQUIRED
+    if not writeback_required:
+        writeback_readiness = WritebackReadiness.NOT_REQUIRED
+    elif not row.disposition_source_ref:
+        writeback_readiness = WritebackReadiness.SOURCE_UNRESOLVED
+    else:
+        # Capability is not authoritative on security_event. Fail closed until
+        # PolicyFilter evaluates the connector/adapter and writes Action readiness.
+        writeback_readiness = WritebackReadiness.CAPABILITY_UNKNOWN
     return EventSummary(
         event_id=row.event_id,
         event_type=EventType(row.event_type),
@@ -97,9 +106,7 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
         risk_score=row.risk_score,
         final_verdict=FinalVerdict(row.final_verdict),
         writeback_required=writeback_required,
-        writeback_readiness=(
-            WritebackReadiness.READY if writeback_required else WritebackReadiness.NOT_REQUIRED
-        ),
+        writeback_readiness=writeback_readiness,
         writeback_overall_status=None,
         pending_writeback_count=0,
         created_at=row.created_at,
@@ -162,23 +169,57 @@ class EventContextStore:
     # ------------------------------------------------------------------ #
 
     async def init_context(self, event_id: str, event: EventSummary) -> InitResult:
+        """Atomically initialize the ``event`` field once, healing Redis on repeats."""
         event_value = _journal_value(event)
         async with self._session_factory() as session:
             async with session.begin():
-                version = await self._upsert_version(session, event_id, "event")
-                await self._insert_journal(session, event_id, "event", event_value, version)
+                inserted = await session.execute(
+                    text(
+                        "INSERT INTO event_context_field_version "
+                        "(event_id, field_name, current_version) "
+                        "VALUES (:event_id, 'event', 1) "
+                        "ON CONFLICT (event_id, field_name) DO NOTHING "
+                        "RETURNING current_version"
+                    ),
+                    {"event_id": event_id},
+                )
+                row = inserted.first()
+                initialized = row is not None
+                if row is not None:
+                    version = int(row[0])
+                    await self._insert_journal(session, event_id, "event", event_value, version)
+                else:
+                    existing = await session.scalar(
+                        select(orm.EventContextFieldVersion.current_version).where(
+                            orm.EventContextFieldVersion.event_id == event_id,
+                            orm.EventContextFieldVersion.field_name == "event",
+                        )
+                    )
+                    if existing is None:
+                        raise RuntimeError(
+                            "event context version disappeared during initialization"
+                        )
+                    version = int(existing)
 
         redis_ok = await self._redis_set_fields(
             event_id,
             {"event": event_value, version_field("event"): version},
-            log_entry={
-                "op": "init_context",
-                "field_name": "event",
-                "version": version,
-                "timestamp": datetime.now(UTC).isoformat(),
-            },
+            log_entry=(
+                {
+                    "op": "init_context",
+                    "field_name": "event",
+                    "version": version,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                if initialized
+                else None
+            ),
         )
-        return InitResult(redis_ok=redis_ok, version=version)
+        return InitResult(
+            redis_ok=redis_ok,
+            version=version,
+            initialized=initialized,
+        )
 
     async def get(self, event_id: str, key: str) -> Any:
         if key not in CONTEXT_FIELD_NAMES:
@@ -338,6 +379,25 @@ class EventContextStore:
             self._degraded_cache_ts[event_id] = time.monotonic()
 
         return ctx
+
+    async def delete_cached_context(self, event_id: str) -> bool:
+        """Delete Redis/in-process cache for an event merged into another event."""
+        self._clear_degraded_cache(event_id)
+        if not await self._redis.ping():
+            return False
+        try:
+            await self._redis.get_client().delete(
+                ctx_key(event_id),
+                ctx_log_key(event_id),
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "delete_cached_context failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+            return False
 
     async def set_closed_ttl(self, event_id: str) -> bool:
         """Apply 24h TTL to the context Hash (and change log). Returns redis_ok."""
