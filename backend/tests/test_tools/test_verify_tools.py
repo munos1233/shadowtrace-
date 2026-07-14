@@ -22,6 +22,7 @@ from app.providers.tools.mock_provider import (
     bind_mock_tool_provider,
 )
 from app.tools.mock_state import (
+    MOCK_OBSERVATION_IDEMPOTENCY_KEY,
     MOCK_OBSERVATION_PROJECTION_KEY,
     MOCK_VERIFY_OVERRIDE_KEY,
     MockEnvironmentState,
@@ -62,10 +63,16 @@ class _FakeRedis:
         _script: str,
         _num_keys: int,
         key: str,
+        idempotency_key: str,
         field: str,
         encoded_record: bytes,
         max_records: str,
+        idempotency_field: str,
     ) -> int:
+        markers = self.hashes.setdefault(idempotency_key, {})
+        if idempotency_field in markers:
+            return 0
+        markers[idempotency_field] = "1"
         existing = self.hashes.get(key, {}).get(field)
         decoded = RedisClient.loads(existing) if existing is not None else []
         records = [decoded] if isinstance(decoded, dict) else list(decoded)
@@ -1036,6 +1043,7 @@ async def test_redis_api_path_uses_documented_override_hash_and_projection() -> 
 
     override_field = "check_ip_block_status:203.0.113.44"
     assert redis_client.client.hashes[MOCK_VERIFY_OVERRIDE_KEY][override_field] == "false"
+    assert redis_client.client.hashes[MOCK_OBSERVATION_IDEMPOTENCY_KEY]
     assert "ip_blocks:203.0.113.44" in redis_client.client.hashes[MOCK_OBSERVATION_PROJECTION_KEY]
     assert await state.get_observation("ip_blocks", "203.0.113.44") is not None
     assert (

@@ -15,6 +15,7 @@ from app.models.source import SourceReference
 
 MOCK_TOOL_STATE_KEY = "shadowtrace:mock_tool_state"
 MOCK_OBSERVATION_PROJECTION_KEY = "shadowtrace:mock_observation_projection"
+MOCK_OBSERVATION_IDEMPOTENCY_KEY = "shadowtrace:mock_observation_idempotency"
 MOCK_VERIFY_OVERRIDE_KEY = "shadowtrace:mock_verify_override"
 _MAX_OBSERVATION_GENERATIONS = 32
 MOCK_STATE_NAMESPACES = frozenset(
@@ -164,9 +165,13 @@ return {encoded, 1, "applied"}
 """
 
 _APPEND_OBSERVATION_LUA = """
+if redis.call("HSETNX", KEYS[2], ARGV[4], "1") == 0 then
+  return 0
+end
 local existing = redis.call("HGET", KEYS[1], ARGV[1])
 local records = {}
 local generation = 1
+local incoming = cjson.decode(ARGV[2])
 if existing then
   local decoded = cjson.decode(existing)
   if decoded["surface"] then
@@ -175,10 +180,12 @@ if existing then
     records = decoded
   end
   for _, item in ipairs(records) do
+    if item["job_id"] == incoming["job_id"] then
+      return #records
+    end
     generation = math.max(generation, (tonumber(item["projection_generation"]) or 0) + 1)
   end
 end
-local incoming = cjson.decode(ARGV[2])
 incoming["projection_generation"] = generation
 table.insert(records, incoming)
 while #records > tonumber(ARGV[3]) do
@@ -186,6 +193,59 @@ while #records > tonumber(ARGV[3]) do
 end
 redis.call("HSET", KEYS[1], ARGV[1], cjson.encode(records))
 return #records
+"""
+
+_APPLY_ROLLBACK_LUA = """
+local prior_code = redis.call("HGET", KEYS[1], ARGV[1])
+if prior_code then
+  local prior_history = redis.call("HGET", KEYS[1], ARGV[3])
+  local current_state = redis.call("HGET", KEYS[1], ARGV[2])
+  return {prior_history or false, current_state or false, 0, prior_code}
+end
+
+local existing = redis.call("HGET", KEYS[1], ARGV[2])
+if not existing then
+  redis.call("HSET", KEYS[1], ARGV[1], "target_not_found")
+  return {false, false, 0, "target_not_found"}
+end
+
+local original = cjson.decode(existing)
+if ARGV[4] ~= "" and original["status"] ~= ARGV[4] then
+  redis.call("HSET", KEYS[1], ARGV[1], "target_not_found")
+  return {false, existing, 0, "target_not_found"}
+end
+if ARGV[7] == "1"
+  or (ARGV[5] ~= "" and tonumber(original["version"]) ~= tonumber(ARGV[5]))
+  or (ARGV[6] ~= "" and original["job_id"] ~= ARGV[6]) then
+  redis.call("HSET", KEYS[1], ARGV[1], "stale_rollback_target")
+  return {false, existing, 0, "stale_rollback_target"}
+end
+
+local history = cjson.decode(ARGV[9])
+history["original_record"] = original
+local encoded_history = cjson.encode(history)
+local encoded_state = false
+if ARGV[8] == "" then
+  redis.call("HDEL", KEYS[1], ARGV[2])
+else
+  original["status"] = ARGV[8]
+  original["reason"] = "mock provider rollback"
+  original["executed_at"] = history["rolled_back_at"]
+  original["effective_at"] = history["rolled_back_at"]
+  original["executed_by"] = history["rolled_back_by"]
+  original["provider"] = history["provider"]
+  original["connector"] = history["connector"]
+  original["action_id"] = history["action_id"]
+  original["job_id"] = history["job_id"]
+  original["version"] = (tonumber(original["version"]) or 0) + 1
+  encoded_state = cjson.encode(original)
+  redis.call("HSET", KEYS[1], ARGV[2], encoded_state)
+end
+
+redis.call("HSET", KEYS[1],
+  ARGV[3], encoded_history,
+  ARGV[1], "rolled_back")
+return {encoded_history, encoded_state, 1, "rolled_back"}
 """
 
 
@@ -231,6 +291,24 @@ class MockObservationRecord(BaseModel):
     value: dict[str, Any] = Field(default_factory=dict)
 
 
+class MockRollbackHistoryRecord(BaseModel):
+    """Immutable audit snapshot captured by one successful rollback effect."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rollback_tool_name: str
+    source_tool_name: str
+    namespace: str
+    target: str
+    original_record: dict[str, Any] = Field(default_factory=dict)
+    rolled_back_at: datetime
+    rolled_back_by: str
+    provider: str
+    connector: str
+    action_id: str
+    job_id: str
+
+
 class MockEnvironmentState:
     """One logical state store, persisted under a single Redis Hash.
 
@@ -249,6 +327,7 @@ class MockEnvironmentState:
         self._key = key
         self._memory: dict[str, bytes] | None = {} if _in_memory else None
         self._observation_memory: dict[str, bytes] | None = {} if _in_memory else None
+        self._observation_idempotency_memory: set[str] | None = set() if _in_memory else None
         self._verify_override_memory: dict[str, str] | None = {} if _in_memory else None
         self._lock = asyncio.Lock()
 
@@ -300,6 +379,8 @@ class MockEnvironmentState:
                 self._memory.clear()
                 assert self._observation_memory is not None
                 self._observation_memory.clear()
+                assert self._observation_idempotency_memory is not None
+                self._observation_idempotency_memory.clear()
                 assert self._verify_override_memory is not None
                 self._verify_override_memory.clear()
             return
@@ -307,6 +388,7 @@ class MockEnvironmentState:
         await self._redis.get_client().delete(
             self._key,
             MOCK_OBSERVATION_PROJECTION_KEY,
+            MOCK_OBSERVATION_IDEMPOTENCY_KEY,
             MOCK_VERIFY_OVERRIDE_KEY,
         )
 
@@ -334,9 +416,16 @@ class MockEnvironmentState:
         """Publish a copied observation; verification code only reads this surface."""
 
         field = self._field(record.surface, record.target)
+        idempotency_field = hashlib.sha256(
+            f"{record.surface}|{record.target}|{record.job_id}".encode()
+        ).hexdigest()
         encoded_record = RedisClient.dumps(record.model_dump(mode="json"))
         if self._observation_memory is not None:
             async with self._lock:
+                assert self._observation_idempotency_memory is not None
+                if idempotency_field in self._observation_idempotency_memory:
+                    return
+                self._observation_idempotency_memory.add(idempotency_field)
                 existing = self._observation_memory.get(field)
                 decoded = RedisClient.loads(existing) if existing is not None else []
                 if isinstance(decoded, dict):
@@ -345,6 +434,11 @@ class MockEnvironmentState:
                     records = list(decoded)
                 else:
                     records = []
+                if any(
+                    isinstance(item, dict) and item.get("job_id") == record.job_id
+                    for item in records
+                ):
+                    return
                 generation = (
                     max(
                         (
@@ -368,11 +462,13 @@ class MockEnvironmentState:
         assert self._redis is not None
         await self._redis.get_client().eval(
             _APPEND_OBSERVATION_LUA,
-            1,
+            2,
             MOCK_OBSERVATION_PROJECTION_KEY,
+            MOCK_OBSERVATION_IDEMPOTENCY_KEY,
             field,
             encoded_record,
             str(_MAX_OBSERVATION_GENERATIONS),
+            idempotency_field,
         )
 
     async def get_observation(
@@ -761,6 +857,137 @@ class MockEnvironmentState:
             code,
         )
 
+    async def apply_rollback(
+        self,
+        *,
+        job_id: str,
+        rollback_tool_name: str,
+        source_tool_name: str,
+        namespace: str,
+        key: str,
+        expected_status: str,
+        expected_source_version: int | None,
+        expected_source_job_id: str | None,
+        expect_absent: bool,
+        replacement_status: str | None,
+        rolled_back_at: datetime,
+        rolled_back_by: str,
+        provider: str,
+        connector: str,
+        action_id: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool, str]:
+        """Atomically preserve the original record and undo one provider effect."""
+
+        if expect_absent and (
+            expected_source_version is not None or expected_source_job_id is not None
+        ):
+            raise ValueError("absent rollback expectation cannot include source identity")
+        if not expect_absent and (
+            expected_source_version is None or expected_source_job_id is None
+        ):
+            raise ValueError("present rollback expectation requires source version and job_id")
+        state_field = self._field(namespace, key)
+        effect_digest = hashlib.sha256(f"{namespace}|{key}".encode()).hexdigest()
+        effect_field = self._field("rollback_effects", f"{job_id}:{effect_digest}")
+        history_field = self._field("rollback_history", f"{job_id}:{effect_digest}")
+        metadata = MockRollbackHistoryRecord(
+            rollback_tool_name=rollback_tool_name,
+            source_tool_name=source_tool_name,
+            namespace=namespace,
+            target=key,
+            rolled_back_at=rolled_back_at,
+            rolled_back_by=rolled_back_by,
+            provider=provider,
+            connector=connector,
+            action_id=action_id,
+            job_id=job_id,
+        ).model_dump(mode="json")
+
+        if self._memory is not None:
+            async with self._lock:
+                prior_code_raw = self._memory.get(effect_field)
+                history_raw = self._memory.get(history_field)
+                current_raw = self._memory.get(state_field)
+                if prior_code_raw is not None:
+                    history = RedisClient.loads(history_raw) if history_raw is not None else None
+                    current = RedisClient.loads(current_raw) if current_raw is not None else None
+                    return (
+                        history if isinstance(history, dict) else None,
+                        current if isinstance(current, dict) else None,
+                        False,
+                        str(RedisClient.loads(prior_code_raw)),
+                    )
+                if current_raw is None:
+                    self._memory[effect_field] = RedisClient.dumps("target_not_found")
+                    return None, None, False, "target_not_found"
+                original = RedisClient.loads(current_raw)
+                if not isinstance(original, dict) or (
+                    expected_status and original.get("status") != expected_status
+                ):
+                    self._memory[effect_field] = RedisClient.dumps("target_not_found")
+                    return (
+                        None,
+                        original if isinstance(original, dict) else None,
+                        False,
+                        "target_not_found",
+                    )
+                if (
+                    expect_absent
+                    or original.get("version") != expected_source_version
+                    or original.get("job_id") != expected_source_job_id
+                ):
+                    self._memory[effect_field] = RedisClient.dumps("stale_rollback_target")
+                    return None, original, False, "stale_rollback_target"
+
+                history = {**metadata, "original_record": dict(original)}
+                resulting_state: dict[str, Any] | None = None
+                if replacement_status is None:
+                    self._memory.pop(state_field, None)
+                else:
+                    resulting_state = {
+                        **original,
+                        "status": replacement_status,
+                        "reason": "mock provider rollback",
+                        "executed_at": rolled_back_at.isoformat(),
+                        "effective_at": rolled_back_at.isoformat(),
+                        "executed_by": rolled_back_by,
+                        "provider": provider,
+                        "connector": connector,
+                        "action_id": action_id,
+                        "job_id": job_id,
+                        "version": int(original.get("version", 0)) + 1,
+                    }
+                    self._memory[state_field] = RedisClient.dumps(resulting_state)
+                self._memory[history_field] = RedisClient.dumps(history)
+                self._memory[effect_field] = RedisClient.dumps("rolled_back")
+                return history, resulting_state, True, "rolled_back"
+
+        assert self._redis is not None
+        result = await self._redis.get_client().eval(
+            _APPLY_ROLLBACK_LUA,
+            1,
+            self._key,
+            effect_field,
+            state_field,
+            history_field,
+            expected_status,
+            str(expected_source_version) if expected_source_version is not None else "",
+            expected_source_job_id or "",
+            "1" if expect_absent else "0",
+            replacement_status or "",
+            RedisClient.dumps(metadata),
+        )
+        raw_history, raw_state, raw_applied, raw_code = result
+        history = None if raw_history in (None, False) else RedisClient.loads(raw_history)
+        resulting_state = None if raw_state in (None, False) else RedisClient.loads(raw_state)
+        code = raw_code.decode() if isinstance(raw_code, bytes) else str(raw_code)
+        return (
+            history if isinstance(history, dict) else None,
+            resulting_state if isinstance(resulting_state, dict) else None,
+            bool(int(raw_applied)),
+            code,
+        )
+
     async def reserve_dispatch(
         self,
         *,
@@ -818,10 +1045,12 @@ class MockEnvironmentState:
 
 __all__ = [
     "MOCK_STATE_NAMESPACES",
+    "MOCK_OBSERVATION_IDEMPOTENCY_KEY",
     "MOCK_OBSERVATION_PROJECTION_KEY",
     "MOCK_TOOL_STATE_KEY",
     "MOCK_VERIFY_OVERRIDE_KEY",
     "MockEnvironmentState",
     "MockObservationRecord",
+    "MockRollbackHistoryRecord",
     "MockStateRecord",
 ]

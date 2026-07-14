@@ -46,7 +46,7 @@ from app.tools.mock_state import (
     MockObservationRecord,
     MockStateRecord,
 )
-from app.tools.specs import baseline_tool_index
+from app.tools.specs import ROLLBACK_SOURCE_MAP, baseline_tool_index
 
 PROVIDER_NAME = "mock_tool_provider"
 XDR_PROVIDER_NAME = "mock_xdr"
@@ -75,6 +75,35 @@ _TOOL_OBSERVATION_SURFACE: dict[str, str] = {
     "force_logout": "account_status",
     "reset_password": "account_status",
     "revoke_token": "account_status",
+}
+_ROLLBACK_EFFECT: dict[
+    str,
+    tuple[str, str, str | None, str | None, str | None],
+] = {
+    "unblock_ip": ("blocked_ips", "blocked", None, "ip_blocks", "allowed"),
+    "unblock_domain": (
+        "blocked_domains",
+        "blocked",
+        None,
+        "domain_blocks",
+        "allowed",
+    ),
+    "cancel_host_isolation": (
+        "isolated_hosts",
+        "isolated",
+        None,
+        "host_isolation",
+        "connected",
+    ),
+    "restore_file": (
+        "quarantined_files",
+        "quarantined",
+        None,
+        "file_quarantine",
+        "present",
+    ),
+    "restore_account": ("accounts", "disabled", None, "account_status", "enabled"),
+    "close_false_positive_ticket": ("tickets", "open", "closed", None, None),
 }
 _REVERSED_OBSERVATION_STATUS = {
     "blocked": "allowed",
@@ -256,7 +285,8 @@ class MockToolProvider:
         self._metas = {
             name: meta
             for name, meta in baseline_tool_index().items()
-            if meta.tool_category is ToolCategory.RESPONSE and meta.executable
+            if meta.tool_category in {ToolCategory.RESPONSE, ToolCategory.ROLLBACK}
+            and meta.executable
         }
 
     def capability_manifest(self) -> CapabilityManifest:
@@ -353,7 +383,7 @@ class MockToolProvider:
             return self._error_result(
                 tool_name,
                 ToolResultStatus.UNSUPPORTED,
-                "tool is not an executable response capability",
+                "tool is not an executable response or rollback capability",
                 code="capability_missing",
             )
         if context.execution_owner is not ExecutionOwner.DIRECT_TOOL:
@@ -382,7 +412,7 @@ class MockToolProvider:
                 code="validation_error",
             )
         try:
-            targets = self._validated_targets(meta.target_types, parsed)
+            targets = self._targets_for_tool(tool_name, meta.target_types, parsed)
         except ValueError as exc:
             return self._error_result(
                 tool_name,
@@ -424,7 +454,7 @@ class MockToolProvider:
             "connector": context.connector,
             "parameters": normalized_params,
         }
-        intent = {
+        intent: dict[str, Any] = {
             "job_id": job.job_id,
             "event_id": context.event_id,
             "action_id": context.action_id,
@@ -437,6 +467,11 @@ class MockToolProvider:
             "status": ExecutionJobStatus.QUEUED.value,
             "created_at": now.isoformat(),
         }
+        if meta.tool_category is ToolCategory.ROLLBACK:
+            intent["rollback_expectations"] = await self._capture_rollback_expectations(
+                tool_name,
+                targets,
+            )
         reserved_job_id, created = await self.state.reserve_dispatch(
             idempotency_key=context.idempotency_key,
             job_id=job.job_id,
@@ -557,6 +592,10 @@ class MockToolProvider:
                 raise RuntimeError(f"dispatch intent for {job_id!r} is missing")
             tool_name = str(intent["tool_name"])
             params = dict(intent["parameters"])
+            raw_expectations = intent.get("rollback_expectations")
+            rollback_expectations = (
+                dict(raw_expectations) if isinstance(raw_expectations, dict) else None
+            )
             context = ToolExecutionContext(
                 event_id=str(intent["event_id"]),
                 action_id=str(intent["action_id"]),
@@ -572,7 +611,7 @@ class MockToolProvider:
             else:
                 meta = self._metas[tool_name]
                 parsed = TOOL_INPUT_MODELS[tool_name].model_validate(params)
-                targets = self._validated_targets(meta.target_types, parsed)
+                targets = self._targets_for_tool(tool_name, meta.target_types, parsed)
                 results = []
                 has_pending_confirmation = False
                 for target_type, target in targets:
@@ -591,12 +630,13 @@ class MockToolProvider:
                         )
                     else:
                         results.append(
-                            await self._apply_target(
+                            await self._apply_provider_target(
                                 tool_name,
                                 target_type,
                                 target,
                                 job,
                                 context,
+                                rollback_expectations=rollback_expectations,
                             )
                         )
                 if has_pending_confirmation:
@@ -630,6 +670,10 @@ class MockToolProvider:
             raise RuntimeError(f"dispatch intent for {job_id!r} is missing")
         tool_name = str(intent["tool_name"])
         params = TOOL_INPUT_MODELS[tool_name].model_validate(intent["parameters"])
+        raw_expectations = intent.get("rollback_expectations")
+        rollback_expectations = (
+            dict(raw_expectations) if isinstance(raw_expectations, dict) else None
+        )
         context = ToolExecutionContext(
             event_id=str(intent["event_id"]),
             action_id=str(intent["action_id"]),
@@ -640,20 +684,25 @@ class MockToolProvider:
         meta = self._metas[tool_name]
         prior_results = {item.canonical_target: item for item in job.target_results}
         results: list[TargetExecutionResult] = []
-        for target_type, target in self._validated_targets(meta.target_types, params):
+        for target_type, target in self._targets_for_tool(
+            tool_name,
+            meta.target_types,
+            params,
+        ):
             canonical = f"{target_type}:{target}"
             prior = prior_results.get(canonical)
             if prior is not None and prior.status is not TargetExecutionStatus.UNKNOWN:
                 results.append(prior)
                 continue
             results.append(
-                await self._apply_target(
+                await self._apply_provider_target(
                     tool_name,
                     target_type,
                     target,
                     job,
                     context,
                     ignore_late=True,
+                    rollback_expectations=rollback_expectations,
                 )
             )
         status = self._aggregate_status(results)
@@ -676,7 +725,7 @@ class MockToolProvider:
             tool_name = str(intent["tool_name"])
             meta = self._metas[tool_name]
             parsed = TOOL_INPUT_MODELS[tool_name].model_validate(intent["parameters"])
-            targets = self._validated_targets(meta.target_types, parsed)
+            targets = self._targets_for_tool(tool_name, meta.target_types, parsed)
             if not targets:
                 targets = [("operation", tool_name)]
             results = [
@@ -694,6 +743,280 @@ class MockToolProvider:
             results,
             expected_status=ExecutionJobStatus.QUEUED,
         )
+
+    async def _capture_rollback_expectations(
+        self,
+        tool_name: str,
+        targets: list[tuple[str, str]],
+    ) -> dict[str, dict[str, Any]]:
+        namespace = _ROLLBACK_EFFECT[tool_name][0]
+        expectations: dict[str, dict[str, Any]] = {}
+        for target_type, target in targets:
+            current = await self.state.get_state(namespace, target)
+            canonical = f"{target_type}:{target}"
+            if isinstance(current, dict):
+                expectations[canonical] = {
+                    "present": True,
+                    "version": current.get("version"),
+                    "job_id": current.get("job_id"),
+                }
+            else:
+                expectations[canonical] = {"present": False}
+        return expectations
+
+    async def _apply_provider_target(
+        self,
+        tool_name: str,
+        target_type: str,
+        target: str,
+        job: ActionExecutionJob,
+        context: ToolExecutionContext,
+        *,
+        ignore_late: bool = False,
+        rollback_expectations: dict[str, Any] | None = None,
+    ) -> TargetExecutionResult:
+        meta = self._metas[tool_name]
+        if meta.tool_category is ToolCategory.ROLLBACK:
+            return await self._apply_rollback_target(
+                tool_name,
+                target_type,
+                target,
+                job,
+                context,
+                ignore_late=ignore_late,
+                rollback_expectations=rollback_expectations,
+            )
+        return await self._apply_target(
+            tool_name,
+            target_type,
+            target,
+            job,
+            context,
+            ignore_late=ignore_late,
+        )
+
+    async def _apply_rollback_target(
+        self,
+        tool_name: str,
+        target_type: str,
+        target: str,
+        job: ActionExecutionJob,
+        context: ToolExecutionContext,
+        *,
+        ignore_late: bool = False,
+        rollback_expectations: dict[str, Any] | None = None,
+    ) -> TargetExecutionResult:
+        canonical = f"{target_type}:{target}"
+        fault = self._target_fault(canonical, target, ignore_late=ignore_late)
+        if fault == "target_not_found":
+            return self._target_result(
+                target_type,
+                target,
+                TargetExecutionStatus.SUCCESS,
+                fault,
+                raw_result={
+                    "rolled_back": False,
+                    "warning": "target_not_found",
+                    "rolled_back_at": None,
+                },
+            )
+        if fault is not None:
+            return self._fault_result(target_type, target, fault)
+
+        (
+            namespace,
+            expected_status,
+            replacement_status,
+            observation_surface,
+            observation_status,
+        ) = _ROLLBACK_EFFECT[tool_name]
+        expectation = (
+            rollback_expectations.get(canonical) if rollback_expectations is not None else None
+        )
+        if not isinstance(expectation, dict) or not isinstance(
+            expectation.get("present"),
+            bool,
+        ):
+            return self._target_result(
+                target_type,
+                target,
+                TargetExecutionStatus.FAILED,
+                "rollback_expectation_missing",
+                raw_result={
+                    "rolled_back": False,
+                    "warning": None,
+                    "rolled_back_at": None,
+                },
+            )
+        expect_absent = expectation["present"] is False
+        expected_source_version = expectation.get("version")
+        expected_source_job_id = expectation.get("job_id")
+        if not expect_absent and (
+            not isinstance(expected_source_version, int)
+            or isinstance(expected_source_version, bool)
+            or not isinstance(expected_source_job_id, str)
+            or not expected_source_job_id
+        ):
+            return self._target_result(
+                target_type,
+                target,
+                TargetExecutionStatus.FAILED,
+                "rollback_expectation_invalid",
+                raw_result={
+                    "rolled_back": False,
+                    "warning": None,
+                    "rolled_back_at": None,
+                },
+            )
+        attempted_at = _utc_now()
+        history, _, _, code = await self.state.apply_rollback(
+            job_id=job.job_id,
+            rollback_tool_name=tool_name,
+            source_tool_name=ROLLBACK_SOURCE_MAP[tool_name],
+            namespace=namespace,
+            key=target,
+            expected_status=expected_status,
+            expected_source_version=(
+                expected_source_version
+                if isinstance(expected_source_version, int)
+                and not isinstance(expected_source_version, bool)
+                else None
+            ),
+            expected_source_job_id=(
+                expected_source_job_id if isinstance(expected_source_job_id, str) else None
+            ),
+            expect_absent=expect_absent,
+            replacement_status=replacement_status,
+            rolled_back_at=attempted_at,
+            rolled_back_by=context.executed_by,
+            provider=self.name,
+            connector=context.connector,
+            action_id=context.action_id,
+        )
+        if code == "rolled_back" and history is None:
+            return self._target_result(
+                target_type,
+                target,
+                TargetExecutionStatus.FAILED,
+                "rollback_history_missing",
+                raw_result={
+                    "rolled_back": False,
+                    "warning": None,
+                    "rolled_back_at": None,
+                },
+            )
+        if code not in {"rolled_back", "target_not_found"}:
+            return self._target_result(
+                target_type,
+                target,
+                TargetExecutionStatus.FAILED,
+                code,
+                raw_result={
+                    "rolled_back": False,
+                    "warning": None,
+                    "rolled_back_at": None,
+                },
+            )
+
+        rolled_back = history is not None
+        rolled_back_at = history.get("rolled_back_at") if history is not None else None
+        warning = None if rolled_back else "target_not_found"
+        if (
+            history is not None
+            and observation_surface is not None
+            and observation_status is not None
+        ):
+            await self._copy_rollback_to_observation(
+                tool_name,
+                target_type,
+                target,
+                observation_surface,
+                observation_status,
+                expected_status,
+                history,
+                job,
+                context,
+            )
+        return self._target_result(
+            target_type,
+            target,
+            TargetExecutionStatus.SUCCESS,
+            code,
+            artifact_id=target if target_type == "ticket" else None,
+            raw_result={
+                "rolled_back": rolled_back,
+                "warning": warning,
+                "rolled_back_at": rolled_back_at,
+            },
+        )
+
+    async def _copy_rollback_to_observation(
+        self,
+        tool_name: str,
+        target_type: str,
+        target: str,
+        surface: str,
+        status: str,
+        reversed_status: str,
+        history: dict[str, Any],
+        job: ActionExecutionJob,
+        context: ToolExecutionContext,
+    ) -> None:
+        configured_target = [(target_type, target)]
+        if self._matches_any(self.config.observation_never_targets, configured_target):
+            return
+        if self._matches_any(self.config.observation_reversed_targets, configured_target):
+            status = reversed_status
+        available_at = _utc_now() + timedelta(milliseconds=self.config.observation_delay_ms)
+        original = history.get("original_record")
+        source_version = int(original.get("version", 0)) + 1 if isinstance(original, dict) else 1
+        await self.state.set_observation(
+            MockObservationRecord(
+                surface=surface,
+                target=target,
+                status=status,
+                observed_at=available_at,
+                available_at=available_at,
+                observed_version=source_version,
+                action_id=context.action_id,
+                job_id=job.job_id,
+                provider=self.name,
+                connector=context.connector,
+                value={
+                    "target_type": target_type,
+                    "target": target,
+                    "rollback_tool_name": tool_name,
+                },
+            )
+        )
+        if tool_name in {"unblock_ip", "cancel_host_isolation"}:
+            traffic_status = (
+                "dropped"
+                if self._matches_any(
+                    self.config.observation_reversed_targets,
+                    configured_target,
+                )
+                else "flowing"
+            )
+            await self.state.set_observation(
+                MockObservationRecord(
+                    surface="traffic",
+                    target=target,
+                    status=traffic_status,
+                    observed_at=available_at,
+                    available_at=available_at,
+                    observed_version=source_version,
+                    action_id=context.action_id,
+                    job_id=job.job_id,
+                    provider=self.name,
+                    connector=context.connector,
+                    value={
+                        "target_type": target_type,
+                        "target": target,
+                        "rollback_tool_name": tool_name,
+                    },
+                )
+            )
 
     async def _apply_target(
         self,
@@ -965,6 +1288,31 @@ class MockToolProvider:
         )
         now = _utc_now()
         code = provider_code or (next((item.code for item in results if item.code), None))
+        raw_result: dict[str, Any] = {
+            "fixture": "shadowtrace_mock_tool",
+            "outcome": status.value,
+            "target_codes": [item.code for item in results],
+        }
+        rollback_results = [
+            {
+                "canonical_target": item.canonical_target,
+                **{
+                    field: item.raw_result.get(field)
+                    for field in ("rolled_back", "warning", "rolled_back_at")
+                },
+            }
+            for item in results
+            if "rolled_back" in item.raw_result
+        ]
+        if rollback_results:
+            raw_result["rollback_results"] = rollback_results
+            if len(rollback_results) == 1:
+                raw_result.update(
+                    {
+                        field: rollback_results[0][field]
+                        for field in ("rolled_back", "warning", "rolled_back_at")
+                    }
+                )
         updated = job.model_copy(
             update={
                 "status": status,
@@ -975,11 +1323,7 @@ class MockToolProvider:
                 "lease_expires_at": None,
                 "updated_at": now,
                 "finished_at": now if status in _TERMINAL_JOB_STATUSES else None,
-                "raw_result": {
-                    "fixture": "shadowtrace_mock_tool",
-                    "outcome": status.value,
-                    "target_codes": [item.code for item in results],
-                },
+                "raw_result": raw_result,
             }
         )
         if claim is not None:
@@ -1023,6 +1367,20 @@ class MockToolProvider:
             return "pending_confirmation"
         return None
 
+    @classmethod
+    def _targets_for_tool(
+        cls,
+        tool_name: str,
+        allowed_target_types: list[str],
+        parsed: BaseModel,
+    ) -> list[tuple[str, str]]:
+        if tool_name == "close_false_positive_ticket":
+            ticket_id = getattr(parsed, "ticket_id", None)
+            if not isinstance(ticket_id, str) or not ticket_id.strip():
+                raise ValueError("ticket_id must be a non-empty string")
+            return [("ticket", ticket_id)]
+        return cls._validated_targets(allowed_target_types, parsed)
+
     @staticmethod
     def _validated_targets(
         allowed_target_types: list[str],
@@ -1062,6 +1420,7 @@ class MockToolProvider:
         code: str,
         *,
         artifact_id: str | None = None,
+        raw_result: dict[str, Any] | None = None,
     ) -> TargetExecutionResult:
         canonical = f"{target_type}:{target}"
         return TargetExecutionResult(
@@ -1074,6 +1433,7 @@ class MockToolProvider:
                 "fixture": "shadowtrace_mock_tool",
                 "target": canonical,
                 "code": code,
+                **(raw_result or {}),
             },
         )
 
@@ -1250,12 +1610,17 @@ async def execute_mock_response_tool(tool_name: str, params: dict[str, Any]) -> 
     return await get_mock_tool_provider().execute(tool_name, params)
 
 
+async def execute_mock_rollback_tool(tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+    return await get_mock_tool_provider().execute(tool_name, params)
+
+
 __all__ = [
     "MockToolProvider",
     "MockToolProviderConfig",
     "ToolExecutionContext",
     "bind_mock_tool_provider",
     "bind_tool_execution_context",
+    "execute_mock_rollback_tool",
     "execute_mock_response_tool",
     "get_mock_tool_provider",
     "map_disposition_receipt_to_job",
