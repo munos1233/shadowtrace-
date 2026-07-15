@@ -406,7 +406,9 @@ async def test_pending_projection_timeout_is_not_reported_as_effect_failure(
 ) -> None:
     provider = MockToolProvider(
         state,
-        config=MockToolProviderConfig(observation_delay_ms=500),
+        # Keep pending longer than slow CI job completion so the 1ms verify
+        # timeout still observes a not-yet-visible projection.
+        config=MockToolProviderConfig(observation_delay_ms=2_000),
     )
     completed = await _run_action(
         provider,
@@ -428,7 +430,7 @@ async def test_pending_projection_timeout_is_not_reported_as_effect_failure(
     assert timed_out.data["is_verified"] is False
     assert timed_out.data["detail"] == "observation_not_visible"
 
-    await asyncio.sleep(0.51)
+    await asyncio.sleep(2.01)
     visible = await _run_verify(
         registry,
         MockVerificationRuntime(state),
