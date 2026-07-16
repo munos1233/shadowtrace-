@@ -24,17 +24,24 @@ from app.models.source import (
 
 
 class SourcePage(BaseModel):
-    """One page of Source* objects from a SourceAdapter."""
+    """One object-kind page from a SourceAdapter.
+
+    A page never combines kinds: schema and cursor therefore describe exactly
+    one independently checkpointed stream.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     items: list[SourceIncident | SourceAlert | SourceAsset | SourceLog | SourceConnector] = Field(
         default_factory=list
     )
+    object_kind: SourceObjectKind
+    connector_id: str | None = None
     next_cursor: str | None = None
     has_more: bool = False
     server_time: datetime | None = None
     schema_version: str = "1"
+    malformed_items: int = 0
 
 
 class SourceEvidencePage(BaseModel):
@@ -53,6 +60,7 @@ class BaseSourceAdapter(ABC):
     """Pure-read adapter. Implementations must not mutate external systems."""
 
     name: str = "base"
+    checkpoint_scope: str = ""
 
     @abstractmethod
     def capabilities(self) -> dict[ConnectorCapability, CapabilityState]:
@@ -63,11 +71,20 @@ class BaseSourceAdapter(ABC):
         self,
         object_types: Sequence[SourceObjectKind | str],
         *,
+        connector_id: str | None = None,
         cursor: str | None = None,
         updated_after: datetime | None = None,
         limit: int = 100,
     ) -> SourcePage:
-        """List Source* objects. Watermark commit is caller-owned after persist."""
+        """List exactly one Source* object kind.
+
+        Implementations must reject multi-kind requests. Watermark commit is
+        caller-owned after persistence.
+        """
+
+    async def list_connectors(self) -> list[SourceConnector]:
+        """List connector scopes when the adapter can enumerate them."""
+        return []
 
     async def get_object(
         self,

@@ -188,7 +188,7 @@ class FileIngester:
             await self._source_ingester.ingest_telemetry(
                 records_by_source,
                 source_type="file",
-                connector_id="file-evidence",
+                connector_id="file-local",
                 watermark=summary.watermark_after,
             )
         except Exception as exc:  # noqa: BLE001 — event ingest remains usable
@@ -217,9 +217,8 @@ def _scope_file_checkpoint(
     path: Path,
     scenario_key: str,
 ) -> None:
-    # One physical connector can host several offline scenario snapshots. Keep
-    # their cursors independent while preserving the required poll signature.
-    adapter.checkpoint_key = f"file:{path}:{scenario_key}"  # type: ignore[attr-defined]
+    material = f"{path.resolve()}|{scenario_key}".encode()
+    adapter.checkpoint_scope = f"file:{hashlib.sha256(material).hexdigest()[:24]}"
 
 
 def _synthetic_source_alert(raw_alert: dict[str, Any]) -> IngestableSource:

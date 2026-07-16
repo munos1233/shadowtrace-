@@ -15,7 +15,7 @@ from app.db import models as orm
 from app.ingestion.alert_builder import AlertBuilder
 from app.ingestion.file_ingester import FileIngester
 from app.ingestion.source_ingester import SourceIngester
-from app.models.enums import EventStatus
+from app.models.enums import EventStatus, SourceObjectKind
 from app.services.event_service import EventService
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -128,7 +128,7 @@ async def test_main_scenario_file_ingest_creates_exactly_one_new_event(
         scenario="insider_data_exfiltration",
     )
     assert summary.rejected == 0
-    assert summary.degraded is False
+    assert summary.degraded is False, summary.errors
 
     async with session_factory() as session:
         events = (
@@ -179,7 +179,7 @@ async def test_file_ingest_completes_when_batch_size_smaller_than_scenario(
     assert summary.rejected == 0
     assert summary.degraded is False
     assert not any(err.get("error_category") == "invalid_pagination" for err in summary.errors)
-    assert summary.watermark_after is not None
+    assert summary.watermark_after is None
     assert summary.accepted + summary.duplicate > 0
 
     async with session_factory() as session:
@@ -194,6 +194,21 @@ async def test_file_ingest_completes_when_batch_size_smaller_than_scenario(
         ).all()
         assert len(events) >= 1
         assert any(row.status == EventStatus.NEW.value for row in events)
+        checkpoint_count = await session.scalar(
+            select(func.count())
+            .select_from(orm.SourceCheckpoint)
+            .where(
+                orm.SourceCheckpoint.object_kind.in_(
+                    [
+                        SourceObjectKind.INCIDENT.value,
+                        SourceObjectKind.ALERT.value,
+                        SourceObjectKind.ASSET.value,
+                        SourceObjectKind.LOG.value,
+                    ]
+                )
+            )
+        )
+        assert checkpoint_count
 
 
 @pytest.mark.asyncio
@@ -227,6 +242,25 @@ async def test_file_watermarks_are_scoped_per_scenario(
     assert account.watermark_before is None
     assert insider.rejected == 0
     assert account.rejected == 0
+    async with session_factory() as session:
+        scopes = set(
+            (
+                await session.scalars(
+                    select(orm.SourceCheckpoint.stream_scope).where(
+                        orm.SourceCheckpoint.connector_id.in_(
+                            {
+                                "conn-log-only",
+                                "conn-disposition",
+                                "conn-log-fp",
+                                "conn-disp-fp",
+                            }
+                        ),
+                        orm.SourceCheckpoint.stream_scope != "",
+                    )
+                )
+            ).all()
+        )
+    assert len(scopes) >= 2
 
 
 @pytest.mark.asyncio

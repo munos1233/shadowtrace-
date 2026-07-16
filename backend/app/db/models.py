@@ -126,6 +126,8 @@ class SourceObject(Base):
         String, default="unknown", nullable=False
     )
     current_concurrency_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    current_source_updated_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
+    current_state_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     source_sync_state: Mapped[str | None] = mapped_column(String, nullable=True)
 
     next_outbox_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
@@ -156,6 +158,32 @@ class SourceConnector(Base):
     read_credential_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     disposition_credential_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     connector_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(_TS, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        _TS, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class SourceCheckpoint(Base):
+    """Durable ingestion progress isolated by connector and source object kind."""
+
+    __tablename__ = "source_checkpoint"
+
+    connector_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("source_connector.connector_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    object_kind: Mapped[str] = mapped_column(String, primary_key=True)
+    stream_scope: Mapped[str] = mapped_column(String, primary_key=True, default="")
+    schema_version: Mapped[str] = mapped_column(String, nullable=False)
+    cursor: Mapped[str | None] = mapped_column(String, nullable=True)
+    watermark: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
+    degraded_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(_TS, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

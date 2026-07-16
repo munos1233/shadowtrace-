@@ -67,19 +67,19 @@ async def test_source_round_trip_preserves_ids_and_raw(
         client=mock_client,
         quality=quality,
     )
-    page = await adapter.list_objects(
-        [
+    pages = {
+        kind: await adapter.list_objects([kind], limit=100)
+        for kind in (
             SourceObjectKind.INCIDENT,
             SourceObjectKind.ALERT,
             SourceObjectKind.ASSET,
             SourceObjectKind.LOG,
-        ],
-        limit=100,
-    )
-    incidents = [i for i in page.items if isinstance(i, SourceIncident)]
-    alerts = [i for i in page.items if isinstance(i, SourceAlert)]
-    assets = [i for i in page.items if isinstance(i, SourceAsset)]
-    logs = [i for i in page.items if isinstance(i, SourceLog)]
+        )
+    }
+    incidents = [i for i in pages[SourceObjectKind.INCIDENT].items if isinstance(i, SourceIncident)]
+    alerts = [i for i in pages[SourceObjectKind.ALERT].items if isinstance(i, SourceAlert)]
+    assets = [i for i in pages[SourceObjectKind.ASSET].items if isinstance(i, SourceAsset)]
+    logs = [i for i in pages[SourceObjectKind.LOG].items if isinstance(i, SourceLog)]
     assert incidents and alerts and assets and logs
 
     scenario = build_scenario("insider_data_exfiltration", seed=42)
@@ -295,8 +295,9 @@ async def test_malformed_source_payload_marks_adapter_degraded(
     page = await adapter.list_objects([SourceObjectKind.INCIDENT])
 
     assert page.items == []
+    assert page.malformed_items == 1
     assert any(row["error_category"] == "malformed_payload" for row in quality.rows)
-    assert await adapter.health_check() is ConnectorStatus.DEGRADED
+    assert await adapter.health_check() is ConnectorStatus.ONLINE
 
 
 @pytest.mark.asyncio
@@ -331,7 +332,7 @@ async def test_file_source_has_no_writeback() -> None:
     assert (
         adapter.capabilities()[ConnectorCapability.EVENT_DISPOSITION] is CapabilityState.UNSUPPORTED
     )
-    page = await adapter.list_objects([SourceObjectKind.INCIDENT, SourceObjectKind.ALERT])
+    page = await adapter.list_objects([SourceObjectKind.INCIDENT])
     assert page.items
     telemetry = adapter.load_telemetry()
     assert "identity" in telemetry
@@ -392,7 +393,7 @@ async def test_schema_unsupported_halts_kind_watermark(
     page = await adapter.list_objects([SourceObjectKind.INCIDENT], limit=10)
     assert page.items == []
     assert any(r["error_category"] == "schema_unsupported" for r in quality.rows)
-    assert await adapter.health_check() is ConnectorStatus.DEGRADED
+    assert await adapter.health_check() is ConnectorStatus.ONLINE
 
 
 @pytest.mark.asyncio
@@ -419,7 +420,7 @@ async def test_list_objects_paginates_single_kind(
 
 
 @pytest.mark.asyncio
-async def test_list_objects_multi_kind_pagination_is_isolated(
+async def test_list_objects_rejects_multi_kind_request(
     mock_client: httpx.AsyncClient, mock_state: MockXDRState
 ) -> None:
     adapter = MockXDRSourceAdapter(
@@ -427,27 +428,11 @@ async def test_list_objects_multi_kind_pagination_is_isolated(
         write_token=mock_state.write_token,
         client=mock_client,
     )
-    scenario = build_scenario("insider_data_exfiltration", seed=42)
-    expected_alerts = {a.reference.source_object_id for a in scenario.alerts}
-    expected_assets = {a.reference.source_object_id for a in scenario.assets}
-    got_alerts: set[str] = set()
-    got_assets: set[str] = set()
-    cursor: str | None = None
-    for _ in range(20):
-        page = await adapter.list_objects(
-            [SourceObjectKind.ALERT, SourceObjectKind.ASSET], cursor=cursor, limit=1
+    with pytest.raises(ValueError, match="exactly one"):
+        await adapter.list_objects(
+            [SourceObjectKind.ALERT, SourceObjectKind.ASSET],
+            limit=1,
         )
-        for it in page.items:
-            if isinstance(it, SourceAlert):
-                got_alerts.add(it.reference.source_object_id)
-            elif isinstance(it, SourceAsset):
-                got_assets.add(it.reference.source_object_id)
-        if not page.has_more:
-            break
-        cursor = page.next_cursor
-    # Per-kind cursors keep the two kinds isolated — no cross-contamination or loss.
-    assert got_alerts == expected_alerts
-    assert got_assets == expected_assets
 
 
 def test_source_adapter_has_no_write_methods() -> None:

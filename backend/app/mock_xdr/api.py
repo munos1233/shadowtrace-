@@ -106,6 +106,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
         page_size: int = Query(default=100, ge=1, le=1000),
         cursor: str | None = None,
         updated_after: datetime | None = None,
+        connector_id: str | None = None,
         commit: bool = False,
         _: None = Depends(_require_read),
         st: MockXDRState = Depends(_state),
@@ -116,6 +117,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
             page_size=page_size,
             cursor=cursor,
             updated_after=updated_after,
+            connector_id=connector_id,
             commit_watermark=commit,
         )
 
@@ -124,6 +126,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
         page_size: int = Query(default=100, ge=1, le=1000),
         cursor: str | None = None,
         updated_after: datetime | None = None,
+        connector_id: str | None = None,
         commit: bool = False,
         _: None = Depends(_require_read),
         st: MockXDRState = Depends(_state),
@@ -134,6 +137,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
             page_size=page_size,
             cursor=cursor,
             updated_after=updated_after,
+            connector_id=connector_id,
             commit_watermark=commit,
         )
 
@@ -142,6 +146,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
         page_size: int = Query(default=100, ge=1, le=1000),
         cursor: str | None = None,
         updated_after: datetime | None = None,
+        connector_id: str | None = None,
         commit: bool = False,
         _: None = Depends(_require_read),
         st: MockXDRState = Depends(_state),
@@ -152,6 +157,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
             page_size=page_size,
             cursor=cursor,
             updated_after=updated_after,
+            connector_id=connector_id,
             commit_watermark=commit,
         )
 
@@ -160,6 +166,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
         page_size: int = Query(default=100, ge=1, le=1000),
         cursor: str | None = None,
         updated_after: datetime | None = None,
+        connector_id: str | None = None,
         commit: bool = False,
         _: None = Depends(_require_read),
         st: MockXDRState = Depends(_state),
@@ -170,6 +177,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
             page_size=page_size,
             cursor=cursor,
             updated_after=updated_after,
+            connector_id=connector_id,
             commit_watermark=commit,
         )
 
@@ -197,7 +205,7 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
             "records_by_source": records_by_source,
             "source_product": "mock_xdr",
             "source_tenant_id": (scenario.source_tenant_id if scenario is not None else "unknown"),
-            "connector_id": "mock_xdr-evidence",
+            "connector_id": _evidence_connector_id(scenario),
             "schema_version": st.failure_profile.schema_version_override or "1",
         }
 
@@ -386,6 +394,17 @@ def _telemetry_time(record: dict[str, Any]) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _evidence_connector_id(scenario: MockXDRScenario | None) -> str:
+    if scenario is None:
+        return "mock_xdr"
+    for bucket in (scenario.incidents, scenario.alerts, scenario.assets, scenario.logs):
+        if bucket:
+            return bucket[0].reference.connector_id
+    if scenario.connectors:
+        return scenario.connectors[0].connector_id
+    return "mock_xdr"
 
 
 def _bearer(authorization: str | None) -> str | None:

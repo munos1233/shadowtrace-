@@ -33,6 +33,7 @@ CORE_TABLES = {
     "source_object",
     "source_event_link",
     "source_connector",
+    "source_checkpoint",
     "evidence",
     "action",
     "action_execution_job",
@@ -141,7 +142,7 @@ async def test_all_core_tables_exist(session: AsyncSession) -> None:
     )
     present = {r[0] for r in rows}
     assert CORE_TABLES <= present, {"missing": CORE_TABLES - present}
-    # exactly the 18 core tables at this stage (vector tables come later).
+    # The original 18 core tables plus connector/kind checkpoints.
     assert present == CORE_TABLES, {"unexpected": present - CORE_TABLES}
 
 
@@ -374,6 +375,104 @@ async def test_row_version_cas(session: AsyncSession) -> None:
     )
     assert res_stale.rowcount == 0
     await session.rollback()
+
+
+async def test_source_checkpoint_identity_is_connector_and_kind(
+    session: AsyncSession,
+) -> None:
+    sfx = _sfx()
+    connector_id, _ = await _seed_connector_source(session, sfx)
+    session.add(
+        m.SourceCheckpoint(
+            connector_id=connector_id,
+            object_kind="incident",
+            schema_version="1",
+            watermark={"cursor": "incident"},
+        )
+    )
+    session.add(
+        m.SourceCheckpoint(
+            connector_id=connector_id,
+            object_kind="alert",
+            schema_version="1",
+            watermark={"cursor": "alert"},
+        )
+    )
+    session.add(
+        m.SourceCheckpoint(
+            connector_id=connector_id,
+            object_kind="incident",
+            stream_scope="file:scenario-b",
+            schema_version="1",
+            watermark={"cursor": "scenario-b"},
+        )
+    )
+    await session.flush()
+    duplicate = m.SourceCheckpoint(
+        connector_id=connector_id,
+        object_kind="incident",
+        schema_version="1",
+    )
+    session.add(duplicate)
+    with pytest.raises(IntegrityError):
+        await session.flush()
+    await session.rollback()
+
+
+def test_checkpoint_upgrade_does_not_backfill_legacy_global_watermark(
+    migrated: None,
+) -> None:
+    cfg = _alembic_config()
+    command.downgrade(cfg, "0003_outbox_active_head_evt")
+    connector_id = f"legacy-{_sfx()}"
+
+    async def _seed_legacy_connector() -> None:
+        engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO source_connector "
+                        "(connector_id, source_product, display_name, status, capabilities, "
+                        "watermark, schema_version, connector_metadata) "
+                        "VALUES (:connector_id, 'mock_xdr', 'Legacy', 'online', "
+                        "'{}'::jsonb, '{\"cursor\":\"unsafe-global\"}'::jsonb, '1', "
+                        "'{}'::jsonb)"
+                    ),
+                    {"connector_id": connector_id},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed_legacy_connector())
+    command.upgrade(cfg, "head")
+
+    async def _assert_no_backfill() -> None:
+        engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                checkpoint_count = await conn.scalar(
+                    text(
+                        "SELECT count(*) FROM source_checkpoint WHERE connector_id = :connector_id"
+                    ),
+                    {"connector_id": connector_id},
+                )
+                watermark = await conn.scalar(
+                    text(
+                        "SELECT watermark FROM source_connector WHERE connector_id = :connector_id"
+                    ),
+                    {"connector_id": connector_id},
+                )
+                assert checkpoint_count == 0
+                assert watermark == {"cursor": "unsafe-global"}
+                await conn.execute(
+                    text("DELETE FROM source_connector WHERE connector_id = :connector_id"),
+                    {"connector_id": connector_id},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_assert_no_backfill())
 
 
 async def test_transaction_rollback(session: AsyncSession) -> None:

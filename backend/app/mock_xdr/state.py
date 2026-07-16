@@ -480,10 +480,17 @@ class MockXDRState:
         kind: ObjectKindName,
         *,
         updated_after: datetime | None,
+        connector_id: str | None,
     ) -> list[str]:
         items: list[StoredObject] = [
             o for (k, _), o in self.objects.items() if k == kind and not o.deleted
         ]
+        if connector_id is not None:
+            items = [
+                item
+                for item in items
+                if (item.body.get("reference") or {}).get("connector_id") == connector_id
+            ]
         if updated_after is not None:
             items = [o for o in items if o.source_updated_at > updated_after]
         items.sort(key=lambda o: (o.source_updated_at, o.object_id))
@@ -500,6 +507,7 @@ class MockXDRState:
         page_size: int = 100,
         cursor: str | None = None,
         updated_after: datetime | None = None,
+        connector_id: str | None = None,
         commit_watermark: bool = False,
     ) -> dict[str, Any]:
         if cursor:
@@ -523,7 +531,11 @@ class MockXDRState:
                 "cursor": cursor,
             }
 
-        ids = self._sorted_ids(kind, updated_after=updated_after)
+        ids = self._sorted_ids(
+            kind,
+            updated_after=updated_after,
+            connector_id=connector_id,
+        )
         snapshot_fingerprint = "|".join(
             f"{oid}:{self.objects[(kind, oid)].payload_hash}" for oid in ids
         )
@@ -535,7 +547,8 @@ class MockXDRState:
         for idx, chunk in enumerate(pages):
             after = updated_after.isoformat() if updated_after else ""
             material = (
-                f"{kind}|{after}|{idx}|{page_size}|{self.failure_profile.seed}"
+                f"{kind}|{connector_id or ''}|{after}|{idx}|{page_size}|"
+                f"{self.failure_profile.seed}"
                 f"|{snapshot_fingerprint}"
             )
             c = hashlib.sha256(material.encode()).hexdigest()[:24]

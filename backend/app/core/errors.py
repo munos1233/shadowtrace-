@@ -81,6 +81,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "llm_invalid_json": ErrorCategory.LLM,
     "budget_exceeded": ErrorCategory.BUDGET,
     "guardrail_failed": ErrorCategory.GUARDRAIL,
+    "guardrail_violation": ErrorCategory.GUARDRAIL,
     "working_memory_unauthorized_write": ErrorCategory.GUARDRAIL,
     "tool_not_found": ErrorCategory.USER_INPUT,
     "tool_already_registered": ErrorCategory.USER_INPUT,

@@ -7,7 +7,6 @@ error codes are ShadowTrace Mock facts — not 深信服 backend facts.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -51,6 +50,7 @@ from app.models.enums import (
     SourceObjectKind,
     WritebackStatus,
 )
+from app.models.source import SourceConnector
 
 logger = logging.getLogger(__name__)
 
@@ -62,23 +62,6 @@ _ALLOWED_OPERATIONS = frozenset(
         "record_compensation",
     }
 )
-
-
-def _decode_cursor(cursor: str | None) -> dict[str, str]:
-    """Decode a per-kind composite cursor ({kind: mock_cursor}).
-
-    Mock cursors are bound to a single object kind, so a multi-kind ``list_objects``
-    call must page each kind independently. ``None`` means "start fresh for all".
-    """
-    if not cursor:
-        return {}
-    try:
-        data = json.loads(cursor)
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {str(k): str(v) for k, v in data.items()}
 
 
 class MockXDRSourceAdapter(BaseSourceAdapter):
@@ -107,7 +90,6 @@ class MockXDRSourceAdapter(BaseSourceAdapter):
         self._quality = quality or InMemoryDataQualityRecorder()
         self._supported_schema_versions = supported_schema_versions or frozenset({"1"})
         self._max_retries = max_retries
-        self._degraded_kinds: set[str] = set()
 
     def capabilities(self) -> dict[ConnectorCapability, CapabilityState]:
         return {
@@ -198,85 +180,83 @@ class MockXDRSourceAdapter(BaseSourceAdapter):
         self,
         object_types: Sequence[SourceObjectKind | str],
         *,
+        connector_id: str | None = None,
         cursor: str | None = None,
         updated_after: datetime | None = None,
         limit: int = 100,
     ) -> SourcePage:
+        if len(object_types) != 1:
+            raise ValueError("SourceAdapter.list_objects requires exactly one object kind")
+        raw_kind = object_types[0]
+        kind = (
+            raw_kind if isinstance(raw_kind, SourceObjectKind) else SourceObjectKind(str(raw_kind))
+        )
         items: list[Any] = []
         schema_version = "1"
         server_time = datetime.now(UTC)
-        per_kind_cursor = _decode_cursor(cursor)
-        paging_continuation = cursor is not None and bool(per_kind_cursor)
-        # Per-kind continuation cursors for the NEXT page (composite, kind-scoped).
-        next_cursors: dict[str, str] = {}
+        path = f"/mock-xdr/v1/{kind_to_path(kind.value)}"
+        params: dict[str, Any] = {"page_size": limit, "commit": False}
+        if connector_id is not None:
+            params["connector_id"] = connector_id
+        if cursor is not None:
+            params["cursor"] = cursor
+        if updated_after is not None:
+            params["updated_after"] = updated_after.isoformat()
 
-        for raw_kind in object_types:
-            kind = raw_kind.value if isinstance(raw_kind, SourceObjectKind) else str(raw_kind)
-            if kind in self._degraded_kinds:
-                self._quality.record(
-                    stage="source_list",
-                    error_category="schema_unsupported",
-                    detail={"kind": kind, "reason": "watermark_halted"},
-                )
-                continue
-            # On a continuation call, a kind absent from the composite cursor is
-            # already exhausted — skip it instead of restarting from page 1.
-            if paging_continuation and kind not in per_kind_cursor:
-                continue
-            path = f"/mock-xdr/v1/{kind_to_path(kind)}"
-            params: dict[str, Any] = {"page_size": limit}
-            # Watermark commit is owned by the ingester after persist — never auto-commit.
-            params["commit"] = False
-            kind_cursor = per_kind_cursor.get(kind)
-            if kind_cursor is not None:
-                params["cursor"] = kind_cursor
-            if updated_after is not None:
-                params["updated_after"] = updated_after.isoformat()
+        payload = await self._get_json(path, params=params)
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            self._quality.record(
+                stage="source_list",
+                error_category="malformed_payload",
+                detail={"kind": kind.value},
+            )
+            return SourcePage(
+                object_kind=kind,
+                connector_id=connector_id,
+                schema_version=schema_version,
+                server_time=server_time,
+                malformed_items=1,
+            )
 
-            payload = await self._get_json(path, params=params)
-            if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-                self._degraded_kinds.add(kind)
+        halted = False
+        malformed_items = 0
+        for body in payload["items"]:
+            if not isinstance(body, dict):
+                malformed_items += 1
                 self._quality.record(
                     stage="source_list",
                     error_category="malformed_payload",
-                    detail={"kind": kind},
+                    detail={"kind": kind.value, "reason": "item_not_object"},
                 )
                 continue
-            page_items = payload["items"]
-            kind_next = payload.get("next_cursor")
-            halted = False
-            for body in page_items:
-                if not isinstance(body, dict):
-                    continue
-                sv = "1"
-                mock_meta = body.get("_mock")
-                if isinstance(mock_meta, dict) and mock_meta.get("schema_version"):
-                    sv = str(mock_meta["schema_version"])
-                schema_version = sv
-                if sv not in self._supported_schema_versions:
-                    self._degraded_kinds.add(kind)
-                    self._quality.record(
-                        stage="source_list",
-                        error_category="schema_unsupported",
-                        detail={"kind": kind, "schema_version": sv},
-                    )
-                    # Stop advancing this object type (no watermark commit by design).
-                    halted = True
-                    break
-                parsed = parse_source_item(kind, body, quality=self._quality)
-                if parsed is not None:
-                    items.append(parsed)
-            # Only advance this kind if it did not halt on an unsupported schema.
-            if not halted and kind_next:
-                next_cursors[kind] = kind_next
-
-        next_cursor = json.dumps(next_cursors, sort_keys=True) if next_cursors else None
+            sv = "1"
+            mock_meta = body.get("_mock")
+            if isinstance(mock_meta, dict) and mock_meta.get("schema_version"):
+                sv = str(mock_meta["schema_version"])
+            schema_version = sv
+            if sv not in self._supported_schema_versions:
+                self._quality.record(
+                    stage="source_list",
+                    error_category="schema_unsupported",
+                    detail={"kind": kind.value, "schema_version": sv},
+                )
+                halted = True
+                break
+            parsed = parse_source_item(kind.value, body, quality=self._quality)
+            if parsed is not None:
+                items.append(parsed)
+            else:
+                malformed_items += 1
+        next_cursor = None if halted else payload.get("next_cursor")
         return SourcePage(
             items=items,
-            next_cursor=next_cursor,
-            has_more=bool(next_cursors),
+            object_kind=kind,
+            connector_id=connector_id,
+            next_cursor=str(next_cursor) if next_cursor is not None else None,
+            has_more=next_cursor is not None,
             server_time=server_time,
             schema_version=schema_version,
+            malformed_items=malformed_items,
         )
 
     async def get_object(
@@ -318,11 +298,9 @@ class MockXDRSourceAdapter(BaseSourceAdapter):
             await self._get_json("/mock-xdr/v1/health")
         except Exception:  # noqa: BLE001 — health must never raise to callers
             return ConnectorStatus.OFFLINE
-        if self._degraded_kinds:
-            return ConnectorStatus.DEGRADED
         return ConnectorStatus.ONLINE
 
-    async def list_connectors(self) -> list[Any]:
+    async def list_connectors(self) -> list[SourceConnector]:
         payload = await self._get_json("/mock-xdr/v1/connectors")
         return [parse_connector(item) for item in payload.get("items") or []]
 

@@ -194,7 +194,9 @@ class PushReceiver:
             disposition_policy_default=(
                 DispositionPolicy.REQUIRED.value if product == "mock_xdr" else None
             ),
-            connector_metadata={"ingestion_adapter": "push"},
+            # Push is a delivery mechanism, not the connector's logical
+            # ingestion adapter identity.
+            connector_metadata={"ingestion_adapter": product},
         )
         session.add(row)
         await session.flush()
@@ -226,13 +228,14 @@ class PushReceiver:
         if envelope.delivery_id not in deliveries:
             deliveries.append(envelope.delivery_id)
         metadata["processed_delivery_ids"] = deliveries[-MAX_DELIVERY_HISTORY:]
-        metadata["ingestion_adapter"] = "push"
         if degraded:
             metadata["last_ingestion_error"] = "object_rejected"
         else:
             metadata.pop("last_ingestion_error", None)
         row.connector_metadata = metadata
-        row.status = ConnectorStatus.DEGRADED.value if degraded else ConnectorStatus.ONLINE.value
+        # The delivery transport succeeded even when individual objects were
+        # rejected. Kind/item quality is not connector transport health.
+        row.status = ConnectorStatus.ONLINE.value
         await session.flush()
 
     async def _record_quality(self, detail: dict[str, Any]) -> None:

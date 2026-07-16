@@ -74,6 +74,7 @@ class FileSourceAdapter(BaseSourceAdapter):
         self,
         object_types: Sequence[SourceObjectKind | str],
         *,
+        connector_id: str | None = None,
         cursor: str | None = None,
         updated_after: datetime | None = None,
         limit: int = 100,
@@ -84,15 +85,20 @@ class FileSourceAdapter(BaseSourceAdapter):
         contract so ``SourceIngester`` can page without ``invalid_pagination``.
         Cursor is a decimal offset into the filtered object list.
         """
+        if len(object_types) != 1:
+            raise ValueError("SourceAdapter.list_objects requires exactly one object kind")
+        raw_kind = object_types[0]
+        kind = (
+            raw_kind if isinstance(raw_kind, SourceObjectKind) else SourceObjectKind(str(raw_kind))
+        )
         items: list[SourceIncident | SourceAlert | SourceAsset | SourceLog] = []
-        for raw_kind in object_types:
-            kind = raw_kind.value if isinstance(raw_kind, SourceObjectKind) else str(raw_kind)
-            bucket = self._bucket(kind)
-            for obj in bucket:
-                if updated_after is not None and obj.reference.source_updated_at is not None:
-                    if obj.reference.source_updated_at <= updated_after:
-                        continue
-                items.append(obj)
+        for obj in self._bucket(kind.value):
+            if connector_id is not None and obj.reference.connector_id != connector_id:
+                continue
+            if updated_after is not None and obj.reference.source_updated_at is not None:
+                if obj.reference.source_updated_at <= updated_after:
+                    continue
+            items.append(obj)
 
         offset = 0
         if cursor is not None and str(cursor).strip():
@@ -109,11 +115,16 @@ class FileSourceAdapter(BaseSourceAdapter):
         has_more = next_offset < len(items)
         return SourcePage(
             items=page_items,
+            object_kind=kind,
+            connector_id=connector_id,
             next_cursor=str(next_offset) if has_more else None,
             has_more=has_more,
             server_time=datetime.now(UTC),
             schema_version="1",
         )
+
+    async def list_connectors(self) -> list[SourceConnector]:
+        return [connector.model_copy(deep=True) for connector in self._scenario.connectors]
 
     async def get_object(
         self,
@@ -139,11 +150,12 @@ class FileSourceAdapter(BaseSourceAdapter):
             }
         if not any(records.values()):
             return None
+        source_product, connector_id = _evidence_identity(self._scenario)
         return SourceEvidencePage(
             records_by_source=records,
-            source_product="file",
+            source_product=source_product,
             source_tenant_id=self._scenario.source_tenant_id,
-            connector_id="file-evidence",
+            connector_id=connector_id,
             schema_version="1",
         )
 
@@ -206,3 +218,14 @@ def _record_time(record: dict[str, Any]) -> datetime | None:
 def _after_watermark(record: dict[str, Any], updated_after: datetime) -> bool:
     observed_at = _record_time(record)
     return observed_at is None or observed_at > updated_after
+
+
+def _evidence_identity(scenario: MockXDRScenario) -> tuple[str, str]:
+    for bucket in (scenario.incidents, scenario.alerts, scenario.assets, scenario.logs):
+        if bucket:
+            reference = bucket[0].reference
+            return reference.source_product, reference.connector_id
+    if scenario.connectors:
+        connector = scenario.connectors[0]
+        return connector.source_product, connector.connector_id
+    raise ValueError("file scenario has evidence but no connector identity")

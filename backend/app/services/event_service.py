@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.v1.schemas import EventSummary
 from app.core.config import get_settings
-from app.core.errors import DependencyUnavailableError, ValidationError
+from app.core.errors import DependencyUnavailableError, EventNotFoundError, ValidationError
 from app.core.event_bus import EventBus
 from app.db import models as orm
 from app.models.disposition import SourceObjectLocator
@@ -41,6 +41,7 @@ from app.models.tool_meta import TERMINAL_DISPOSITION_TOOL
 from app.models.workflow import TransitionContext, validate_transition, validate_verdict_status
 from app.services.context_service import EventContextStore, event_summary_from_security_event
 from app.services.degraded_flag_service import DegradedFlagService
+from app.services.evidence_projection import EvidenceQueryScope
 from app.services.source_policy_resolver import (
     SourcePolicyResolver,
     connector_policy_from_row,
@@ -54,6 +55,35 @@ LINK_ROLE_RELATED = "related"
 LINK_ROLE_PROVISIONAL = "provisional"
 PROMOTION_NONE = "none"
 PROMOTION_PROMOTED = "promoted"
+
+
+def should_apply_source_update(
+    *,
+    stored_updated_at: datetime | None,
+    stored_token: str | None,
+    incoming_updated_at: datetime | None,
+    incoming_token: str | None,
+) -> bool:
+    """Accept only demonstrably newer mutable source state."""
+    if stored_updated_at is not None and incoming_updated_at is not None:
+        stored = (
+            stored_updated_at.astimezone(UTC)
+            if stored_updated_at.tzinfo is not None
+            else stored_updated_at.replace(tzinfo=UTC)
+        )
+        incoming = (
+            incoming_updated_at.astimezone(UTC)
+            if incoming_updated_at.tzinfo is not None
+            else incoming_updated_at.replace(tzinfo=UTC)
+        )
+        if incoming != stored:
+            return incoming > stored
+        return stored_token is None and incoming_token is not None
+    if stored_updated_at is not None:
+        return False
+    if incoming_updated_at is not None:
+        return True
+    return stored_token is None and incoming_token is not None
 
 
 class StateMachinePort(Protocol):
@@ -374,6 +404,76 @@ class EventService:
         async with self._session_factory() as session:
             row = await session.get(orm.SecurityEvent, event_id)
             return _security_event_from_row(row) if row else None
+
+    async def get_evidence_query_scope(self, event_id: str) -> EvidenceQueryScope:
+        """Derive the only permitted evidence tenant/connectors from trusted event state."""
+        event = await self.get_event(event_id)
+        if event is None:
+            raise EventNotFoundError(
+                f"security_event not found: {event_id}",
+                details={"event_id": event_id},
+            )
+        tenant_id = event.creation_source_ref.source_tenant_id
+        references = [event.creation_source_ref, *event.source_reference_snapshots]
+        products_by_connector: dict[str, str] = {}
+        for reference in references:
+            if reference.source_tenant_id != tenant_id:
+                raise ValidationError(
+                    "event source references span multiple source tenants",
+                    error_code="adapter_validation_error",
+                    details={
+                        "event_id": event_id,
+                        "expected_source_tenant_id": tenant_id,
+                        "conflicting_source_tenant_id": reference.source_tenant_id,
+                        "connector_id": reference.connector_id,
+                    },
+                )
+            existing_product = products_by_connector.get(reference.connector_id)
+            if existing_product not in (None, reference.source_product):
+                raise ValidationError(
+                    "event connector has conflicting source product ownership",
+                    error_code="adapter_validation_error",
+                    details={
+                        "event_id": event_id,
+                        "connector_id": reference.connector_id,
+                        "existing_source_product": existing_product,
+                        "conflicting_source_product": reference.source_product,
+                    },
+                )
+            products_by_connector[reference.connector_id] = reference.source_product
+
+        connector_ids = frozenset(products_by_connector)
+        async with self._session_factory() as session:
+            connectors = (
+                await session.scalars(
+                    select(orm.SourceConnector).where(
+                        orm.SourceConnector.connector_id.in_(connector_ids)
+                    )
+                )
+            ).all()
+        for connector in connectors:
+            expected_product = products_by_connector[connector.connector_id]
+            metadata_tenant = (connector.connector_metadata or {}).get("source_tenant_id")
+            if connector.source_product != expected_product or metadata_tenant not in (
+                None,
+                tenant_id,
+            ):
+                raise ValidationError(
+                    "event connector ownership conflicts with trusted event scope",
+                    error_code="adapter_validation_error",
+                    details={
+                        "event_id": event_id,
+                        "connector_id": connector.connector_id,
+                        "expected_source_product": expected_product,
+                        "existing_source_product": connector.source_product,
+                        "expected_source_tenant_id": tenant_id,
+                        "existing_source_tenant_id": metadata_tenant,
+                    },
+                )
+        return EvidenceQueryScope(
+            source_tenant_id=tenant_id,
+            connector_ids=connector_ids,
+        )
 
     async def list_events(
         self,
@@ -869,6 +969,49 @@ class EventService:
         ref = source.reference
         connector = await session.get(orm.SourceConnector, ref.connector_id)
         if connector is not None:
+            metadata = dict(connector.connector_metadata or {})
+            metadata_tenant = metadata.get("source_tenant_id")
+            if metadata_tenant is None:
+                existing_tenants = set(
+                    (
+                        await session.scalars(
+                            select(orm.SourceObject.source_tenant_id)
+                            .where(orm.SourceObject.connector_id == ref.connector_id)
+                            .distinct()
+                        )
+                    ).all()
+                )
+            else:
+                existing_tenants = {str(metadata_tenant)}
+            if connector.source_product != ref.source_product or existing_tenants - {
+                ref.source_tenant_id
+            }:
+                raise ValidationError(
+                    "connector tenant or product ownership conflicts with source reference",
+                    error_code="adapter_validation_error",
+                    details={
+                        "connector_id": ref.connector_id,
+                        "existing_source_product": connector.source_product,
+                        "incoming_source_product": ref.source_product,
+                        "existing_source_tenant_ids": sorted(existing_tenants),
+                        "incoming_source_tenant_id": ref.source_tenant_id,
+                    },
+                )
+            metadata["source_tenant_id"] = ref.source_tenant_id
+            if source.source_type:
+                existing_adapter = metadata.get("ingestion_adapter")
+                if existing_adapter not in (None, source.source_type):
+                    raise ValidationError(
+                        "connector cannot be reassigned to a different ingestion adapter",
+                        error_code="adapter_validation_error",
+                        details={
+                            "connector_id": ref.connector_id,
+                            "existing_adapter": existing_adapter,
+                            "incoming_adapter": source.source_type,
+                        },
+                    )
+                metadata["ingestion_adapter"] = source.source_type
+            connector.connector_metadata = metadata
             return connector
         settings = get_settings()
         is_mock = ref.source_product == "mock_xdr" or settings.source_mode == "mock_xdr"
@@ -897,6 +1040,12 @@ class EventService:
                 if is_mock
                 else DispositionPolicy.NOT_REQUIRED.value
             ),
+            connector_metadata=(
+                {
+                    **({"ingestion_adapter": source.source_type} if source.source_type else {}),
+                    "source_tenant_id": ref.source_tenant_id,
+                }
+            ),
         )
         session.add(connector)
         await session.flush()
@@ -910,19 +1059,30 @@ class EventService:
     ) -> orm.SourceObject:
         ref = source.reference
         existing = await session.scalar(
-            select(orm.SourceObject).where(
+            select(orm.SourceObject)
+            .where(
                 orm.SourceObject.source_product == ref.source_product,
                 orm.SourceObject.source_tenant_id == ref.source_tenant_id,
                 orm.SourceObject.connector_id == ref.connector_id,
                 orm.SourceObject.source_kind == ref.source_kind.value,
                 orm.SourceObject.source_object_id == ref.source_object_id,
             )
+            .with_for_update()
         )
         if existing is not None:
+            if not should_apply_source_update(
+                stored_updated_at=existing.current_source_updated_at,
+                stored_token=existing.current_concurrency_token,
+                incoming_updated_at=ref.source_updated_at,
+                incoming_token=ref.source_concurrency_token,
+            ):
+                return existing
             # Mutable current_* only — never overwrite investigation snapshot.
             existing.current_source_status_raw = ref.source_status_raw
             existing.current_source_disposition = ref.source_disposition.value
             existing.current_concurrency_token = ref.source_concurrency_token
+            existing.current_source_updated_at = ref.source_updated_at
+            existing.current_state_version += 1
             if source.normalized:
                 existing.normalized = source.normalized
             await session.flush()
@@ -949,6 +1109,8 @@ class EventService:
             current_source_status_raw=ref.source_status_raw,
             current_source_disposition=ref.source_disposition.value,
             current_concurrency_token=ref.source_concurrency_token,
+            current_source_updated_at=ref.source_updated_at,
+            current_state_version=1,
         )
         session.add(obj)
         await session.flush()

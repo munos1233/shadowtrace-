@@ -11,6 +11,7 @@ from app.services.evidence_projection import (
     build_query_tool_result,
     confidence_for_query_data,
     get_evidence_projection,
+    get_evidence_query_scope,
     query_output_schema,
 )
 from app.tools.inputs import TOOL_INPUT_MODELS
@@ -53,12 +54,15 @@ async def execute_projected_query(
     time_range = (
         (parsed_time_range.start, parsed_time_range.end) if parsed_time_range is not None else None
     )
+    cursor = getattr(parsed, "cursor", None)
+    limit = int(getattr(parsed, "limit", 100))
     data = await get_evidence_projection().query(
         source,
         entity,
         time_range,
-        cursor=None,
-        limit=100,
+        cursor=cursor,
+        limit=limit,
+        scope=get_evidence_query_scope(),
     )
     return build_query_tool_result(
         call_id=new_call_id(),

@@ -94,6 +94,7 @@ async def test_push_partial_acceptance_delivery_and_object_idempotency(
     async with session_factory() as session:
         connector = await session.get(orm.SourceConnector, connector_id)
         assert connector is not None
+        assert connector.connector_metadata["ingestion_adapter"] == "mock_xdr"
         deliveries = connector.connector_metadata["processed_delivery_ids"]
         assert f"delivery-{suffix}-1" in deliveries
         assert f"delivery-{suffix}-2" in deliveries
@@ -137,7 +138,7 @@ async def test_push_rejects_schema_incompatible_object_but_marks_delivery(
     async with session_factory() as session:
         connector = await session.get(orm.SourceConnector, connector_id)
         assert connector is not None
-        assert connector.status == ConnectorStatus.DEGRADED.value
+        assert connector.status == ConnectorStatus.ONLINE.value
 
     replay = await receiver.receive(envelope)
     assert replay.duplicate == 1

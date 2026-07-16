@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import exceptions as jsonschema_exceptions
 from jsonschema.protocols import Validator
@@ -32,6 +32,9 @@ from app.tools.base import (
     validate_tool_implementation,
 )
 from app.tools.specs import BASELINE_TOOL_METAS
+
+if TYPE_CHECKING:
+    from app.services.event_service import EventService
 
 _DISCOVERY_PACKAGES = ("query", "response", "verify", "rollback")
 _EXTERNAL_SCHEMA_REFS: dict[str, dict[str, Any]] = {
@@ -192,6 +195,47 @@ class ToolRegistry:
 
     def list_bindings(self, tool_name: str) -> list[ProviderToolBinding]:
         return [item.model_copy(deep=True) for item in self.get_tool(tool_name).bindings]
+
+    async def execute_event_query(
+        self,
+        event_id: str,
+        tool_name: str,
+        params: dict[str, Any],
+        *,
+        event_service: EventService,
+    ) -> dict[str, Any]:
+        """Execute a query inside an EventService-derived evidence boundary."""
+        registered = self.get_tool(tool_name)
+        if registered.tool_meta.tool_category is not ToolCategory.QUERY:
+            raise ToolValidationError(
+                f"tool {tool_name!r} is not an event-scoped query",
+                details={"tool_name": tool_name, "event_id": event_id},
+            )
+        reserved_scope_fields = {
+            "tenant_id",
+            "source_tenant_id",
+            "connector_id",
+            "connector_ids",
+        }
+        supplied_scope_fields = sorted(reserved_scope_fields.intersection(params))
+        if supplied_scope_fields:
+            raise ToolValidationError(
+                "evidence query scope cannot be supplied in request parameters",
+                details={
+                    "tool_name": tool_name,
+                    "event_id": event_id,
+                    "fields": supplied_scope_fields,
+                },
+            )
+
+        self.validate_input(tool_name, params)
+        scope = await event_service.get_evidence_query_scope(event_id)
+        from app.services.evidence_projection import bind_evidence_query_scope
+
+        with bind_evidence_query_scope(scope):
+            result = await registered.execute(params)
+        self.validate_output(tool_name, result)
+        return result
 
     def resolve_binding(
         self,

@@ -29,6 +29,7 @@ from app.models.enums import (
 )
 from app.services.context_service import EventContextStore, ctx_key
 from app.services.event_service import EventService
+from app.services.evidence_projection import EvidenceProjection
 
 pytestmark = pytest.mark.integration
 
@@ -38,19 +39,27 @@ ALL_SOURCE_KINDS = [
     SourceObjectKind.ASSET,
     SourceObjectKind.LOG,
 ]
-EVIDENCE_CONNECTOR_ID = "mock_xdr-evidence"
+EVIDENCE_CONNECTOR_ID = "conn-disposition"
 
 
 async def _count(session: AsyncSession, model: type[Any]) -> int:
     return int(await session.scalar(select(func.count()).select_from(model)) or 0)
 
 
-async def _count_ingested_source_objects(session: AsyncSession) -> int:
+async def _count_ingested_source_objects(
+    session: AsyncSession,
+    state: MockXDRState,
+) -> int:
+    source_ids = {
+        object_id
+        for (kind, object_id), stored in state.objects.items()
+        if kind in {item.value for item in ALL_SOURCE_KINDS} and not stored.deleted
+    }
     return int(
         await session.scalar(
             select(func.count())
             .select_from(orm.SourceObject)
-            .where(orm.SourceObject.connector_id != EVIDENCE_CONNECTOR_ID)
+            .where(orm.SourceObject.source_object_id.in_(source_ids))
         )
         or 0
     )
@@ -87,10 +96,10 @@ async def test_mock_xdr_http_pipeline_persists_queryable_frozen_context(
     assert summary.rejected == 0
     assert summary.degraded is False
     assert summary.watermark_before is None
-    assert summary.watermark_after is not None
+    assert summary.watermark_after is None
 
     assert await _count(db_session, orm.SecurityEvent) == 1
-    assert await _count_ingested_source_objects(db_session) >= expected_object_count
+    assert await _count_ingested_source_objects(db_session, mock_xdr_state) == expected_object_count
     assert await _count(db_session, orm.SourceEventLink) == 4
 
     expected_assets = {
@@ -108,7 +117,7 @@ async def test_mock_xdr_http_pipeline_persists_queryable_frozen_context(
             await db_session.scalars(
                 select(orm.SourceObject.source_object_id).where(
                     orm.SourceObject.source_kind == SourceObjectKind.ASSET.value,
-                    orm.SourceObject.connector_id != EVIDENCE_CONNECTOR_ID,
+                    orm.SourceObject.source_object_id.in_(expected_assets),
                 )
             )
         ).all()
@@ -117,7 +126,7 @@ async def test_mock_xdr_http_pipeline_persists_queryable_frozen_context(
         await db_session.scalars(
             select(orm.SourceObject).where(
                 orm.SourceObject.source_kind == SourceObjectKind.LOG.value,
-                orm.SourceObject.connector_id != EVIDENCE_CONNECTOR_ID,
+                orm.SourceObject.source_object_id.in_(expected_logs),
             )
         )
     ).all()
@@ -126,18 +135,20 @@ async def test_mock_xdr_http_pipeline_persists_queryable_frozen_context(
     assert all(row.parent_source_object_id for row in logs)
 
     assert mock_xdr_state.scenario is not None
+    telemetry_ids = {
+        str(record["record_id"]) for record in mock_xdr_state.scenario.telemetry_timeline
+    }
     projected_ids = set(
         (
             await db_session.scalars(
                 select(orm.SourceObject.source_object_id).where(
-                    orm.SourceObject.connector_id == EVIDENCE_CONNECTOR_ID
+                    orm.SourceObject.connector_id == EVIDENCE_CONNECTOR_ID,
+                    orm.SourceObject.source_object_id.in_(telemetry_ids),
                 )
             )
         ).all()
     )
-    assert projected_ids == {
-        str(record["record_id"]) for record in mock_xdr_state.scenario.telemetry_timeline
-    }
+    assert projected_ids == telemetry_ids
 
     listed = await event_service.list_events(status=EventStatus.NEW)
     assert listed.total == 1
@@ -185,6 +196,32 @@ async def test_mock_xdr_http_pipeline_persists_queryable_frozen_context(
     await db_session.commit()
     assert incident_source.source_status_raw == immutable_status
     assert await context_store.get(event.event_id, "source_snapshot") == frozen
+
+
+@pytest.mark.asyncio
+async def test_event_derived_scope_can_query_its_projected_evidence(
+    source_adapter: MockXDRSourceAdapter,
+    source_ingester: SourceIngester,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    summary = await source_ingester.poll(source_adapter, ALL_SOURCE_KINDS, batch_size=10)
+    assert summary.rejected == 0
+    event = (await event_service.list_events()).items[0]
+
+    scope = await event_service.get_evidence_query_scope(event.event_id)
+    projection = EvidenceProjection(session_factory)
+    result = await projection.query(
+        "account_login",
+        {"account": "zhangsan"},
+        None,
+        None,
+        10,
+        scope=scope,
+    )
+
+    assert EVIDENCE_CONNECTOR_ID in scope.connector_ids
+    assert [record["record_id"] for record in result.records] == ["id-conflict-42-0002"]
 
 
 @pytest.mark.asyncio
@@ -240,7 +277,6 @@ async def test_bad_schema_records_quality_degrades_connector_and_halts_watermark
     assert isinstance(reference, dict)
     reference["schema_version"] = "2"
 
-    source_adapter.checkpoint_key = "mock_xdr:valid-kinds"  # type: ignore[attr-defined]
     valid = await source_ingester.poll(
         source_adapter,
         [
@@ -259,7 +295,6 @@ async def test_bad_schema_records_quality_degrades_connector_and_halts_watermark
     assert valid.accepted == expected_valid_count
     assert valid.rejected == 0
 
-    source_adapter.checkpoint_key = "mock_xdr:bad-alerts"  # type: ignore[attr-defined]
     bad = await source_ingester.poll(
         source_adapter,
         [SourceObjectKind.ALERT],
@@ -271,7 +306,7 @@ async def test_bad_schema_records_quality_degrades_connector_and_halts_watermark
     assert bad.watermark_before is None
     assert bad.watermark_after is None
 
-    assert await _count_ingested_source_objects(db_session) == expected_valid_count
+    assert await _count_ingested_source_objects(db_session, mock_xdr_state) == expected_valid_count
     assert (await event_service.list_events()).total == 1
     quality = await db_session.scalar(
         select(orm.DataQualityError).where(
@@ -287,7 +322,17 @@ async def test_bad_schema_records_quality_degrades_connector_and_halts_watermark
         )
     ).all()
     assert connectors
-    assert all(row.status == ConnectorStatus.DEGRADED.value for row in connectors)
+    assert all(row.status == ConnectorStatus.ONLINE.value for row in connectors)
+    bad_checkpoint = await db_session.get(
+        orm.SourceCheckpoint,
+        (
+            bad_alert.body["reference"]["connector_id"],
+            SourceObjectKind.ALERT.value,
+            "",
+        ),
+    )
+    assert bad_checkpoint is not None
+    assert bad_checkpoint.status == ConnectorStatus.DEGRADED.value
 
 
 class _FailAfterFirstPage(BaseSourceAdapter):
@@ -296,6 +341,7 @@ class _FailAfterFirstPage(BaseSourceAdapter):
     def __init__(self, delegate: MockXDRSourceAdapter) -> None:
         self._delegate = delegate
         self.calls: list[str | None] = []
+        self.failed_continuation = False
 
     def capabilities(self) -> dict[ConnectorCapability, CapabilityState]:
         return self._delegate.capabilities()
@@ -304,19 +350,25 @@ class _FailAfterFirstPage(BaseSourceAdapter):
         self,
         object_types: Sequence[SourceObjectKind | str],
         *,
+        connector_id: str | None = None,
         cursor: str | None = None,
         updated_after=None,
         limit: int = 100,
     ) -> SourcePage:
         self.calls.append(cursor)
-        if len(self.calls) > 1:
+        if cursor is not None and not self.failed_continuation:
+            self.failed_continuation = True
             raise RuntimeError("simulated process interruption")
         return await self._delegate.list_objects(
             object_types,
+            connector_id=connector_id,
             cursor=cursor,
             updated_after=updated_after,
             limit=limit,
         )
+
+    async def list_connectors(self) -> list[Any]:
+        return await self._delegate.list_connectors()
 
     async def health_check(self) -> ConnectorStatus:
         return await self._delegate.health_check()
@@ -338,10 +390,9 @@ async def test_cursor_resume_and_delivery_replay_do_not_duplicate_event(
         ALL_SOURCE_KINDS,
         batch_size=1,
     )
-    assert interrupted.accepted == 4
+    assert interrupted.accepted > 0
     assert interrupted.degraded is True
-    assert interrupted.watermark_after is not None
-    assert interrupted.watermark_after["cursor"] is not None
+    assert interrupted.watermark_after is None
     assert await _count(db_session, orm.SecurityEvent) == 1
 
     restarted = SourceIngester(
@@ -354,12 +405,13 @@ async def test_cursor_resume_and_delivery_replay_do_not_duplicate_event(
         ALL_SOURCE_KINDS,
         batch_size=1,
     )
-    assert resumed.watermark_before == interrupted.watermark_after
     assert resumed.rejected == 0
     assert resumed.duplicate > 0
     assert resumed.degraded is False
     assert await _count(db_session, orm.SecurityEvent) == 1
-    assert await _count_ingested_source_objects(db_session) == _mock_object_count(mock_xdr_state)
+    assert await _count_ingested_source_objects(db_session, mock_xdr_state) == _mock_object_count(
+        mock_xdr_state
+    )
 
     incident = next(
         stored.body

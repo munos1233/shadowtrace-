@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import hashlib
 import re
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.errors import GuardrailViolationError, ValidationError
 from app.db import models as orm
 from app.models.enums import ConnectorStatus, SourceDisposition, SourceObjectKind
 from app.models.source import SourceReference
@@ -81,6 +83,15 @@ class EvidenceQueryData(BaseModel):
     degraded: bool
 
 
+class EvidenceQueryScope(BaseModel):
+    """Trusted event-derived tenant and connector boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_tenant_id: str = Field(min_length=1)
+    connector_ids: frozenset[str] = Field(min_length=1)
+
+
 @dataclass(slots=True)
 class _ProjectionRow:
     source_record_id: str
@@ -89,9 +100,20 @@ class _ProjectionRow:
     source_reference: SourceReference
     event_time: datetime | None
     ingested_at: datetime
+    indexed_at: datetime
     connector_status: ConnectorStatus
     last_sync_at: datetime | None
     watermark: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class _ConnectorProjectionState:
+    connector_id: str
+    object_kind: SourceObjectKind
+    status: ConnectorStatus
+    last_sync_at: datetime | None
+    watermark: dict[str, Any] | None
+    degraded_reason: str | None = None
 
 
 class EvidenceProjection:
@@ -106,6 +128,9 @@ class EvidenceProjection:
         self._session_factory = session_factory
         self._stale_after = stale_after
         self._memory_rows: dict[str, _ProjectionRow] = {}
+        self._memory_connectors: dict[
+            tuple[str, str, SourceObjectKind], _ConnectorProjectionState
+        ] = {}
 
     @classmethod
     def in_memory(cls, *, stale_after: timedelta = timedelta(hours=1)) -> EvidenceProjection:
@@ -120,12 +145,16 @@ class EvidenceProjection:
         source_tenant_id: str,
         connector_id: str,
         schema_version: str = "1",
-        connector_status: ConnectorStatus = ConnectorStatus.ONLINE,
+        connector_status: ConnectorStatus | None = None,
         watermark: dict[str, Any] | None = None,
         ingested_at: datetime | None = None,
     ) -> int:
         """Normalize raw telemetry into traceable SourceLog/SourceAsset rows."""
         observed_at = _as_utc(ingested_at or datetime.now(UTC))
+        indexed_at = datetime.now(UTC)
+        effective_status = connector_status or (
+            ConnectorStatus.ONLINE if self._session_factory is None else ConnectorStatus.UNKNOWN
+        )
         prepared = [
             self._prepare_row(
                 channel=str(record.get("channel") or source),
@@ -134,19 +163,39 @@ class EvidenceProjection:
                 source_tenant_id=source_tenant_id,
                 connector_id=connector_id,
                 schema_version=schema_version,
-                connector_status=connector_status,
+                connector_status=effective_status,
                 watermark=watermark,
                 ingested_at=observed_at,
+                indexed_at=indexed_at,
             )
             for source, records in records_by_source.items()
             for record in records
         ]
         if self._session_factory is None:
+            prepared_kinds = {row.source_reference.source_kind for row in prepared}
+            if not prepared_kinds:
+                prepared_kinds = {
+                    SourceObjectKind.ASSET
+                    if str(source).strip().lower() == "asset"
+                    else SourceObjectKind.LOG
+                    for source in records_by_source
+                } or {SourceObjectKind.LOG}
+            for kind in prepared_kinds:
+                key = (source_tenant_id, connector_id, kind)
+                existing_state = self._memory_connectors.get(key)
+                self._memory_connectors[key] = _ConnectorProjectionState(
+                    connector_id=connector_id,
+                    object_kind=kind,
+                    status=(
+                        existing_state.status if existing_state is not None else effective_status
+                    ),
+                    last_sync_at=observed_at,
+                    watermark=dict(watermark) if watermark is not None else None,
+                )
             inserted = 0
             for row in prepared:
                 existing = self._memory_rows.get(row.source_record_id)
                 if existing is not None:
-                    existing.connector_status = connector_status
                     existing.last_sync_at = observed_at
                     existing.watermark = dict(watermark) if watermark is not None else None
                     continue
@@ -156,6 +205,7 @@ class EvidenceProjection:
         return await self._persist_rows(
             prepared,
             source_product=source_product,
+            source_tenant_id=source_tenant_id,
             connector_id=connector_id,
             schema_version=schema_version,
             connector_status=connector_status,
@@ -170,16 +220,27 @@ class EvidenceProjection:
         time_range: tuple[datetime, datetime] | None,
         cursor: str | None,
         limit: int,
+        *,
+        scope: EvidenceQueryScope,
     ) -> EvidenceQueryData:
         """Filter and page one logical evidence source."""
         if limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
-        offset = _decode_cursor(cursor)
+        query_fingerprint = _query_fingerprint(source, entity, time_range, scope)
+        cursor_state = _decode_cursor(cursor, query_fingerprint)
+        snapshot_at = cursor_state["snapshot_at"] if cursor_state is not None else datetime.now(UTC)
         rows = (
-            await self._history_rows()
+            await self._history_rows(scope, snapshot_at)
             if source == "history_cases"
-            else await self._source_rows(_SOURCE_CHANNELS[source])
+            else await self._source_rows(_SOURCE_CHANNELS[source], scope, snapshot_at)
         )
+        rows = [
+            row
+            for row in rows
+            if row.source_reference.source_tenant_id == scope.source_tenant_id
+            and row.source_reference.connector_id in scope.connector_ids
+            and row.indexed_at <= snapshot_at
+        ]
         rows = [row for row in rows if _eligible_for_source(source, row.record)]
         availability_rows = rows
         filtered = [
@@ -190,19 +251,36 @@ class EvidenceProjection:
         ]
         if source == "history_cases":
             filtered = _rank_history_rows(filtered, str(entity.get("pattern_description") or ""))
-        else:
-            filtered.sort(
-                key=lambda row: (
-                    row.event_time or datetime.min.replace(tzinfo=UTC),
-                    row.source_record_id,
-                )
+        filtered.sort(key=lambda row: _pagination_key(source, row))
+        ceiling = (
+            cursor_state["ceiling"]
+            if cursor_state is not None
+            else (_pagination_key(source, filtered[-1]) if filtered else None)
+        )
+        after = cursor_state["after"] if cursor_state is not None else None
+        candidates = [
+            row
+            for row in filtered
+            if (after is None or _pagination_key(source, row) > after)
+            and (ceiling is None or _pagination_key(source, row) <= ceiling)
+        ]
+        page = candidates[:limit]
+        has_more = len(candidates) > len(page)
+        next_cursor = (
+            _encode_cursor(
+                query_fingerprint,
+                after=_pagination_key(source, page[-1]),
+                ceiling=ceiling,
+                snapshot_at=snapshot_at,
             )
-
-        page = filtered[offset : offset + limit]
-        next_cursor = f"evp:{offset + len(page)}" if offset + len(page) < len(filtered) else None
+            if has_more and page and ceiling is not None
+            else None
+        )
+        connector_states = await self._connector_states(source, scope)
         freshness, coverage, degraded = self._quality_projection(
             source,
             availability_rows,
+            connector_states,
         )
         records = [
             {
@@ -242,6 +320,7 @@ class EvidenceProjection:
         connector_status: ConnectorStatus,
         watermark: dict[str, Any] | None,
         ingested_at: datetime,
+        indexed_at: datetime,
     ) -> _ProjectionRow:
         normalized_channel = channel.strip().lower()
         payload = orjson.loads(orjson.dumps(dict(record)))
@@ -280,6 +359,7 @@ class EvidenceProjection:
             source_reference=reference,
             event_time=event_time,
             ingested_at=ingested_at,
+            indexed_at=indexed_at,
             connector_status=connector_status,
             last_sync_at=ingested_at,
             watermark=dict(watermark) if watermark is not None else None,
@@ -290,9 +370,10 @@ class EvidenceProjection:
         rows: Sequence[_ProjectionRow],
         *,
         source_product: str,
+        source_tenant_id: str,
         connector_id: str,
         schema_version: str,
-        connector_status: ConnectorStatus,
+        connector_status: ConnectorStatus | None,
         watermark: dict[str, Any] | None,
         observed_at: datetime,
     ) -> int:
@@ -305,20 +386,52 @@ class EvidenceProjection:
                         connector_id=connector_id,
                         source_product=source_product,
                         display_name=f"Evidence projection: {connector_id}",
-                        status=connector_status.value,
-                        schema_version=schema_version,
-                        last_sync_at=observed_at,
-                        watermark=dict(watermark) if watermark is not None else None,
-                        connector_metadata={"evidence_projection": True},
+                        status=ConnectorStatus.UNKNOWN.value,
+                        schema_version="1",
+                        connector_metadata={
+                            "evidence_projection": True,
+                            "source_tenant_id": source_tenant_id,
+                        },
                     )
                     session.add(connector)
                     await session.flush()
                 else:
-                    connector.status = connector_status.value
-                    connector.schema_version = schema_version
-                    connector.last_sync_at = observed_at
-                    if watermark is not None:
-                        connector.watermark = dict(watermark)
+                    if connector.source_product != source_product:
+                        raise ValidationError(
+                            "connector cannot be reassigned to a different source product",
+                            error_code="adapter_validation_error",
+                            details={
+                                "connector_id": connector_id,
+                                "existing_source_product": connector.source_product,
+                                "incoming_source_product": source_product,
+                            },
+                        )
+                    metadata = dict(connector.connector_metadata or {})
+                    existing_tenant = metadata.get("source_tenant_id")
+                    if existing_tenant is None:
+                        existing_tenants = set(
+                            (
+                                await session.scalars(
+                                    select(orm.SourceObject.source_tenant_id)
+                                    .where(orm.SourceObject.connector_id == connector_id)
+                                    .distinct()
+                                )
+                            ).all()
+                        )
+                    else:
+                        existing_tenants = {str(existing_tenant)}
+                    if existing_tenants - {source_tenant_id}:
+                        raise ValidationError(
+                            "connector cannot be reassigned to a different source tenant",
+                            error_code="adapter_validation_error",
+                            details={
+                                "connector_id": connector_id,
+                                "existing_source_tenant_ids": sorted(existing_tenants),
+                                "incoming_source_tenant_id": source_tenant_id,
+                            },
+                        )
+                    metadata["source_tenant_id"] = source_tenant_id
+                    connector.connector_metadata = metadata
 
                 inserted = 0
                 for row in rows:
@@ -345,6 +458,8 @@ class EvidenceProjection:
                             raw_payload=dict(row.record),
                             current_source_status_raw=ref.source_status_raw,
                             current_source_disposition=ref.source_disposition.value,
+                            current_source_updated_at=ref.source_updated_at,
+                            current_state_version=1,
                             source_sync_state="synced",
                         )
                     )
@@ -352,9 +467,21 @@ class EvidenceProjection:
                 await session.flush()
                 return inserted
 
-    async def _source_rows(self, channels: frozenset[str]) -> list[_ProjectionRow]:
+    async def _source_rows(
+        self,
+        channels: frozenset[str],
+        scope: EvidenceQueryScope,
+        snapshot_at: datetime,
+    ) -> list[_ProjectionRow]:
         if self._session_factory is None:
-            return [row for row in self._memory_rows.values() if row.channel in channels]
+            return [
+                row
+                for row in self._memory_rows.values()
+                if row.channel in channels
+                and row.source_reference.source_tenant_id == scope.source_tenant_id
+                and row.source_reference.connector_id in scope.connector_ids
+                and row.indexed_at <= snapshot_at
+            ]
 
         async with self._session_factory() as session:
             objects = (
@@ -362,12 +489,16 @@ class EvidenceProjection:
                     select(orm.SourceObject).where(
                         orm.SourceObject.source_kind.in_(
                             (SourceObjectKind.LOG.value, SourceObjectKind.ASSET.value)
-                        )
+                        ),
+                        orm.SourceObject.source_tenant_id == scope.source_tenant_id,
+                        orm.SourceObject.connector_id.in_(scope.connector_ids),
+                        orm.SourceObject.created_at <= snapshot_at,
                     )
                 )
             ).all()
             connector_ids = {row.connector_id for row in objects}
             connectors = {}
+            checkpoints: dict[tuple[str, str], orm.SourceCheckpoint] = {}
             if connector_ids:
                 connectors = {
                     row.connector_id: row
@@ -379,16 +510,53 @@ class EvidenceProjection:
                         )
                     ).all()
                 }
-            projected = [_row_from_orm(row, connectors.get(row.connector_id)) for row in objects]
+                checkpoint_rows = (
+                    await session.scalars(
+                        select(orm.SourceCheckpoint).where(
+                            orm.SourceCheckpoint.connector_id.in_(connector_ids)
+                        )
+                    )
+                ).all()
+                checkpoints = _checkpoint_index(checkpoint_rows)
+            projected = [
+                _row_from_orm(
+                    row,
+                    connectors.get(row.connector_id),
+                    checkpoints.get((row.connector_id, row.source_kind)),
+                )
+                for row in objects
+            ]
             return [row for row in projected if row.channel in channels]
 
-    async def _history_rows(self) -> list[_ProjectionRow]:
-        memory = [row for row in self._memory_rows.values() if row.channel == "history_cases"]
+    async def _history_rows(
+        self,
+        scope: EvidenceQueryScope,
+        snapshot_at: datetime,
+    ) -> list[_ProjectionRow]:
+        memory = [
+            row
+            for row in self._memory_rows.values()
+            if row.channel == "history_cases"
+            and row.source_reference.source_tenant_id == scope.source_tenant_id
+            and row.source_reference.connector_id in scope.connector_ids
+            and row.indexed_at <= snapshot_at
+        ]
         if self._session_factory is None:
             return memory
 
         async with self._session_factory() as session:
-            events = (await session.scalars(select(orm.SecurityEvent))).all()
+            events = (
+                await session.scalars(
+                    select(orm.SecurityEvent).where(
+                        orm.SecurityEvent.created_at <= snapshot_at,
+                        orm.SecurityEvent.creation_source_ref["source_tenant_id"].as_string()
+                        == scope.source_tenant_id,
+                        orm.SecurityEvent.creation_source_ref["connector_id"]
+                        .as_string()
+                        .in_(scope.connector_ids),
+                    )
+                )
+            ).all()
             rows: list[_ProjectionRow] = []
             for event in events:
                 try:
@@ -413,6 +581,7 @@ class EvidenceProjection:
                         source_reference=reference,
                         event_time=event_time,
                         ingested_at=_as_utc(event.created_at),
+                        indexed_at=_as_utc(event.created_at),
                         connector_status=ConnectorStatus.ONLINE,
                         last_sync_at=_as_utc(event.updated_at),
                         watermark=None,
@@ -420,13 +589,109 @@ class EvidenceProjection:
                 )
             return rows
 
+    async def _connector_states(
+        self,
+        source: ProjectionSource,
+        scope: EvidenceQueryScope,
+    ) -> list[_ConnectorProjectionState]:
+        kinds = _projection_kinds(source)
+        if self._session_factory is None:
+            return [
+                state
+                for (tenant_id, connector_id, kind), state in self._memory_connectors.items()
+                if tenant_id == scope.source_tenant_id
+                and connector_id in scope.connector_ids
+                and kind in kinds
+            ]
+        async with self._session_factory() as session:
+            connectors = {
+                row.connector_id: row
+                for row in (
+                    await session.scalars(
+                        select(orm.SourceConnector).where(
+                            orm.SourceConnector.connector_id.in_(scope.connector_ids)
+                        )
+                    )
+                ).all()
+            }
+            checkpoint_rows = (
+                await session.scalars(
+                    select(orm.SourceCheckpoint).where(
+                        orm.SourceCheckpoint.connector_id.in_(scope.connector_ids),
+                        orm.SourceCheckpoint.object_kind.in_([kind.value for kind in kinds]),
+                    )
+                )
+            ).all()
+            checkpoints = {
+                (connector_id, SourceObjectKind(object_kind)): checkpoint
+                for (connector_id, object_kind), checkpoint in _checkpoint_index(
+                    checkpoint_rows
+                ).items()
+            }
+        states: list[_ConnectorProjectionState] = []
+        for connector_id in sorted(scope.connector_ids):
+            connector = connectors.get(connector_id)
+            for kind in kinds:
+                checkpoint = checkpoints.get((connector_id, kind))
+                status = _connector_status(
+                    checkpoint.status
+                    if checkpoint is not None
+                    else (connector.status if connector is not None else None)
+                )
+                states.append(
+                    _ConnectorProjectionState(
+                        connector_id=connector_id,
+                        object_kind=kind,
+                        status=status,
+                        last_sync_at=(
+                            checkpoint.last_sync_at
+                            if checkpoint is not None
+                            else (connector.last_sync_at if connector is not None else None)
+                        ),
+                        watermark=(
+                            dict(checkpoint.watermark)
+                            if checkpoint is not None and checkpoint.watermark is not None
+                            else None
+                        ),
+                        degraded_reason=(
+                            checkpoint.degraded_reason if checkpoint is not None else None
+                        ),
+                    )
+                )
+        return states
+
     def _quality_projection(
         self,
         source: ProjectionSource,
         rows: Sequence[_ProjectionRow],
+        connector_states: Sequence[_ConnectorProjectionState],
     ) -> tuple[DataFreshness, EvidenceCoverage, bool]:
         stale_after_seconds = int(self._stale_after.total_seconds())
+        unavailable = sorted(
+            {
+                *(
+                    row.source_reference.connector_id
+                    for row in rows
+                    if row.connector_status is not ConnectorStatus.ONLINE
+                ),
+                *(
+                    state.connector_id
+                    for state in connector_states
+                    if state.status is not ConnectorStatus.ONLINE
+                ),
+            }
+        )
+        state_reasons = sorted(
+            {
+                state.degraded_reason
+                for state in connector_states
+                if state.degraded_reason is not None
+            }
+        )
         if not rows:
+            missing_reasons = state_reasons or ["projection_source_missing"]
+            if unavailable and "connector_unavailable" not in missing_reasons:
+                missing_reasons.append("connector_unavailable")
             return (
                 DataFreshness(
                     state="missing",
@@ -435,13 +700,21 @@ class EvidenceProjection:
                 EvidenceCoverage(
                     state="missing",
                     requested_sources=[source],
-                    reasons=["projection_source_missing"],
+                    unavailable_connectors=unavailable,
+                    reasons=missing_reasons,
                 ),
                 True,
             )
 
         latest_record_at = _max_datetime(row.event_time for row in rows)
-        last_sync_at = _max_datetime((row.last_sync_at or row.ingested_at) for row in rows)
+        last_sync_at = _max_datetime(
+            iter(
+                [
+                    *(row.last_sync_at or row.ingested_at for row in rows),
+                    *(state.last_sync_at for state in connector_states),
+                ]
+            )
+        )
         stale = (
             last_sync_at is None or datetime.now(UTC) - _as_utc(last_sync_at) > self._stale_after
         )
@@ -451,14 +724,7 @@ class EvidenceProjection:
             last_sync_at=last_sync_at,
             stale_after_seconds=stale_after_seconds,
         )
-        unavailable = sorted(
-            {
-                row.source_reference.connector_id
-                for row in rows
-                if row.connector_status is not ConnectorStatus.ONLINE
-            }
-        )
-        reasons: list[str] = []
+        reasons: list[str] = list(state_reasons)
         if stale:
             reasons.append("projection_stale")
         if unavailable:
@@ -518,6 +784,9 @@ def confidence_for_query_data(data: EvidenceQueryData) -> float:
 _projection_override: contextvars.ContextVar[EvidenceProjection | None] = contextvars.ContextVar(
     "evidence_projection_override", default=None
 )
+_scope_override: contextvars.ContextVar[EvidenceQueryScope | None] = contextvars.ContextVar(
+    "evidence_query_scope_override", default=None
+)
 _default_projection: EvidenceProjection | None = None
 
 
@@ -544,9 +813,30 @@ def bind_evidence_projection(projection: EvidenceProjection) -> Iterator[None]:
         _projection_override.reset(token)
 
 
+def get_evidence_query_scope() -> EvidenceQueryScope:
+    scope = _scope_override.get()
+    if scope is None:
+        raise GuardrailViolationError(
+            "evidence query requires trusted event scope",
+            error_code="guardrail_violation",
+        )
+    return scope
+
+
+@contextmanager
+def bind_evidence_query_scope(scope: EvidenceQueryScope) -> Iterator[None]:
+    """Bind a trusted EventService-derived query boundary."""
+    token = _scope_override.set(scope)
+    try:
+        yield
+    finally:
+        _scope_override.reset(token)
+
+
 def _row_from_orm(
     row: orm.SourceObject,
     connector: orm.SourceConnector | None,
+    checkpoint: orm.SourceCheckpoint | None,
 ) -> _ProjectionRow:
     payload = {**(row.raw_payload or {}), **(row.normalized or {})}
     channel = str(
@@ -572,12 +862,11 @@ def _row_from_orm(
         ingested_at=row.ingested_at,
         raw_payload_hash=row.raw_payload_hash,
     )
-    status = ConnectorStatus.UNKNOWN
-    if connector is not None:
-        try:
-            status = ConnectorStatus(connector.status)
-        except ValueError:
-            status = ConnectorStatus.UNKNOWN
+    status = _connector_status(
+        checkpoint.status
+        if checkpoint is not None
+        else (connector.status if connector is not None else None)
+    )
     return _ProjectionRow(
         source_record_id=row.source_record_id,
         channel=channel,
@@ -585,15 +874,18 @@ def _row_from_orm(
         source_reference=reference,
         event_time=_record_time(payload, row.source_updated_at),
         ingested_at=_as_utc(row.ingested_at or row.created_at),
+        indexed_at=_as_utc(row.created_at),
         connector_status=status,
         last_sync_at=(
-            _as_utc(connector.last_sync_at)
+            _as_utc(checkpoint.last_sync_at)
+            if checkpoint is not None and checkpoint.last_sync_at is not None
+            else _as_utc(connector.last_sync_at)
             if connector is not None and connector.last_sync_at is not None
             else None
         ),
         watermark=(
-            dict(connector.watermark)
-            if connector is not None and connector.watermark is not None
+            dict(checkpoint.watermark)
+            if checkpoint is not None and checkpoint.watermark is not None
             else None
         ),
     )
@@ -803,18 +1095,130 @@ def _terms(value: str) -> set[str]:
     return {term.casefold() for term in _WORD_RE.findall(value) if len(term) > 1}
 
 
-def _decode_cursor(cursor: str | None) -> int:
+def _projection_kinds(source: ProjectionSource) -> frozenset[SourceObjectKind]:
+    if source in {"asset_info", "vuln_info"}:
+        return frozenset({SourceObjectKind.ASSET})
+    if source == "history_cases":
+        return frozenset({SourceObjectKind.INCIDENT, SourceObjectKind.ALERT})
+    return frozenset({SourceObjectKind.LOG})
+
+
+def _connector_status(value: str | None) -> ConnectorStatus:
+    try:
+        return ConnectorStatus(value) if value is not None else ConnectorStatus.UNKNOWN
+    except ValueError:
+        return ConnectorStatus.UNKNOWN
+
+
+def _checkpoint_index(
+    rows: Sequence[orm.SourceCheckpoint],
+) -> dict[tuple[str, str], orm.SourceCheckpoint]:
+    """Collapse stream scopes pessimistically for connector/kind query health."""
+    priority = {
+        ConnectorStatus.ONLINE: 0,
+        ConnectorStatus.UNKNOWN: 1,
+        ConnectorStatus.DEGRADED: 2,
+        ConnectorStatus.OFFLINE: 3,
+    }
+    selected: dict[tuple[str, str], orm.SourceCheckpoint] = {}
+    for row in rows:
+        key = (row.connector_id, row.object_kind)
+        current = selected.get(key)
+        if current is None:
+            selected[key] = row
+            continue
+        row_rank = priority[_connector_status(row.status)]
+        current_rank = priority[_connector_status(current.status)]
+        if row_rank > current_rank or (
+            row_rank == current_rank
+            and (row.last_sync_at or row.updated_at) > (current.last_sync_at or current.updated_at)
+        ):
+            selected[key] = row
+    return selected
+
+
+def _pagination_key(source: ProjectionSource, row: _ProjectionRow) -> tuple[Any, ...]:
+    if source == "history_cases":
+        score = float(row.record.get("keyword_score") or 0.0)
+        timestamp = (row.event_time or datetime(1970, 1, 1, tzinfo=UTC)).timestamp()
+        return (-score, -timestamp, row.source_record_id)
+    event_time = row.event_time or datetime.min.replace(tzinfo=UTC)
+    return (event_time.isoformat(), row.source_record_id)
+
+
+def _query_fingerprint(
+    source: ProjectionSource,
+    entity: Mapping[str, Any],
+    time_range: tuple[datetime, datetime] | None,
+    scope: EvidenceQueryScope,
+) -> str:
+    payload = {
+        "source": source,
+        "entity": dict(entity),
+        "time_range": (
+            [_as_utc(time_range[0]).isoformat(), _as_utc(time_range[1]).isoformat()]
+            if time_range is not None
+            else None
+        ),
+        "source_tenant_id": scope.source_tenant_id,
+        "connector_ids": sorted(scope.connector_ids),
+    }
+    return hashlib.sha256(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)).hexdigest()[:24]
+
+
+def _encode_cursor(
+    query_fingerprint: str,
+    *,
+    after: tuple[Any, ...],
+    ceiling: tuple[Any, ...],
+    snapshot_at: datetime,
+) -> str:
+    encoded = base64.urlsafe_b64encode(
+        orjson.dumps(
+            {
+                "version": 1,
+                "query": query_fingerprint,
+                "after": after,
+                "ceiling": ceiling,
+                "snapshot_at": _as_utc(snapshot_at).isoformat(),
+            },
+            option=orjson.OPT_SORT_KEYS,
+        )
+    ).decode()
+    return f"evp1:{encoded.rstrip('=')}"
+
+
+def _decode_cursor(
+    cursor: str | None,
+    query_fingerprint: str,
+) -> dict[str, Any] | None:
     if cursor is None:
-        return 0
-    if not cursor.startswith("evp:"):
+        return None
+    if not cursor.startswith("evp1:"):
         raise ValueError("invalid evidence projection cursor")
     try:
-        offset = int(cursor.removeprefix("evp:"))
-    except ValueError as exc:
+        raw = cursor.removeprefix("evp1:")
+        padding = "=" * (-len(raw) % 4)
+        payload = orjson.loads(base64.urlsafe_b64decode(raw + padding))
+    except (ValueError, TypeError) as exc:
         raise ValueError("invalid evidence projection cursor") from exc
-    if offset < 0:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("version") != 1
+        or payload.get("query") != query_fingerprint
+        or not isinstance(payload.get("after"), list)
+        or not isinstance(payload.get("ceiling"), list)
+        or not isinstance(payload.get("snapshot_at"), str)
+    ):
         raise ValueError("invalid evidence projection cursor")
-    return offset
+    snapshot_at = _parse_datetime(payload["snapshot_at"])
+    if snapshot_at is None:
+        raise ValueError("invalid evidence projection cursor")
+    return {
+        "after": tuple(payload["after"]),
+        "ceiling": tuple(payload["ceiling"]),
+        "snapshot_at": snapshot_at,
+    }
 
 
 def _payload_hash(payload: Mapping[str, Any]) -> str:
@@ -825,11 +1229,14 @@ __all__ = [
     "DataFreshness",
     "EvidenceCoverage",
     "EvidenceProjection",
+    "EvidenceQueryScope",
     "EvidenceQueryData",
     "ProjectionSource",
+    "bind_evidence_query_scope",
     "bind_evidence_projection",
     "build_query_tool_result",
     "confidence_for_query_data",
+    "get_evidence_query_scope",
     "get_evidence_projection",
     "query_output_schema",
 ]

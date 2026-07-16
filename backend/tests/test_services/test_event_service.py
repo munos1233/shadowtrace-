@@ -526,6 +526,49 @@ async def test_cross_connector_association_is_rejected(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_tenant_id", "source_product"),
+    [
+        ("tenant-2", "mock_xdr"),
+        ("tenant-1", "other_product"),
+    ],
+)
+async def test_connector_tenant_and_product_ownership_cannot_be_reassigned(
+    event_service: EventService,
+    source_tenant_id: str,
+    source_product: str,
+) -> None:
+    sfx = _sfx()
+    connector_id = f"conn-owned-{sfx}"
+    await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(
+                kind=SourceObjectKind.ALERT,
+                object_id=f"AL-owned-{sfx}",
+                connector_id=connector_id,
+            ),
+            source_type="mock_xdr",
+        )
+    )
+    conflicting = _ref(
+        kind=SourceObjectKind.ALERT,
+        object_id=f"AL-conflict-{sfx}",
+        connector_id=connector_id,
+        product=source_product,
+    ).model_copy(update={"source_tenant_id": source_tenant_id})
+
+    with pytest.raises(ValidationError) as exc_info:
+        await event_service.ingest_source_object(
+            IngestableSource(
+                reference=conflicting,
+                source_type="mock_xdr",
+            )
+        )
+
+    assert exc_info.value.error_code == "adapter_validation_error"
+
+
+@pytest.mark.asyncio
 async def test_promotion_blocked_when_actions_exist_keeps_two_events(
     event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],

@@ -13,6 +13,7 @@ from httpx import ASGITransport
 
 from app.adapters.file_source import FileSourceAdapter
 from app.adapters.mock_xdr import MockXDRSourceAdapter
+from app.core.errors import GuardrailViolationError
 from app.data_generators.scenarios import build_scenario
 from app.ingestion.source_ingester import IngestionSummary, SourceIngester
 from app.mock_xdr.api import create_app
@@ -20,10 +21,11 @@ from app.mock_xdr.state import MockXDRState
 from app.models.enums import ConnectorStatus, ToolCategory
 from app.services.evidence_projection import (
     EvidenceProjection,
+    EvidenceQueryScope,
     bind_evidence_projection,
 )
 from app.tools.query.fixture_loader import load_fixture_records
-from app.tools.registry import ToolRegistry
+from app.tools.registry import ToolRegistry, ToolValidationError
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MOCK_DATA = REPO_ROOT / "data" / "mock"
@@ -46,6 +48,27 @@ QUERY_NAMES = {
     "query_threat_intel",
     "query_history_cases",
 }
+DEFAULT_SCOPE = EvidenceQueryScope(
+    source_tenant_id="test-tenant",
+    connector_ids=frozenset({"fixture-evidence"}),
+)
+
+
+def _scope(source_tenant_id: str, connector_id: str) -> EvidenceQueryScope:
+    return EvidenceQueryScope(
+        source_tenant_id=source_tenant_id,
+        connector_ids=frozenset({connector_id}),
+    )
+
+
+class _EventScopeService:
+    def __init__(self, scope: EvidenceQueryScope) -> None:
+        self.scope = scope
+        self.requested_event_ids: list[str] = []
+
+    async def get_evidence_query_scope(self, event_id: str) -> EvidenceQueryScope:
+        self.requested_event_ids.append(event_id)
+        return self.scope
 
 
 @pytest_asyncio.fixture
@@ -99,10 +122,15 @@ async def _run_tool(
     tool_name: str,
     params: dict[str, Any],
 ) -> dict[str, Any]:
-    registry.validate_input(tool_name, params)
+    event_service = _EventScopeService(DEFAULT_SCOPE)
     with bind_evidence_projection(projection):
-        result = await registry.get_tool(tool_name).execute(params)
-    registry.validate_output(tool_name, result)
+        result = await registry.execute_event_query(
+            "evt-query-test",
+            tool_name,
+            params,
+            event_service=cast(Any, event_service),
+        )
+    assert event_service.requested_event_ids == ["evt-query-test"]
     return result
 
 
@@ -185,6 +213,25 @@ async def test_each_query_returns_traceable_schema_valid_records(
     if tool_name == "query_history_cases":
         assert result["data"]["degraded"] is True
         assert "vector_store_unavailable_keyword_fallback" in result["data"]["coverage"]["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_direct_unbound_query_fails_closed_and_request_cannot_supply_scope(
+    registry: ToolRegistry,
+    projection: EvidenceProjection,
+) -> None:
+    params = {"domain": "unknown-upload-example.com", "time_range": WINDOW}
+    with bind_evidence_projection(projection):
+        with pytest.raises(GuardrailViolationError, match="trusted event scope"):
+            await registry.get_tool("query_dns").execute(params)
+
+        with pytest.raises(ToolValidationError, match="cannot be supplied"):
+            await registry.execute_event_query(
+                "evt-query-test",
+                "query_dns",
+                {**params, "source_tenant_id": "attacker", "connector_ids": ["all"]},
+                event_service=cast(Any, _EventScopeService(DEFAULT_SCOPE)),
+            )
 
 
 @pytest.mark.asyncio
@@ -300,9 +347,11 @@ async def test_projection_pagination_uses_opaque_cursor(
         None,
         cursor=None,
         limit=1,
+        scope=DEFAULT_SCOPE,
     )
     assert len(first.records) == 1
-    assert first.next_cursor == "evp:1"
+    assert first.next_cursor is not None
+    assert first.next_cursor.startswith("evp1:")
 
     second = await projection.query(
         "network_flow",
@@ -310,6 +359,7 @@ async def test_projection_pagination_uses_opaque_cursor(
         None,
         cursor=first.next_cursor,
         limit=1,
+        scope=DEFAULT_SCOPE,
     )
     assert len(second.records) == 1
     assert second.records[0]["record_id"] != first.records[0]["record_id"]
@@ -321,7 +371,140 @@ async def test_projection_pagination_uses_opaque_cursor(
             None,
             cursor="invalid",
             limit=1,
+            scope=DEFAULT_SCOPE,
         )
+
+
+@pytest.mark.asyncio
+async def test_projection_enforces_tenant_connector_scope_and_cursor_fingerprint() -> None:
+    projection = EvidenceProjection.in_memory()
+    for tenant_id, connector_id, record_id in (
+        ("tenant-a", "connector-a", "allowed"),
+        ("tenant-b", "connector-a", "wrong-tenant"),
+        ("tenant-a", "connector-b", "wrong-connector"),
+    ):
+        await projection.ingest_records(
+            {
+                "dns": [
+                    {
+                        "record_id": record_id,
+                        "channel": "dns",
+                        "logged_at": datetime.now(UTC).isoformat(),
+                        "query": "isolated.example",
+                    }
+                ]
+            },
+            source_product="fixture",
+            source_tenant_id=tenant_id,
+            connector_id=connector_id,
+        )
+
+    allowed_scope = _scope("tenant-a", "connector-a")
+    result = await projection.query(
+        "dns",
+        {"domain": "isolated.example"},
+        None,
+        None,
+        1,
+        scope=allowed_scope,
+    )
+    assert [row["record_id"] for row in result.records] == ["allowed"]
+
+    await projection.ingest_records(
+        {
+            "dns": [
+                {
+                    "record_id": "allowed-second",
+                    "channel": "dns",
+                    "logged_at": (datetime.now(UTC) + timedelta(seconds=1)).isoformat(),
+                    "query": "isolated.example",
+                }
+            ]
+        },
+        source_product="fixture",
+        source_tenant_id="tenant-a",
+        connector_id="connector-a",
+    )
+    first = await projection.query(
+        "dns",
+        {"domain": "isolated.example"},
+        None,
+        None,
+        1,
+        scope=allowed_scope,
+    )
+    assert first.next_cursor is not None
+    with pytest.raises(ValueError, match="invalid evidence projection cursor"):
+        await projection.query(
+            "dns",
+            {"domain": "isolated.example"},
+            None,
+            first.next_cursor,
+            1,
+            scope=_scope("tenant-b", "connector-a"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_projection_cursor_freezes_rows_inserted_after_first_page() -> None:
+    projection = EvidenceProjection.in_memory()
+    base = datetime.now(UTC) - timedelta(minutes=10)
+    await projection.ingest_records(
+        {
+            "dns": [
+                {
+                    "record_id": f"original-{index}",
+                    "channel": "dns",
+                    "logged_at": (base + timedelta(seconds=index)).isoformat(),
+                    "query": "stable.example",
+                }
+                for index in range(3)
+            ]
+        },
+        source_product="fixture",
+        source_tenant_id="stable-tenant",
+        connector_id="stable-connector",
+        ingested_at=base + timedelta(seconds=3),
+    )
+    scope = _scope("stable-tenant", "stable-connector")
+    first = await projection.query(
+        "dns",
+        {"domain": "stable.example"},
+        None,
+        None,
+        1,
+        scope=scope,
+    )
+    assert [row["record_id"] for row in first.records] == ["original-0"]
+
+    await projection.ingest_records(
+        {
+            "dns": [
+                {
+                    "record_id": "late-indexed",
+                    "channel": "dns",
+                    "logged_at": (base + timedelta(milliseconds=500)).isoformat(),
+                    "query": "stable.example",
+                }
+            ]
+        },
+        source_product="fixture",
+        source_tenant_id="stable-tenant",
+        connector_id="stable-connector",
+        # A caller-controlled timestamp predating page 1 cannot evade the
+        # projection's trustworthy insertion/indexed cutoff.
+        ingested_at=base - timedelta(days=1),
+    )
+    second = await projection.query(
+        "dns",
+        {"domain": "stable.example"},
+        None,
+        first.next_cursor,
+        1,
+        scope=scope,
+    )
+
+    assert [row["record_id"] for row in second.records] == ["original-1"]
 
 
 @pytest.mark.asyncio
@@ -333,6 +516,7 @@ async def test_missing_stale_and_offline_projection_are_degraded() -> None:
         None,
         None,
         10,
+        scope=_scope("missing-tenant", "missing-connector"),
     )
     assert missing_result.degraded is True
     assert missing_result.data_freshness.state == "missing"
@@ -346,6 +530,7 @@ async def test_missing_stale_and_offline_projection_are_degraded() -> None:
         None,
         None,
         10,
+        scope=DEFAULT_SCOPE,
     )
     assert vuln_gap.records == []
     assert vuln_gap.degraded is True
@@ -374,6 +559,7 @@ async def test_missing_stale_and_offline_projection_are_degraded() -> None:
         None,
         None,
         10,
+        scope=_scope("test", "stale"),
     )
     assert stale_result.degraded is True
     assert stale_result.data_freshness.state == "stale"
@@ -396,12 +582,29 @@ async def test_missing_stale_and_offline_projection_are_degraded() -> None:
         connector_id="offline",
         connector_status=ConnectorStatus.OFFLINE,
     )
+    await offline.ingest_records(
+        {
+            "dns": [
+                {
+                    "record_id": "offline-dns",
+                    "channel": "dns",
+                    "logged_at": datetime.now(UTC).isoformat(),
+                    "query": "offline.example",
+                }
+            ]
+        },
+        source_product="fixture",
+        source_tenant_id="test",
+        connector_id="offline",
+        connector_status=ConnectorStatus.ONLINE,
+    )
     offline_result = await offline.query(
         "dns",
         {"domain": "offline.example"},
         None,
         None,
         10,
+        scope=_scope("test", "offline"),
     )
     assert offline_result.degraded is True
     assert offline_result.coverage.state == "partial"
@@ -436,6 +639,8 @@ async def test_source_ingester_projects_adapter_telemetry_through_shared_hook() 
         adapter,
         summary=summary,
     )
+    evidence_page = await adapter.list_evidence_records()
+    assert evidence_page is not None
 
     assert summary.degraded is False
     result = await projection.query(
@@ -444,6 +649,7 @@ async def test_source_ingester_projects_adapter_telemetry_through_shared_hook() 
         None,
         None,
         10,
+        scope=_scope(evidence_page.source_tenant_id, evidence_page.connector_id),
     )
     assert [row["record_id"] for row in result.records] == ["id-conflict-42-0002"]
 
@@ -468,28 +674,20 @@ async def test_object_reject_still_projects_adapter_evidence() -> None:
     async def _noop(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    async def _no_watermark(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    async def _no_connectors(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
 
-    async def _reject_items(
-        _items: list[Any],
-        *,
-        source_type: str,
-    ) -> tuple[IngestionSummary, set[str]]:
-        _ = source_type
-        return (
-            IngestionSummary(
-                rejected=1,
-                errors=[{"stage": "source_ingest", "error_category": "object_rejected"}],
-            ),
-            set(),
+    async def _reject_kind(*_args: Any, **_kwargs: Any) -> IngestionSummary:
+        return IngestionSummary(
+            rejected=1,
+            degraded=True,
+            errors=[{"stage": "source_ingest", "error_category": "object_rejected"}],
         )
 
-    ingester._load_watermark = _no_watermark  # type: ignore[method-assign]
-    ingester.ingest_items = _reject_items  # type: ignore[method-assign]
-    ingester._mark_connectors = _noop  # type: ignore[method-assign]
+    ingester._refresh_adapter_connectors = _noop  # type: ignore[method-assign]
+    ingester._adapter_connectors = _no_connectors  # type: ignore[method-assign]
+    ingester._poll_kind = _reject_kind  # type: ignore[method-assign]
     ingester._mark_adapter_status = _noop  # type: ignore[method-assign]
-    ingester._record_quality = _noop  # type: ignore[method-assign]
 
     summary = await ingester.poll(
         adapter,
@@ -498,6 +696,8 @@ async def test_object_reject_still_projects_adapter_evidence() -> None:
     )
     assert summary.degraded is True
     assert summary.rejected >= 1
+    evidence_page = await adapter.list_evidence_records()
+    assert evidence_page is not None
 
     result = await projection.query(
         "account_login",
@@ -505,6 +705,7 @@ async def test_object_reject_still_projects_adapter_evidence() -> None:
         None,
         None,
         10,
+        scope=_scope(evidence_page.source_tenant_id, evidence_page.connector_id),
     )
     assert [row["record_id"] for row in result.records] == ["id-conflict-42-0002"]
 
@@ -551,5 +752,6 @@ async def test_mock_xdr_exposes_the_same_normalized_evidence_page() -> None:
         None,
         None,
         10,
+        scope=_scope(page.source_tenant_id, page.connector_id),
     )
     assert result.records[0]["record_id"] == "dns-key-42-0008"

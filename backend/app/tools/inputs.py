@@ -38,22 +38,27 @@ class TimeRange(_Strict):
 # --------------------------------------------------------------------------- #
 
 
-class QueryAccountLoginInput(_Strict):
+class _QueryPage(_Strict):
+    cursor: str | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+
+
+class QueryAccountLoginInput(_QueryPage):
     account: str
     time_range: TimeRange
 
 
-class QueryEdrProcessInput(_Strict):
+class QueryEdrProcessInput(_QueryPage):
     host_id: str
     time_range: TimeRange
 
 
-class QueryFileAccessInput(_Strict):
+class QueryFileAccessInput(_QueryPage):
     account: str
     time_range: TimeRange
 
 
-class QueryNetworkFlowInput(_Strict):
+class QueryNetworkFlowInput(_QueryPage):
     time_range: TimeRange
     src_ip: str | None = None
     dst_ip: str | None = None
@@ -65,12 +70,12 @@ class QueryNetworkFlowInput(_Strict):
         return self
 
 
-class QueryDnsInput(_Strict):
+class QueryDnsInput(_QueryPage):
     domain: str
     time_range: TimeRange
 
 
-class QueryAssetInfoInput(_Strict):
+class QueryAssetInfoInput(_QueryPage):
     time_range: TimeRange | None = None
     ip: str | None = None
     hostname: str | None = None
@@ -82,7 +87,7 @@ class QueryAssetInfoInput(_Strict):
         return self
 
 
-class QueryVulnInfoInput(_Strict):
+class QueryVulnInfoInput(_QueryPage):
     time_range: TimeRange | None = None
     ip: str | None = None
     hostname: str | None = None
@@ -94,12 +99,12 @@ class QueryVulnInfoInput(_Strict):
         return self
 
 
-class QueryThreatIntelInput(_Strict):
+class QueryThreatIntelInput(_QueryPage):
     indicator: str
     time_range: TimeRange | None = None
 
 
-class QueryHistoryCasesInput(_Strict):
+class QueryHistoryCasesInput(_QueryPage):
     pattern_description: str
     time_range: TimeRange | None = None
 
