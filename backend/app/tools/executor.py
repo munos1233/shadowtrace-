@@ -34,7 +34,7 @@ from app.providers.tools.mock_provider import (
 )
 from app.services.tool_call_log_service import ToolCallLogService
 from app.tools.circuit_breaker import CircuitBreakerRegistry
-from app.tools.registry import ToolRegistry, ToolValidationError
+from app.tools.registry import RegisteredTool, ToolRegistry, ToolValidationError
 from app.tools.retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -413,7 +413,7 @@ class ToolExecutor:
     async def _dispatch(
         self,
         *,
-        registered: Any,
+        registered: RegisteredTool,
         tool_name: str,
         params: dict[str, Any],
         call_nature: CallNature,
