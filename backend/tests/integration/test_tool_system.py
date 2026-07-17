@@ -33,13 +33,13 @@ from app.tools.executor import InMemoryExecutionJobStore, ToolExecutor
 from app.tools.registry import ToolRegistry
 from app.tools.retry import RetryPolicy
 from app.tools.verify._common import MockVerificationRuntime, bind_mock_verification_runtime
-from tests.conftest import (
+from tests.test_models.test_tool_schemas import REQUIRED_BASELINE_NAMES
+from tests.test_tools.tool_system_fixtures import (
     CONCURRENT_QUERY_CALLS,
     WINDOW,
     RecordingAuditService,
     new_sfx,
 )
-from tests.test_models.test_tool_schemas import REQUIRED_BASELINE_NAMES
 
 pytestmark = pytest.mark.tool_system
 
@@ -257,11 +257,24 @@ async def test_chain_seven_queries_concurrent_faster_than_serial(
     evidence_projection: EvidenceProjection,
     event_scope_service: Any,
 ) -> None:
-    """链路三：7 路查询 asyncio.gather，全部成功且快于串行。"""
-    event_id = f"evt-gather-{new_sfx()}"
-    artificial_delay_s = 0.04
+    """链路三：7 路查询 asyncio.gather，全部成功且快于串行。
 
-    async def one(tool_name: str, params: dict[str, Any]) -> ToolResult:
+    Concurrency is proven with an ``asyncio.Barrier`` (all workers must arrive
+    before any proceeds). Wall-clock comparison uses a large artificial delay so
+    the assert is stable under CI load.
+    """
+    event_id = f"evt-gather-{new_sfx()}"
+    artificial_delay_s = 0.08
+    n = len(CONCURRENT_QUERY_CALLS)
+
+    async def run_one(
+        tool_name: str,
+        params: dict[str, Any],
+        *,
+        barrier: asyncio.Barrier | None,
+    ) -> ToolResult:
+        if barrier is not None:
+            await barrier.wait()
         await asyncio.sleep(artificial_delay_s)
         with bind_evidence_projection(evidence_projection):
             raw = await tool_registry.execute_event_query(
@@ -273,24 +286,31 @@ async def test_chain_seven_queries_concurrent_faster_than_serial(
         return ToolResult.model_validate(raw)
 
     serial_start = time.perf_counter()
-    serial_results: list[ToolResult] = []
-    for tool_name, params in CONCURRENT_QUERY_CALLS:
-        serial_results.append(await one(tool_name, params))
+    serial_results = [
+        await run_one(tool_name, params, barrier=None)
+        for tool_name, params in CONCURRENT_QUERY_CALLS
+    ]
     serial_elapsed = time.perf_counter() - serial_start
 
+    barrier = asyncio.Barrier(n)
     concurrent_start = time.perf_counter()
-    concurrent_results = await asyncio.gather(
-        *(one(tool_name, params) for tool_name, params in CONCURRENT_QUERY_CALLS)
+    concurrent_results = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                run_one(tool_name, params, barrier=barrier)
+                for tool_name, params in CONCURRENT_QUERY_CALLS
+            )
+        ),
+        timeout=10.0,
     )
     concurrent_elapsed = time.perf_counter() - concurrent_start
 
     assert all(r.status is ToolResultStatus.SUCCESS for r in serial_results)
     assert all(r.status is ToolResultStatus.SUCCESS for r in concurrent_results)
     assert len(concurrent_results) == 7
+    # Barrier release + one delay should beat seven sequential delays.
     assert concurrent_elapsed < serial_elapsed
-    # Concurrency should beat a near-serial lower bound (7 * delay), allowing
-    # for projection/query overhead on top of the artificial sleep.
-    assert concurrent_elapsed < artificial_delay_s * 7 * 0.75
+    assert concurrent_elapsed < artificial_delay_s * n * 0.5
 
 
 @pytest.mark.asyncio
