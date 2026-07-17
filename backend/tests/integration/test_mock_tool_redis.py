@@ -20,7 +20,10 @@ from app.providers.tools.mock_provider import (
 from app.tools.mock_state import MockEnvironmentState, MockObservationRecord
 from app.tools.verify._common import MockVerificationRuntime
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("clean_state"),
+]
 
 TARGET = "203.0.113.242"
 DELAYED_TARGET = "203.0.113.244"

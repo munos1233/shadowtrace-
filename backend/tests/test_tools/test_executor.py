@@ -472,6 +472,7 @@ async def audit_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSessi
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_tool_call_log_service_integration(
     registry: ToolRegistry,
     audit_session_factory: async_sessionmaker[AsyncSession],

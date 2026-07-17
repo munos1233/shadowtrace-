@@ -28,32 +28,71 @@ _MAX_AUDIT_DEPTH = 32
 _RAW_KEYS = frozenset({"raw_payload", "raw_data", "source_snapshot", "raw_result", "prompt"})
 
 # Fields that TraceProjection extracts for the structured decision_basis summary.
-_DECISION_ID_FIELDS = frozenset({
-    "event_id", "evidence_id", "action_id", "plan_id", "storyline_id",
-    "report_id", "case_id", "trace_id",
-})
-_DECISION_CONCLUSION_FIELDS = frozenset({
-    "reasoning", "narrative_summary", "strategy_summary", "summary",
-    "structured_conclusion", "verdict", "final_verdict",
-})
-_DECISION_EVIDENCE_FIELDS = frozenset({
-    "evidence_list", "evidence_refs", "evidence_output",
-    "success_sources", "failed_sources",
-})
-_DECISION_RULES_FIELDS = frozenset({
-    "rules_applied", "playbook_refs", "attack_techniques",
-    "mitre_technique", "technique_id",
-})
-_DECISION_MODEL_FIELDS = frozenset({
-    "model_name", "scoring_mode", "generated_by", "llm_model",
-})
-_DECISION_CONFIDENCE_FIELDS = frozenset({
-    "confidence", "overall_confidence", "risk_score",
-})
-_DECISION_WARNING_FIELDS = frozenset({
-    "warnings", "degraded", "degraded_flags", "error_detail",
-    "possible_false_positive",
-})
+_DECISION_ID_FIELDS = frozenset(
+    {
+        "event_id",
+        "evidence_id",
+        "action_id",
+        "plan_id",
+        "storyline_id",
+        "report_id",
+        "case_id",
+        "trace_id",
+    }
+)
+_DECISION_CONCLUSION_FIELDS = frozenset(
+    {
+        "reasoning",
+        "narrative_summary",
+        "strategy_summary",
+        "summary",
+        "structured_conclusion",
+        "verdict",
+        "final_verdict",
+    }
+)
+_DECISION_EVIDENCE_FIELDS = frozenset(
+    {
+        "evidence_list",
+        "evidence_refs",
+        "evidence_output",
+        "success_sources",
+        "failed_sources",
+    }
+)
+_DECISION_RULES_FIELDS = frozenset(
+    {
+        "rules_applied",
+        "playbook_refs",
+        "attack_techniques",
+        "mitre_technique",
+        "technique_id",
+    }
+)
+_DECISION_MODEL_FIELDS = frozenset(
+    {
+        "model_name",
+        "scoring_mode",
+        "generated_by",
+        "llm_model",
+    }
+)
+_DECISION_CONFIDENCE_FIELDS = frozenset(
+    {
+        "confidence",
+        "overall_confidence",
+        "risk_score",
+    }
+)
+_DECISION_WARNING_FIELDS = frozenset(
+    {
+        "warnings",
+        "degraded",
+        "degraded_flags",
+        "error_detail",
+        "possible_false_positive",
+    }
+)
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -148,8 +187,11 @@ def _collect_refs(data: dict[str, Any], keys: frozenset[str]) -> list[str]:
             for item in value:
                 if isinstance(item, Mapping):
                     _ref_keys = (
-                        "evidence_id", "action_id", "case_id",
-                        "technique_id", "citation_id",
+                        "evidence_id",
+                        "action_id",
+                        "case_id",
+                        "technique_id",
+                        "citation_id",
                     )
                     for id_key in _ref_keys:
                         if id_key in item:
@@ -206,10 +248,7 @@ class TraceProjection:
             return {}
 
         id_scalar = _extract_scalar(data, _DECISION_ID_FIELDS)
-        input_summary = (
-            str(id_scalar) if id_scalar is not None
-            else f"keys={sorted(data)[:20]}"
-        )
+        input_summary = str(id_scalar) if id_scalar is not None else f"keys={sorted(data)[:20]}"
 
         raw_conclusion = _extract_scalar(data, _DECISION_CONCLUSION_FIELDS)
         structured_conclusion = (
@@ -220,8 +259,10 @@ class TraceProjection:
 
         raw_rules = _extract_scalar(data, _DECISION_RULES_FIELDS)
         rules_applied = (
-            [str(raw_rules)] if raw_rules is not None and not isinstance(raw_rules, (list, dict))
-            else raw_rules if isinstance(raw_rules, list)
+            [str(raw_rules)]
+            if raw_rules is not None and not isinstance(raw_rules, (list, dict))
+            else raw_rules
+            if isinstance(raw_rules, list)
             else []
         )
 
@@ -229,7 +270,8 @@ class TraceProjection:
         model_name = str(raw_model) if raw_model is not None else None
 
         raw_action = _extract_scalar(
-            data, frozenset({"selected_action", "actions", "response_plan"}),
+            data,
+            frozenset({"selected_action", "actions", "response_plan"}),
         )
         selected_action = str(raw_action)[:1000] if raw_action is not None else None
 
@@ -284,12 +326,9 @@ class AgentTraceService:
     ) -> str:
         trace_id = self.new_trace_id()
         input_projected = TraceProjection.project(input_data)
-        output_projected = (
-            TraceProjection.project(output_data) if output_data is not None else {}
-        )
+        output_projected = TraceProjection.project(output_data) if output_data is not None else {}
         decision_basis = (
-            TraceProjection.decision_basis(output_data)
-            if output_data is not None else {}
+            TraceProjection.decision_basis(output_data) if output_data is not None else {}
         )
         output_projected["_decision_basis"] = decision_basis
 
@@ -309,7 +348,8 @@ class AgentTraceService:
             duration_ms=duration_ms,
             error_detail=(
                 redact_sensitive_text(error_detail)[:MAX_AUDIT_FIELD_BYTES]
-                if error_detail else None
+                if error_detail
+                else None
             ),
             llm_model=llm_model,
             llm_tokens_used=llm_tokens_used,
