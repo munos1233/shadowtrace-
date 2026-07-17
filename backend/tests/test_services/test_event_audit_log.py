@@ -131,11 +131,13 @@ async def test_logs_ordered_by_created_at_asc(
 ) -> None:
     event_id = _id("evt")
     base = datetime(2026, 7, 17, 14, 0, 0, tzinfo=UTC)
-    clock_iter = iter((
-        base,
-        base + timedelta(seconds=1),
-        base + timedelta(seconds=2),
-    ))
+    clock_iter = iter(
+        (
+            base,
+            base + timedelta(seconds=1),
+            base + timedelta(seconds=2),
+        )
+    )
 
     # We need to patch _utc_now in the service module to control ordering.
     # Since log_transition creates its own session+transaction, we mock the

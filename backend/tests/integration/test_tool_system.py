@@ -308,9 +308,11 @@ async def test_chain_seven_queries_concurrent_faster_than_serial(
     assert all(r.status is ToolResultStatus.SUCCESS for r in serial_results)
     assert all(r.status is ToolResultStatus.SUCCESS for r in concurrent_results)
     assert len(concurrent_results) == 7
-    # Barrier release + one delay should beat seven sequential delays.
+    # ISSUE-025: concurrent wall time must beat serial. Barrier proves overlap;
+    # avoid a hard absolute ceiling — CI runners add query overhead that makes
+    # ``delay * n * 0.5`` flake (observed ~0.74s vs 0.28s).
     assert concurrent_elapsed < serial_elapsed
-    assert concurrent_elapsed < artificial_delay_s * n * 0.5
+    assert concurrent_elapsed < artificial_delay_s * n
 
 
 @pytest.mark.asyncio

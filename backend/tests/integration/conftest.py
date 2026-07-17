@@ -92,21 +92,17 @@ async def _clear_shadowtrace_keys(redis_client: RedisClient) -> None:
         await client.delete(*keys)
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def clean_state(request: pytest.FixtureRequest) -> AsyncIterator[None]:
-    """Reset PG/Redis only for real ``@pytest.mark.integration`` tests.
+@pytest_asyncio.fixture
+async def clean_state(
+    session_factory: async_sessionmaker[AsyncSession],
+    redis_client: RedisClient,
+) -> AsyncIterator[None]:
+    """Reset PG/Redis around a test.
 
-    Tests under this package that omit the ``integration`` marker (including
-    ISSUE-025 ``tool_system`` chains) run in-memory and must not require
-    Dockerized PostgreSQL/Redis. Always mark true Redis/PG cases with
-    ``@pytest.mark.integration`` so cleanup still runs.
+    Not autouse: ``tool_system`` chains in this package are in-memory and must
+    not pull Dockerized Postgres/Redis. Real ``@pytest.mark.integration``
+    modules opt in via ``pytest.mark.usefixtures("clean_state")``.
     """
-    if request.node.get_closest_marker("integration") is None:
-        yield
-        return
-
-    session_factory = request.getfixturevalue("session_factory")
-    redis_client = request.getfixturevalue("redis_client")
     await _truncate_business_tables(session_factory)
     await _clear_shadowtrace_keys(redis_client)
     yield
