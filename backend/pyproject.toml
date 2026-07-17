@@ -40,6 +40,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
   "integration: requires real PostgreSQL and Redis services",
+  "tool_system: Registry/Executor/Mock tool-system integration chains (ISSUE-025)",
 ]
 
 [tool.coverage.run]
