@@ -73,8 +73,17 @@ GLOBAL_TOKEN_BUDGET = 1_000_000
 EVENT_TOKEN_BUDGET = 100_000
 EVENT_COST_BUDGET_USD = 5.0
 PER_AGENT_TOKEN_CAP = 20_000
-MODEL_PRICE_TABLE: dict[str, float] = {
-    "mock-model": 0.0,
+# Per-model (prompt_per_1k_tokens, completion_per_1k_tokens) USD prices.
+MODEL_PRICE_TABLE: dict[str, tuple[float, float]] = {
+    "mock-model": (0.0, 0.0),
+}
+
+# Severity multipliers for allocate_event_budget (adaptive investigation).
+EVENT_BUDGET_SEVERITY_MULTIPLIER: dict[str, float] = {
+    "low": 0.5,
+    "medium": 1.0,
+    "high": 1.5,
+    "critical": 2.0,
 }
 
 # Convergence (§4.12)

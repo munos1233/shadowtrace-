@@ -49,6 +49,7 @@ class MockLLMClient(BaseLLMClient):
         status = "success"
         error: BaseException | None = None
         try:
+            await self._check_budget(event_id=event_id, agent_name=agent_name)
             payload = self._load_golden(prompt_key, scenario_id)
             content_value = payload.get("content", payload)
             content = (

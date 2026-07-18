@@ -8,6 +8,7 @@ from app.core.config import Settings, get_settings
 from app.core.llm.base import (
     BaseLLMClient,
     BudgetCallback,
+    BudgetMeterHook,
     ConvergenceGuardHook,
     LLMCallAuditRecorder,
     MessageBudgeterHook,
@@ -31,6 +32,7 @@ def get_llm_client(
     audit_recorder: LLMCallAuditRecorder | None = None,
     convergence_guard: ConvergenceGuardHook | None = None,
     budget_callback: BudgetCallback | None = None,
+    budget_service: BudgetMeterHook | None = None,
     message_budgeter: MessageBudgeterHook | None = None,
     custom_factory: CustomFactory | None = None,
 ) -> BaseLLMClient:
@@ -48,6 +50,7 @@ def get_llm_client(
             audit_recorder=recorder,
             convergence_guard=convergence_guard,
             budget_callback=budget_callback,
+            budget_service=budget_service,
             message_budgeter=message_budgeter,
         )
     if mode == "openai_compatible":
@@ -60,6 +63,7 @@ def get_llm_client(
             audit_recorder=recorder,
             convergence_guard=convergence_guard,
             budget_callback=budget_callback,
+            budget_service=budget_service,
             message_budgeter=message_budgeter,
         )
     if mode == "custom":
@@ -74,6 +78,7 @@ def get_llm_client(
             audit_recorder=recorder,
             convergence_guard=convergence_guard,
             budget_callback=budget_callback,
+            budget_service=budget_service,
             message_budgeter=message_budgeter,
         )
     raise ValueError(f"unsupported LLM_MODE: {config.llm_mode!r}")

@@ -231,5 +231,7 @@ class BaseAgent(ABC, Generic[TIn, TOut]):
         return output
 
     async def _check_budget(self, input: TIn) -> None:
-        """Placeholder for BudgetService (ISSUE-029). No-op until wired."""
-        return None
+        """Enforce BudgetService.check before agent body (ISSUE-029)."""
+        if self.budget_service is None:
+            return
+        await self.budget_service.check(input.event_id, self.agent_name)

@@ -13,7 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
-from app.core.errors import is_retryable
+from app.core.errors import BudgetExceededError, is_retryable
 from app.core.event_bus import EventBus
 from app.models.enums import ExecutionJobStatus, ExecutionOwner, ToolCategory
 from app.models.execution import ActionExecutionJob
@@ -68,7 +68,9 @@ class ConvergenceGuardPort(Protocol):
 
 @runtime_checkable
 class BudgetServicePort(Protocol):
-    async def charge_tool(self, event_id: str, agent_name: str, tool_name: str) -> None: ...
+    async def check(self, event_id: str, agent_name: str) -> None: ...
+
+    async def charge_tool(self, event_id: str, agent_name: str, tool_name: str) -> Any: ...
 
 
 @runtime_checkable
@@ -124,6 +126,9 @@ class NoopConvergenceGuard:
 
 
 class NoopBudgetService:
+    async def check(self, event_id: str, agent_name: str) -> None:
+        return None
+
     async def charge_tool(self, event_id: str, agent_name: str, tool_name: str) -> None:
         return None
 
@@ -206,6 +211,9 @@ class ToolExecutor:
                 event_id=event_id,
                 action_id=action_id,  # type: ignore[arg-type]
             )
+
+        if self.budget_service is not None:
+            await self.budget_service.check(event_id, agent_name)
 
         self.registry.validate_input(tool_name, params)
 
@@ -354,7 +362,11 @@ class ToolExecutor:
                         provider_name=binding_provider,
                     )
 
-                if self.budget_service is not None:
+                if self.budget_service is not None and result.status in {
+                    ToolResultStatus.SUCCESS,
+                    ToolResultStatus.PARTIAL_SUCCESS,
+                    ToolResultStatus.ACCEPTED,
+                }:
                     await self.budget_service.charge_tool(event_id, agent_name, tool_name)
 
                 await self._finalize(
@@ -402,6 +414,9 @@ class ToolExecutor:
                 return result
 
             except WrongExecutionChannelError:
+                raise
+
+            except BudgetExceededError:
                 raise
 
             except Exception as exc:

@@ -146,6 +146,22 @@ class MessageBudgeterHook(Protocol):
     def fit(self, messages: list[LLMMessage], max_input_tokens: int) -> list[LLMMessage]: ...
 
 
+@runtime_checkable
+class BudgetMeterHook(Protocol):
+    """ISSUE-029 BudgetService surface used by LLMClient."""
+
+    async def check(self, event_id: str, agent_name: str) -> None: ...
+
+    async def charge_llm(
+        self,
+        event_id: str,
+        agent_name: str,
+        model_name: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> Any: ...
+
+
 BudgetCallback: TypeAlias = Callable[..., Awaitable[None] | None]
 
 
@@ -194,6 +210,7 @@ class BaseLLMClient(ABC):
         audit_recorder: LLMCallAuditRecorder | None = None,
         convergence_guard: ConvergenceGuardHook | None = None,
         budget_callback: BudgetCallback | None = None,
+        budget_service: BudgetMeterHook | None = None,
         message_budgeter: MessageBudgeterHook | None = None,
         max_input_tokens: int = 16_000,
     ) -> None:
@@ -214,6 +231,7 @@ class BaseLLMClient(ABC):
         self.audit_recorder = audit_recorder
         self.convergence_guard = convergence_guard
         self.budget_callback = budget_callback
+        self.budget_service = budget_service
         self.message_budgeter = message_budgeter
         self.max_input_tokens = max_input_tokens
 
@@ -344,6 +362,7 @@ class BaseLLMClient(ABC):
         status = "error"
         error: BaseException | None = None
         try:
+            await self._check_budget(event_id=event_id, agent_name=agent_name)
             try:
                 async with asyncio.timeout(self.timeout_seconds):
                     raw = await self._request(
@@ -359,6 +378,9 @@ class BaseLLMClient(ABC):
                     details={"model_name": model_name},
                 ) from exc
         except LLMError as exc:
+            status = exc.error_code
+            error = exc
+        except ShadowTraceError as exc:
             status = exc.error_code
             error = exc
         except Exception as exc:
@@ -484,9 +506,23 @@ class BaseLLMClient(ABC):
                 details={"reason": reason},
             )
 
+    async def _check_budget(self, *, event_id: str, agent_name: str) -> None:
+        if self.budget_service is None:
+            return
+        await self.budget_service.check(event_id, agent_name)
+
     async def _charge_budget(
         self, response: LLMResponse | ProviderResponse, *, event_id: str, agent_name: str
     ) -> None:
+        if self.budget_service is not None:
+            await self.budget_service.charge_llm(
+                event_id,
+                agent_name,
+                response.model_name,
+                response.prompt_tokens,
+                response.completion_tokens,
+            )
+            return
         if self.budget_callback is None:
             return
         result = self.budget_callback(
@@ -534,6 +570,7 @@ def default_golden_root() -> Path:
 __all__ = [
     "BaseLLMClient",
     "BudgetCallback",
+    "BudgetMeterHook",
     "ConvergenceGuardHook",
     "InMemoryLLMCallAuditRecorder",
     "LLMAuditError",
