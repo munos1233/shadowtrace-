@@ -102,6 +102,7 @@ class BaseAgent(ABC, Generic[TIn, TOut]):
         status = "completed"
         error_detail: str | None = None
         output: TOut | None = None
+        self._current_input: TIn | None = input
         try:
             output = await self._run(input)
             output = await self._apply_guardrails(output)
@@ -115,6 +116,7 @@ class BaseAgent(ABC, Generic[TIn, TOut]):
             await self._publish_agent_failed(input, error_detail)
             raise
         finally:
+            self._current_input = None
             completed_at = datetime.now(UTC)
             await self._record_trace(
                 input=input,
@@ -227,8 +229,54 @@ class BaseAgent(ABC, Generic[TIn, TOut]):
             )
 
     async def _apply_guardrails(self, output: TOut) -> TOut:
-        """Placeholder for OutputGuard (ISSUE-030). Passes through unchanged."""
+        """Validate agent output via OutputGuard (ISSUE-030).
+
+        Block violations raise ``GuardrailViolationError`` after the guard
+        persists findings to ``EventContext.guard_violations``. The surrounding
+        ``execute`` template then records the agent trace as ``failed``.
+        """
+        if self.output_guard is None:
+            return output
+        current = getattr(self, "_current_input", None)
+        context = await self._build_guard_context(current)
+        result = await self.output_guard.validate(self.agent_name, output, context)
+        sanitized = result.sanitized_output
+        if sanitized is None:
+            return output
+        if isinstance(sanitized, type(output)):
+            return sanitized
+        if isinstance(output, BaseModel) and isinstance(sanitized, dict):
+            try:
+                return type(output).model_validate(sanitized)
+            except Exception:
+                return output
         return output
+
+    async def _build_guard_context(self, input: TIn | None) -> dict[str, Any]:
+        context: dict[str, Any] = {}
+        if input is None:
+            return context
+        context["event_id"] = input.event_id
+        memory = self.working_memory
+        if memory is None:
+            return context
+        for key in (
+            "evidence_output",
+            "triage_result",
+            "rag_output",
+            "response_plan",
+            "approval_records",
+        ):
+            try:
+                value = await memory.read(input.event_id, key)
+            except Exception:
+                continue
+            if value is not None:
+                context[key] = value
+        triage = context.get("triage_result")
+        if isinstance(triage, dict) and triage.get("entities") is not None:
+            context.setdefault("entities", triage["entities"])
+        return context
 
     async def _check_budget(self, input: TIn) -> None:
         """Enforce BudgetService.check before agent body (ISSUE-029)."""
