@@ -449,11 +449,12 @@ async def test_reflect_failure_returns_error_after_round(
     tool_executor: ToolExecutor,
     audit: RecordingAuditService,
     evidence_projection: EvidenceProjection,
+    trace_sink: RecordingTraceSink,
 ) -> None:
     llm = ScriptedLLM()
     llm.think_queue.append(think_tool("query_threat_intel"))
     llm.reflect_queue.append(LLMTimeoutError("reflect timed out"))
-    engine = ReActEngine(llm)  # type: ignore[arg-type]
+    engine = ReActEngine(llm, trace_sink=trace_sink)  # type: ignore[arg-type]
     executor = ReadOnlyReActExecutor(tool_executor, event_id=EVENT_ID)
 
     with bound_evidence_scope(evidence_projection):
@@ -465,6 +466,65 @@ async def test_reflect_failure_returns_error_after_round(
     # The action executed (and was audited) before the reflect step failed.
     assert audit.starts == 1
     assert result.rounds[0].action_result is not None
+    # Even the reflect-failed round leaves an auditable trace (每轮写 agent_trace).
+    assert len(trace_sink.entries) == 1
+    assert "react_reflect_failed" in trace_sink.entries[0]["output_data"]["warnings"]
+
+
+async def test_tool_failed_status_counts_toward_consecutive_failures(
+    tool_executor: ToolExecutor,
+    audit: RecordingAuditService,
+) -> None:
+    # Query tools fail closed without a bound event scope (GuardrailViolationError
+    # → ToolExecutor FAILED result) — the engine must count those rounds as failed.
+    llm = ScriptedLLM()
+    for _ in range(3):
+        llm.add_round(think_tool("query_threat_intel"), reflect(0.9))
+    engine = ReActEngine(llm)  # type: ignore[arg-type]
+    executor = ReadOnlyReActExecutor(tool_executor, event_id=EVENT_ID)
+
+    # Deliberately no bound_evidence_scope: dispatches happen but return FAILED.
+    result = await engine.run(GOAL, {"event_id": EVENT_ID}, executor, max_rounds=5)
+
+    assert result.stop_reason is ReActStopReason.ERROR
+    assert len(result.rounds) == 2
+    assert all(
+        r.action_result is not None and r.action_result["status"] == "failed" for r in result.rounds
+    )
+    # Dispatches really happened (unlike the denial path) — failure was post-execution.
+    assert audit.starts == 2
+
+
+async def test_consecutive_failures_reset_on_success(
+    tool_executor: ToolExecutor,
+    audit: RecordingAuditService,
+    evidence_projection: EvidenceProjection,
+) -> None:
+    llm = ScriptedLLM()
+    # denied, success (low confidence), denied, denied → error only after the
+    # second *consecutive* failure pair; a lone failure must not stop the loop.
+    llm.add_round(think_tool("no_such_tool"), reflect(0.4))
+    llm.add_round(think_tool("query_threat_intel"), reflect(0.5))
+    llm.add_round(think_tool("block_ip"), reflect(0.4))
+    llm.add_round(think_tool("isolate_host"), reflect(0.4))
+    llm.add_round(think_tool("query_threat_intel"), reflect(0.9))
+    engine = ReActEngine(llm)  # type: ignore[arg-type]
+    executor = ReadOnlyReActExecutor(tool_executor, event_id=EVENT_ID)
+
+    with bound_evidence_scope(evidence_projection):
+        result = await engine.run(GOAL, {"event_id": EVENT_ID}, executor, max_rounds=5)
+
+    assert result.stop_reason is ReActStopReason.ERROR
+    assert len(result.rounds) == 4
+    statuses = [r.action_result["status"] for r in result.rounds if r.action_result]
+    assert statuses == [
+        REACT_ACTION_DENIED,
+        "success",
+        REACT_ACTION_DENIED,
+        REACT_ACTION_DENIED,
+    ]
+    # Only the single successful round dispatched a tool call.
+    assert audit.starts == 1
 
 
 # --------------------------------------------------------------------------- #

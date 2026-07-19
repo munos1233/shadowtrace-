@@ -437,16 +437,26 @@ class ReActEngine:
                 )
             except LLMError as exc:
                 logger.warning("ReAct reflect failed event=%s: %s", event_id, exc)
-                rounds.append(
-                    ReActRound(
-                        round_index=round_index,
-                        observation=observation,
-                        thought=think.thought,
-                        action=action,
-                        action_result=action_result,
-                        reflection="",
-                        confidence=last_confidence,
-                    )
+                round_ = ReActRound(
+                    round_index=round_index,
+                    observation=observation,
+                    thought=think.thought,
+                    action=action,
+                    action_result=action_result,
+                    reflection="",
+                    confidence=last_confidence,
+                )
+                rounds.append(round_)
+                # Every recorded round must leave an auditable trace, even when
+                # the reflect step itself failed (实现步骤 §2: 每轮写 agent_trace).
+                await self._trace_round(
+                    event_id,
+                    goal,
+                    context,
+                    think,
+                    round_,
+                    None,
+                    extra_warnings=["react_reflect_failed"],
                 )
                 return _result(ReActStopReason.ERROR, stop_detail=f"react_reflect: {exc}")
 
@@ -635,38 +645,41 @@ class ReActEngine:
         think: ReActThinkOutput,
         round_: ReActRound,
         reflect: ReActReflectOutput | None,
+        extra_warnings: list[str] | None = None,
     ) -> None:
         """Write the per-round auditable decision_basis (no chain-of-thought)."""
         if self._trace_sink is None:
             return
-        action = round_.action
-        selected_action = (
-            f"{action.action_type.value}:{action.target_name}" if action is not None else "stop"
-        )
-        warnings: list[str] = []
-        if round_.action_result and round_.action_result.get("status") == REACT_ACTION_DENIED:
-            warnings.append(REACT_ACTION_DENIED)
-        input_data = {
-            "goal": goal,
-            "round_index": round_.round_index,
-            "observation_summary": self._truncate(round_.observation, 500),
-            "context_keys": sorted(context),
-        }
-        output_data: dict[str, Any] = {
-            "summary": round_.reflection or round_.thought,
-            "candidate_actions": think.candidates,
-            "selected_action": selected_action,
-            "confidence": round_.confidence,
-            "warnings": warnings,
-        }
-        if reflect is not None:
-            # Shaped as {"evidence_id": ...} mappings so the ISSUE-028
-            # TraceProjection extracts them into decision_basis.evidence_refs.
-            output_data["evidence_refs"] = [{"evidence_id": ref} for ref in reflect.evidence_refs]
-            if reflect.gap:
-                output_data["gap"] = reflect.gap
-        now = datetime.now(UTC)
         try:
+            action = round_.action
+            selected_action = (
+                f"{action.action_type.value}:{action.target_name}" if action is not None else "stop"
+            )
+            warnings: list[str] = list(extra_warnings or [])
+            if round_.action_result and round_.action_result.get("status") == REACT_ACTION_DENIED:
+                warnings.append(REACT_ACTION_DENIED)
+            input_data = {
+                "goal": goal,
+                "round_index": round_.round_index,
+                "observation_summary": self._truncate(round_.observation, 500),
+                "context_keys": sorted(map(str, context)),
+            }
+            output_data: dict[str, Any] = {
+                "summary": round_.reflection or round_.thought,
+                "candidate_actions": think.candidates,
+                "selected_action": selected_action,
+                "confidence": round_.confidence,
+                "warnings": warnings,
+            }
+            if reflect is not None:
+                # Shaped as {"evidence_id": ...} mappings so the ISSUE-028
+                # TraceProjection extracts them into decision_basis.evidence_refs.
+                output_data["evidence_refs"] = [
+                    {"evidence_id": ref} for ref in reflect.evidence_refs
+                ]
+                if reflect.gap:
+                    output_data["gap"] = reflect.gap
+            now = datetime.now(UTC)
             await self._trace_sink.log_trace(
                 event_id,
                 self._agent_name,
