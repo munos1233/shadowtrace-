@@ -24,7 +24,7 @@ CI_BUILD_PROJECT_PREFIX ?= $(COMPOSE_PROJECT_NAME)-ci-build
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down test lint fmt migrate migrate-down load-kb integration-test ci-lint ci-test ci-build
+.PHONY: up down test lint fmt migrate migrate-down load-kb integration-test test-tools ci-lint ci-test ci-build
 
 up:
 	$(COMPOSE) up -d --build
@@ -51,6 +51,21 @@ lint:
 
 fmt:
 	cd backend && $(PYTHON) -m ruff check --fix app tests && $(PYTHON) -m ruff format app tests
+
+# --- ISSUE-025 tool-system integration quality gate ---------------------- #
+# In-memory Registry/Executor/Mock chains + unit tool tests.
+# - Excludes `@pytest.mark.integration` (needs Dockerized Postgres/Redis).
+# - Enforces statement coverage >= 80% on app.tools + app.providers.tools.
+# - Expected runtime: well under 3 minutes (typically ~30s locally).
+# Equivalent:
+#   cd backend && pytest tests/test_tools/ tests/integration/test_tool_system.py \
+#     -v -m "not integration" --cov=app.tools --cov=app.providers.tools \
+#     --cov-fail-under=80
+test-tools:
+	cd backend && $(PYTHON) -m pytest tests/test_tools/ \
+		tests/integration/test_tool_system.py -v -m "not integration" \
+		--cov=app.tools --cov=app.providers.tools \
+		--cov-report=term-missing --cov-fail-under=80
 
 # --- ISSUE-017 data-foundation integration quality gate ------------------ #
 integration-test:

@@ -31,7 +31,10 @@ from app.services.context_service import EventContextStore, ctx_key
 from app.services.event_service import EventService
 from app.services.evidence_projection import EvidenceProjection
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("clean_state"),
+]
 
 ALL_SOURCE_KINDS = [
     SourceObjectKind.INCIDENT,
