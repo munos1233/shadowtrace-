@@ -48,6 +48,7 @@ CORE_TABLES = {
     "data_quality_error",
     "event_context_journal",
     "event_context_field_version",
+    "knowledge_chunk",
 }
 
 
