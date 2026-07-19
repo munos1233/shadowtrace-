@@ -243,8 +243,7 @@ class ConvergenceGuard:
                     stop=True,
                     reason=StopReason.GLOBAL_MAX_STEPS,
                     detail=(
-                        f"total_steps={state.total_steps} >= "
-                        f"GLOBAL_MAX_STEPS={GLOBAL_MAX_STEPS}"
+                        f"total_steps={state.total_steps} >= GLOBAL_MAX_STEPS={GLOBAL_MAX_STEPS}"
                     ),
                 )
 
@@ -254,8 +253,7 @@ class ConvergenceGuard:
                     stop=True,
                     reason=StopReason.MAX_LLM_CALLS,
                     detail=(
-                        f"llm_calls={state.llm_calls} >= "
-                        f"MAX_TOTAL_LLM_CALLS={MAX_TOTAL_LLM_CALLS}"
+                        f"llm_calls={state.llm_calls} >= MAX_TOTAL_LLM_CALLS={MAX_TOTAL_LLM_CALLS}"
                     ),
                 )
 
@@ -283,9 +281,7 @@ class ConvergenceGuard:
             return StopDecision(stop=False, reason=StopReason.NONE)
 
         except Exception:
-            logger.exception(
-                "ConvergenceGuard.should_stop failed for event=%s", event_id
-            )
+            logger.exception("ConvergenceGuard.should_stop failed for event=%s", event_id)
             # Degradation: guard internal error → don't force stop; let outer
             # limits (MAX_REPLAN_COUNT, ReAct max_rounds) catch runaway loops.
             return StopDecision(stop=False, reason=StopReason.NONE)
