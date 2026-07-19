@@ -62,7 +62,7 @@ class KnowledgeStore:
                             set_={
                                 "kb_name": kb_name,
                                 "content": chunk.content,
-                                "metadata": chunk.metadata,
+                                "chunk_metadata": chunk.metadata,
                                 "embedding": vec,
                             },
                         )

@@ -111,6 +111,9 @@ class TestUpsertChunks:
         c2 = _chunk("chk-0000000a", "playbook_kb", "Updated content", version=2)
         await store.upsert_chunks("playbook_kb", [c2])
         assert await store.count("playbook_kb") == 1
+        results = await store.keyword_search("playbook_kb", "Updated", top_k=1)
+        assert results and results[0].content == "Updated content"
+        assert results[0].metadata.get("version") == 2
 
     @pytest.mark.asyncio
     async def test_kb_name_mismatch_raises(

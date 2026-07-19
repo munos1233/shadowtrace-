@@ -94,6 +94,25 @@ class TestEmbeddingService:
         assert results == []
         await svc.close()
 
+    @pytest.mark.asyncio
+    async def test_local_mode_dispatches_to_remote_handler(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = Settings(embedding_mode="local", embedding_api_base_url="http://test")
+        svc = EmbeddingService(settings)
+        called = False
+
+        async def fake_remote(texts: list[str]) -> list[list[float]]:
+            nonlocal called
+            called = True
+            return [[0.0] * 1024 for _ in texts]
+
+        monkeypatch.setattr(svc, "_embed_remote", fake_remote)
+        vectors = await svc.embed_texts(["local probe"])
+        assert called is True
+        assert len(vectors[0]) == 1024
+        await svc.close()
+
     def test_unknown_mode_raises(self) -> None:
         settings = Settings(embedding_mode="bogus")
         svc = EmbeddingService(settings)

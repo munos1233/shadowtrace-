@@ -13,7 +13,7 @@ class EmbeddingService:
 
     Modes:
       - ``mock``: deterministic MockEmbedder (no network)
-      - ``remote``: OpenAI-compatible ``/v1/embeddings`` endpoint via httpx
+      - ``local`` / ``remote``: OpenAI-compatible ``/v1/embeddings`` endpoint via httpx
     """
 
     EMBEDDING_DIM = EMBEDDING_DIM
@@ -39,7 +39,7 @@ class EmbeddingService:
             return []
         if self._mode == "mock":
             return await self._mock.embed(texts)
-        if self._mode == "remote":
+        if self._mode in {"remote", "local"}:
             return await self._embed_remote(texts)
         raise ValueError(f"Unknown embedding_mode: {self._mode}")
 
