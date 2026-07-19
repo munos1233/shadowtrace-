@@ -111,17 +111,13 @@ class TestConvergenceState:
 
 
 class TestRecordStepCounters:
-    async def test_total_steps_increments(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_total_steps_increments(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _i in range(5):
             await guard.record_step(event_id, "llm_call")
         state = guard.get_state(event_id)
         assert state.total_steps == 5
 
-    async def test_react_round_counter(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_react_round_counter(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "react_round")
         await guard.record_step(event_id, "react_round")
         await guard.record_step(event_id, "react_round")
@@ -129,18 +125,14 @@ class TestRecordStepCounters:
         assert state.react_rounds == 3
         assert state.total_steps == 3
 
-    async def test_replan_counter(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_replan_counter(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "replan")
         await guard.record_step(event_id, "replan")
         state = guard.get_state(event_id)
         assert state.replan_count == 2
         assert state.total_steps == 2
 
-    async def test_llm_call_counter(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_llm_call_counter(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "llm_call")
         await guard.record_step(event_id, "llm_call")
         await guard.record_step(event_id, "llm_call")
@@ -149,9 +141,7 @@ class TestRecordStepCounters:
         assert state.llm_calls == 4
         assert state.total_steps == 4
 
-    async def test_agent_retry(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_agent_retry(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "agent_retry", signature="EvidenceAgent")
         state = guard.get_state(event_id)
         assert state.total_steps == 1
@@ -214,9 +204,7 @@ class TestRecordStepCounters:
 
 
 class TestRecentActionsWindow:
-    async def test_actions_appended(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_actions_appended(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "react_round")
         await guard.record_step(event_id, "llm_call")
         await guard.record_step(event_id, "tool_call", signature="t1")
@@ -225,9 +213,7 @@ class TestRecentActionsWindow:
         assert state.recent_actions[0] == "react_round"
         assert state.recent_actions[2] == "tool_call:t1"
 
-    async def test_window_trimmed(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_window_trimmed(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _i in range(10):
             await guard.record_step(event_id, "llm_call")
         state = guard.get_state(event_id)
@@ -262,9 +248,7 @@ class TestRecordStepEdgeCases:
         assert state.tool_call_signatures == {}
         assert state.recent_actions == ["tool_call"]
 
-    async def test_no_signature_label(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_no_signature_label(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "replan")
         state = guard.get_state(event_id)
         assert state.recent_actions == ["replan"]
@@ -276,9 +260,7 @@ class TestRecordStepEdgeCases:
 
 
 class TestShouldStopGlobalMaxSteps:
-    async def test_stops_at_limit(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_stops_at_limit(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _ in range(GLOBAL_MAX_STEPS):
             await guard.record_step(event_id, "llm_call")
         decision = await guard.should_stop(event_id)
@@ -286,9 +268,7 @@ class TestShouldStopGlobalMaxSteps:
         assert decision.reason == StopReason.GLOBAL_MAX_STEPS
         assert str(GLOBAL_MAX_STEPS) in decision.detail
 
-    async def test_stops_just_below_limit(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_stops_just_below_limit(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _ in range(GLOBAL_MAX_STEPS - 1):
             await guard.record_step(event_id, "replan")
         decision = await guard.should_stop(event_id)
@@ -301,9 +281,7 @@ class TestShouldStopGlobalMaxSteps:
 
 
 class TestShouldStopMaxLLMCalls:
-    async def test_stops_at_llm_limit(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_stops_at_llm_limit(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _ in range(MAX_TOTAL_LLM_CALLS):
             await guard.record_step(event_id, "llm_call")
         decision = await guard.should_stop(event_id)
@@ -311,9 +289,7 @@ class TestShouldStopMaxLLMCalls:
         assert decision.reason == StopReason.MAX_LLM_CALLS
         assert str(MAX_TOTAL_LLM_CALLS) in decision.detail
 
-    async def test_no_stop_below_llm_limit(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_no_stop_below_llm_limit(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _ in range(MAX_TOTAL_LLM_CALLS - 1):
             await guard.record_step(event_id, "llm_call")
         decision = await guard.should_stop(event_id)
@@ -335,9 +311,7 @@ class TestShouldStopMaxLLMCalls:
 
 
 class TestShouldStopDuplicateToolCalls:
-    async def test_stops_on_duplicate(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_stops_on_duplicate(self, guard: ConvergenceGuard, event_id: str) -> None:
         sig = make_tool_call_signature("block_ip", {"ip": "10.0.0.99"})
         for _ in range(MAX_DUPLICATE_TOOL_CALLS + 1):
             await guard.record_step(event_id, "tool_call", signature=sig)
@@ -346,9 +320,7 @@ class TestShouldStopDuplicateToolCalls:
         assert decision.reason == StopReason.DUPLICATE_TOOL_CALLS
         assert "block_ip" in decision.detail
 
-    async def test_no_stop_at_limit(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_no_stop_at_limit(self, guard: ConvergenceGuard, event_id: str) -> None:
         sig = make_tool_call_signature("block_ip", {"ip": "10.0.0.99"})
         for _ in range(MAX_DUPLICATE_TOOL_CALLS):
             await guard.record_step(event_id, "tool_call", signature=sig)
@@ -388,9 +360,7 @@ class TestShouldStopDuplicateToolCalls:
 
 
 class TestShouldStopOscillation:
-    async def test_ab_oscillation_detected(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_ab_oscillation_detected(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "tool_call", signature="block_ip:10.0.0.1")
         await guard.record_step(event_id, "tool_call", signature="unblock_ip:10.0.0.1")
         await guard.record_step(event_id, "tool_call", signature="block_ip:10.0.0.1")
@@ -411,9 +381,7 @@ class TestShouldStopOscillation:
         decision = await guard.should_stop(event_id)
         assert decision.stop is False
 
-    async def test_same_action_no_oscillation(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_same_action_no_oscillation(self, guard: ConvergenceGuard, event_id: str) -> None:
         for _ in range(4):
             await guard.record_step(event_id, "tool_call", signature="same")
         decision = await guard.should_stop(event_id)
@@ -486,9 +454,7 @@ class TestNormalFlowNoStop:
             await guard.record_step(event_id, "react_round")
             tools_this_round = 2 if round_idx < 2 else 1
             for t in range(tools_this_round):
-                sig = make_tool_call_signature(
-                    f"query_r{round_idx}_t{t}", {"round": round_idx}
-                )
+                sig = make_tool_call_signature(f"query_r{round_idx}_t{t}", {"round": round_idx})
                 await guard.record_step(event_id, "tool_call", signature=sig)
             await guard.record_step(event_id, "llm_call")
 
@@ -523,18 +489,14 @@ class TestGetState:
         assert isinstance(state, ConvergenceState)
         assert state.total_steps == 0
 
-    async def test_returns_copy_not_reference(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_returns_copy_not_reference(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "llm_call")
         state = guard.get_state(event_id)
         state.total_steps = 999
         internal = guard.get_state(event_id)
         assert internal.total_steps == 1
 
-    async def test_full_state_snapshot(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_full_state_snapshot(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "react_round")
         await guard.record_step(event_id, "replan")
         await guard.record_step(event_id, "llm_call")
@@ -555,9 +517,7 @@ class TestGetState:
 
 
 class TestReset:
-    async def test_reset_clears_state(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_reset_clears_state(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "llm_call")
         await guard.record_step(event_id, "llm_call")
         assert guard.get_state(event_id).total_steps == 2
@@ -567,9 +527,7 @@ class TestReset:
     def test_reset_unknown_event_noop(self, guard: ConvergenceGuard) -> None:
         guard.reset("evt-nonexistent")
 
-    async def test_reset_then_reuse(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_reset_then_reuse(self, guard: ConvergenceGuard, event_id: str) -> None:
         await guard.record_step(event_id, "llm_call")
         guard.reset(event_id)
         await guard.record_step(event_id, "react_round")
@@ -591,9 +549,7 @@ class TestShouldStopEdgeCases:
         assert decision.reason == StopReason.NONE
         assert bool(decision) is False
 
-    async def test_empty_state_no_stop(
-        self, guard: ConvergenceGuard, event_id: str
-    ) -> None:
+    async def test_empty_state_no_stop(self, guard: ConvergenceGuard, event_id: str) -> None:
         decision = await guard.should_stop(event_id)
         assert decision.stop is False
         assert decision.reason == StopReason.NONE
@@ -632,9 +588,7 @@ class TestMultipleEventsIsolation:
         assert s2.react_rounds == 1
         assert s2.llm_calls == 0
 
-    async def test_reset_does_not_affect_other_event(
-        self, guard: ConvergenceGuard
-    ) -> None:
+    async def test_reset_does_not_affect_other_event(self, guard: ConvergenceGuard) -> None:
         e1, e2 = "evt-001", "evt-002"
         await guard.record_step(e1, "llm_call")
         await guard.record_step(e2, "llm_call")
@@ -729,9 +683,7 @@ class TestGuardDegradation:
 
 
 class TestResetLifecycle:
-    async def test_reset_removes_internal_dict_entry(
-        self, guard: ConvergenceGuard
-    ) -> None:
+    async def test_reset_removes_internal_dict_entry(self, guard: ConvergenceGuard) -> None:
         eid = "evt-lifecycle-001"
         await guard.record_step(eid, "llm_call")
         await guard.record_step(eid, "react_round")
@@ -739,9 +691,7 @@ class TestResetLifecycle:
         guard.reset(eid)
         assert eid not in guard._states
 
-    async def test_full_lifecycle_record_stop_reset(
-        self, guard: ConvergenceGuard
-    ) -> None:
+    async def test_full_lifecycle_record_stop_reset(self, guard: ConvergenceGuard) -> None:
         eid = "evt-lifecycle-002"
         sig = make_tool_call_signature("t", {"p": 1})
         for _ in range(GLOBAL_MAX_STEPS):
