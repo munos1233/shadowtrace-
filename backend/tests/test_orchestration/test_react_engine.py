@@ -13,6 +13,7 @@ tool calls and zero external side effects.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -96,7 +97,12 @@ class ScriptedLLM:
         response_model: type | None = None,
     ) -> LLMResponse:
         self.calls.append(
-            {"prompt_key": prompt_key, "scenario_id": scenario_id, "event_id": event_id}
+            {
+                "prompt_key": prompt_key,
+                "scenario_id": scenario_id,
+                "event_id": event_id,
+                "messages": messages,
+            }
         )
         queue = self.think_queue if prompt_key == "react_think" else self.reflect_queue
         item: ReActThinkOutput | ReActReflectOutput | Exception
@@ -694,3 +700,86 @@ async def test_run_rejects_invalid_max_rounds(tool_executor: ToolExecutor) -> No
     executor = ReadOnlyReActExecutor(tool_executor, event_id=EVENT_ID)
     with pytest.raises(ValueError, match="max_rounds"):
         await engine.run(GOAL, {"event_id": EVENT_ID}, executor, max_rounds=0)
+
+
+async def test_run_requires_event_id(tool_executor: ToolExecutor) -> None:
+    engine = ReActEngine(ScriptedLLM())  # type: ignore[arg-type]
+    executor = ReadOnlyReActExecutor(tool_executor, event_id=EVENT_ID)
+    with pytest.raises(ValueError, match="event_id"):
+        await engine.run(GOAL, {}, executor)
+    with pytest.raises(ValueError, match="event_id"):
+        await engine.run(GOAL, {"event_id": "  "}, executor)
+
+
+async def test_think_prompt_includes_only_legal_targets(
+    tool_executor: ToolExecutor,
+) -> None:
+    llm = ScriptedLLM()  # default: finish immediately on round 1
+    engine = ReActEngine(llm)  # type: ignore[arg-type]
+    executor = ReadOnlyReActExecutor(tool_executor, event_id=EVENT_ID)
+
+    result = await engine.run(GOAL, {"event_id": EVENT_ID}, executor)
+
+    assert result.stop_reason is ReActStopReason.FINISHED
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "query_threat_intel" in system_prompt
+    assert "query_dns" in system_prompt
+    # Side-effect tools must never be advertised as legal ReAct targets.
+    assert "block_ip" not in system_prompt
+    assert "isolate_host" not in system_prompt
+    assert "update_source_event_disposition" not in system_prompt
+
+
+async def test_engine_instance_stateless_across_sequential_runs(
+    tool_executor: ToolExecutor,
+    trace_sink: RecordingTraceSink,
+) -> None:
+    guard = ConvergenceGuard()
+    engine = ReActEngine(ScriptedLLM(), convergence_guard=guard, trace_sink=trace_sink)  # type: ignore[arg-type]
+
+    first = await engine.run(
+        GOAL,
+        {"event_id": "evt-react-a"},
+        ReadOnlyReActExecutor(tool_executor, event_id="evt-react-a"),
+    )
+    second = await engine.run(
+        GOAL,
+        {"event_id": "evt-react-b"},
+        ReadOnlyReActExecutor(tool_executor, event_id="evt-react-b"),
+    )
+
+    assert first.stop_reason is ReActStopReason.FINISHED
+    assert second.stop_reason is ReActStopReason.FINISHED
+    assert len(first.rounds) == len(second.rounds) == 1
+    # Guard counters are per event: no cross-run accumulation.
+    assert guard.get_state("evt-react-a").react_rounds == 1
+    assert guard.get_state("evt-react-b").react_rounds == 1
+    # Traces are attributable per event.
+    assert {entry["event_id"] for entry in trace_sink.entries} == {
+        "evt-react-a",
+        "evt-react-b",
+    }
+
+
+async def test_concurrent_runs_are_isolated(
+    tool_executor: ToolExecutor,
+    trace_sink: RecordingTraceSink,
+) -> None:
+    guard = ConvergenceGuard()
+    engine = ReActEngine(ScriptedLLM(), convergence_guard=guard, trace_sink=trace_sink)  # type: ignore[arg-type]
+
+    results = await asyncio.gather(
+        *[
+            engine.run(
+                GOAL,
+                {"event_id": f"evt-react-c{i}"},
+                ReadOnlyReActExecutor(tool_executor, event_id=f"evt-react-c{i}"),
+            )
+            for i in range(3)
+        ]
+    )
+
+    assert all(r.stop_reason is ReActStopReason.FINISHED for r in results)
+    assert all(len(r.rounds) == 1 for r in results)
+    for i in range(3):
+        assert guard.get_state(f"evt-react-c{i}").react_rounds == 1

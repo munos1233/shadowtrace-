@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from app.core.errors import LLMError
-from app.core.llm.base import BaseLLMClient, LLMMessage
+from app.core.llm.base import BaseLLMClient, LLMMessage, LLMProviderError
 from app.models.enums import ToolCategory
 from app.models.react import (
     ReActAction,
@@ -295,10 +295,19 @@ class ReActEngine:
         executor: ReActActionExecutor,
         max_rounds: int = 5,
     ) -> ReActResult:
-        """Run the loop until a stop condition fires (never unbounded)."""
+        """Run the loop until a stop condition fires (never unbounded).
+
+        Raises:
+            ValueError: ``max_rounds`` < 1, or ``context["event_id"]`` is
+                missing/blank — traces, guard counters and tool calls all key
+                on event_id, so a missing one must fail fast instead of
+                polluting the audit trail with an "unknown" event.
+        """
         if max_rounds < 1:
             raise ValueError("max_rounds must be >= 1")
-        event_id = str(context.get("event_id") or "unknown")
+        event_id = str(context.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("context['event_id'] is required")
 
         rounds: list[ReActRound] = []
         action_results: list[dict[str, Any]] = []
@@ -342,7 +351,9 @@ class ReActEngine:
 
             # --- Think ---
             try:
-                think = await self._think(goal, context, executor, observation, round_index)
+                think = await self._think(
+                    goal, context, executor, observation, round_index, event_id
+                )
             except LLMError as exc:
                 # Degradation contract: LLM unavailable → immediate error stop;
                 # caller (SuperAgent) falls back to the fixed plan sequence.
@@ -433,7 +444,7 @@ class ReActEngine:
             # --- Reflect ---
             try:
                 reflect = await self._reflect(
-                    goal, observation, action, action_result, context, round_index
+                    goal, observation, action, action_result, context, round_index, event_id
                 )
             except LLMError as exc:
                 logger.warning("ReAct reflect failed event=%s: %s", event_id, exc)
@@ -500,6 +511,7 @@ class ReActEngine:
         executor: ReActActionExecutor,
         observation: str,
         round_index: int,
+        event_id: str,
     ) -> ReActThinkOutput:
         targets = self._describe_targets(executor)
         messages = [
@@ -520,15 +532,23 @@ class ReActEngine:
         ]
         response = await self._llm.chat(
             messages,
-            event_id=str(context.get("event_id") or "unknown"),
+            event_id=event_id,
             agent_name=self._agent_name,
             prompt_key=REACT_THINK_PROMPT_KEY,
             scenario_id=self._round_scenario(context, round_index),
             json_mode=True,
             response_model=ReActThinkOutput,
         )
-        assert isinstance(response.parsed, ReActThinkOutput)
-        return response.parsed
+        parsed = response.parsed
+        if not isinstance(parsed, ReActThinkOutput):
+            # Contract violation by a (custom) client: treat as LLM failure so
+            # the caller falls back per the degradation contract, rather than
+            # crashing on an AttributeError outside the LLMError path.
+            raise LLMProviderError(
+                "react_think returned no structured ReActThinkOutput payload",
+                retryable=False,
+            )
+        return parsed
 
     async def _reflect(
         self,
@@ -538,6 +558,7 @@ class ReActEngine:
         action_result: dict[str, Any],
         context: dict[str, Any],
         round_index: int,
+        event_id: str,
     ) -> ReActReflectOutput:
         result_brief = self._truncate(str(action_result)[:_MAX_TEXT_CHARS])
         messages = [
@@ -562,15 +583,20 @@ class ReActEngine:
         ]
         response = await self._llm.chat(
             messages,
-            event_id=str(context.get("event_id") or "unknown"),
+            event_id=event_id,
             agent_name=self._agent_name,
             prompt_key=REACT_REFLECT_PROMPT_KEY,
             scenario_id=self._round_scenario(context, round_index),
             json_mode=True,
             response_model=ReActReflectOutput,
         )
-        assert isinstance(response.parsed, ReActReflectOutput)
-        return response.parsed
+        parsed = response.parsed
+        if not isinstance(parsed, ReActReflectOutput):
+            raise LLMProviderError(
+                "react_reflect returned no structured ReActReflectOutput payload",
+                retryable=False,
+            )
+        return parsed
 
     # ------------------------------------------------------------------ #
     # Observation / summary helpers
@@ -583,7 +609,7 @@ class ReActEngine:
             if value:
                 parts.append(f"{key}: {self._truncate(str(value))}")
         if not any(context.get(key) for key in ("observation", "evidence_summary")):
-            parts.append(f"context_keys: {sorted(context)}")
+            parts.append(f"context_keys: {sorted(map(str, context))}")
         if previous_summary:
             parts.append(f"Previous round result: {previous_summary}")
         return self._truncate("\n".join(parts))
