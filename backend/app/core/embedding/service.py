@@ -66,9 +66,7 @@ class EmbeddingService:
                 )
             vectors.append(vec)
         if len(vectors) != len(texts):
-            raise ValueError(
-                f"Remote returned {len(vectors)} embeddings for {len(texts)} inputs"
-            )
+            raise ValueError(f"Remote returned {len(vectors)} embeddings for {len(texts)} inputs")
         return vectors
 
     async def close(self) -> None:

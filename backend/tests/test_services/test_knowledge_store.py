@@ -89,9 +89,7 @@ def _chunk(chunk_id: str, kb_name: str, content: str, **meta: object) -> Knowled
 
 class TestUpsertChunks:
     @pytest.mark.asyncio
-    async def test_inserts_new_chunks(
-        self, store: KnowledgeStore, clean_knowledge: None
-    ) -> None:
+    async def test_inserts_new_chunks(self, store: KnowledgeStore, clean_knowledge: None) -> None:
         chunks = [
             _chunk("chk-00000001", "attack_kb", "Spear phishing campaign"),
             _chunk("chk-00000002", "attack_kb", "Ransomware deployment via CVE-2024"),
@@ -101,9 +99,7 @@ class TestUpsertChunks:
         assert await store.count("attack_kb") == 3
 
     @pytest.mark.asyncio
-    async def test_upsert_is_idempotent(
-        self, store: KnowledgeStore, clean_knowledge: None
-    ) -> None:
+    async def test_upsert_is_idempotent(self, store: KnowledgeStore, clean_knowledge: None) -> None:
         c1 = _chunk("chk-0000000a", "playbook_kb", "Initial content")
         await store.upsert_chunks("playbook_kb", [c1])
         assert await store.count("playbook_kb") == 1
@@ -124,9 +120,7 @@ class TestUpsertChunks:
             await store.upsert_chunks("history_case_kb", [c])
 
     @pytest.mark.asyncio
-    async def test_empty_chunks_noop(
-        self, store: KnowledgeStore, clean_knowledge: None
-    ) -> None:
+    async def test_empty_chunks_noop(self, store: KnowledgeStore, clean_knowledge: None) -> None:
         await store.upsert_chunks("attack_kb", [])
         assert await store.count("attack_kb") == 0
 
@@ -153,9 +147,7 @@ class TestVectorSearch:
         assert results[0].score > 0.9  # same text → near-identical mock vector
 
     @pytest.mark.asyncio
-    async def test_respects_top_k(
-        self, store: KnowledgeStore, clean_knowledge: None
-    ) -> None:
+    async def test_respects_top_k(self, store: KnowledgeStore, clean_knowledge: None) -> None:
         chunks = [
             _chunk(f"chk-{i:08x}", "fp_case_kb", f"False positive case number {i}")
             for i in range(10)

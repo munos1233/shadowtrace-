@@ -40,9 +40,7 @@ class KnowledgeStore:
         contents: list[str] = []
         for c in chunks:
             if c.kb_name != kb_name:
-                raise ValueError(
-                    f"chunk {c.chunk_id} kb_name={c.kb_name} != {kb_name}"
-                )
+                raise ValueError(f"chunk {c.chunk_id} kb_name={c.kb_name} != {kb_name}")
             contents.append(c.content)
         vectors = await self._embed.embed_texts(contents)
         async with self._session_factory() as session:
@@ -62,7 +60,7 @@ class KnowledgeStore:
                             set_={
                                 "kb_name": kb_name,
                                 "content": chunk.content,
-                                "chunk_metadata": chunk.metadata,
+                                "metadata": chunk.metadata,
                                 "embedding": vec,
                             },
                         )

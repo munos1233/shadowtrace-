@@ -25,6 +25,4 @@ class KnowledgeChunkORM(Base):
         "metadata", JSONB, default=dict, nullable=False
     )
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        _TS, server_default=func.now(), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(_TS, server_default=func.now(), nullable=False)
