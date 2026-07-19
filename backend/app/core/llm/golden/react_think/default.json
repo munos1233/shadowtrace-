@@ -1,0 +1,16 @@
+{
+  "content": {
+    "thought": "No further read-only investigation is warranted from the current observation; stopping the loop.",
+    "action": {
+      "action_type": "finish",
+      "target_name": "",
+      "params": {},
+      "rationale": "default fallback: stop instead of guessing a target"
+    },
+    "candidates": []
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 40,
+  "completion_tokens": 24,
+  "total_tokens": 64
+}

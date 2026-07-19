@@ -1,0 +1,12 @@
+{
+  "content": {
+    "reflection": "Threat intelligence marks 203.0.113.88 as a known suspicious upload endpoint, but the domain-to-IP link is not yet established.",
+    "confidence": 0.45,
+    "gap": "need DNS evidence linking unknown-upload-example.com to the flagged IP",
+    "evidence_refs": ["ev-ti-001"]
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 52,
+  "completion_tokens": 38,
+  "total_tokens": 90
+}
