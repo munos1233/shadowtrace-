@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # Ensure the backend package root is on sys.path for ``from app.…`` imports.
 _BACKEND = Path(__file__).resolve().parents[1]
@@ -42,9 +42,7 @@ async def _main() -> None:
 
     settings = Settings()
     engine = create_async_engine(DATABASE_URL)
-    session_factory = async_sessionmaker(
-        bind=engine, expire_on_commit=False, autoflush=False
-    )
+    session_factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     embed_service = EmbeddingService(settings)
     store = KnowledgeStore(session_factory, embed_service)
     service = AttackKBService(store, session_factory)

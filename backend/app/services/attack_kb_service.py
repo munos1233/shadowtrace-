@@ -100,9 +100,7 @@ class AttackKBService:
             row = result.fetchone()
             return dict(row.metadata) if row else None
 
-    async def search_techniques(
-        self, query_text: str, top_k: int = 5
-    ) -> list[RetrievedChunk]:
+    async def search_techniques(self, query_text: str, top_k: int = 5) -> list[RetrievedChunk]:
         """Semantic (vector) search across ATT&CK technique descriptions."""
         query_vec = await self._store._embed.embed_query(query_text)
         return await self._store.vector_search(KB_NAME, query_vec, top_k=top_k)
