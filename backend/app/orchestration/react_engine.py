@@ -120,8 +120,13 @@ class ReActActionExecutor(Protocol):
     async def execute(self, action: ReActAction) -> dict[str, Any]:
         """Run *action* and return a JSON-safe result dict.
 
-        Implementations must raise ``ReActActionDenied`` for illegal targets
-        *before* producing any side effect.
+        Result contract: ``result["status"]`` classifies the round —
+        ``success`` / ``partial_success`` / ``accepted`` (case-insensitive,
+        missing → ``success``) count as successful; any other status
+        (``failed``, ``error``, ``react_action_denied``, ``timeout``, …)
+        counts the round as failed. Implementations must raise
+        ``ReActActionDenied`` for illegal targets *before* producing any
+        side effect.
         """
         ...
 
@@ -327,6 +332,7 @@ class ReActEngine:
             )
 
         for round_index in range(1, max_rounds + 1):
+            round_started = datetime.now(UTC)
             # --- Convergence guard: record first, then check (ISSUE-052 §4) ---
             if self._guard is not None:
                 await self._guard.record_step(
@@ -372,7 +378,9 @@ class ReActEngine:
                     confidence=last_confidence,
                 )
                 rounds.append(round_)
-                await self._trace_round(event_id, goal, context, think, round_, None)
+                await self._trace_round(
+                    event_id, goal, context, think, round_, None, started_at=round_started
+                )
                 return _result(ReActStopReason.FINISHED)
 
             # --- Budget gate (before any tool dispatch) ---
@@ -390,7 +398,9 @@ class ReActEngine:
                     confidence=last_confidence,
                 )
                 rounds.append(round_)
-                await self._trace_round(event_id, goal, context, think, round_, None)
+                await self._trace_round(
+                    event_id, goal, context, think, round_, None, started_at=round_started
+                )
                 return _result(
                     ReActStopReason.BUDGET_EXHAUSTED,
                     stop_detail=(
@@ -468,6 +478,7 @@ class ReActEngine:
                     round_,
                     None,
                     extra_warnings=["react_reflect_failed"],
+                    started_at=round_started,
                 )
                 return _result(ReActStopReason.ERROR, stop_detail=f"react_reflect: {exc}")
 
@@ -481,7 +492,9 @@ class ReActEngine:
                 confidence=reflect.confidence,
             )
             rounds.append(round_)
-            await self._trace_round(event_id, goal, context, think, round_, reflect)
+            await self._trace_round(
+                event_id, goal, context, think, round_, reflect, started_at=round_started
+            )
 
             consecutive_failures = consecutive_failures + 1 if round_failed else 0
             last_confidence = reflect.confidence
@@ -656,7 +669,9 @@ class ReActEngine:
 
     @staticmethod
     def _is_failure(action_result: dict[str, Any]) -> bool:
-        status = str(action_result.get("status", "success"))
+        # Case-insensitive: custom executors/agents may emit "FAILED" etc.;
+        # an unrecognized casing must never masquerade as success.
+        status = str(action_result.get("status", "success")).strip().lower()
         return status in _FAILURE_STATUSES
 
     # ------------------------------------------------------------------ #
@@ -672,6 +687,7 @@ class ReActEngine:
         round_: ReActRound,
         reflect: ReActReflectOutput | None,
         extra_warnings: list[str] | None = None,
+        started_at: datetime | None = None,
     ) -> None:
         """Write the per-round auditable decision_basis (no chain-of-thought)."""
         if self._trace_sink is None:
@@ -705,15 +721,17 @@ class ReActEngine:
                 ]
                 if reflect.gap:
                     output_data["gap"] = reflect.gap
-            now = datetime.now(UTC)
+            # Real round timing (same convention as BaseAgent traces): the round
+            # started at loop top; completed when its trace is written.
+            completed_at = datetime.now(UTC)
             await self._trace_sink.log_trace(
                 event_id,
                 self._agent_name,
                 input_data,
                 output_data,
                 "success",
-                now,
-                now,
+                started_at or completed_at,
+                completed_at,
             )
         except Exception:  # noqa: BLE001 - tracing must never break the loop
             logger.exception(

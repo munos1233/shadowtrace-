@@ -148,6 +148,8 @@ class RecordingTraceSink:
                 "input_data": input_data,
                 "output_data": output_data,
                 "status": status,
+                "started_at": started_at,
+                "completed_at": completed_at,
             }
         )
         return f"trc-test-{len(self.entries):04d}"
@@ -783,3 +785,44 @@ async def test_concurrent_runs_are_isolated(
     assert all(len(r.rounds) == 1 for r in results)
     for i in range(3):
         assert guard.get_state(f"evt-react-c{i}").react_rounds == 1
+
+
+async def test_failure_status_matching_is_case_insensitive() -> None:
+    class UpperFailExecutor:
+        async def execute(self, action: ReActAction) -> dict[str, Any]:
+            return {"status": "FAILED", "detail": "upstream exploded"}
+
+    llm = ScriptedLLM()
+    for _ in range(3):
+        llm.add_round(think_tool("query_threat_intel"), reflect(0.9))
+    engine = ReActEngine(llm)  # type: ignore[arg-type]
+
+    result = await engine.run(GOAL, {"event_id": EVENT_ID}, UpperFailExecutor())  # type: ignore[arg-type]
+
+    # An unrecognized casing must never masquerade as success.
+    assert result.stop_reason is ReActStopReason.ERROR
+    assert len(result.rounds) == 2
+
+
+async def test_trace_records_real_round_duration(
+    trace_sink: RecordingTraceSink,
+) -> None:
+    class SlowExecutor:
+        async def execute(self, action: ReActAction) -> dict[str, Any]:
+            await asyncio.sleep(0.01)
+            return {"status": "success", "data": {}}
+
+    llm = ScriptedLLM()
+    llm.add_round(think_tool("query_threat_intel"), reflect(0.9))
+    engine = ReActEngine(llm, trace_sink=trace_sink)  # type: ignore[arg-type]
+
+    result = await engine.run(GOAL, {"event_id": EVENT_ID}, SlowExecutor())  # type: ignore[arg-type]
+
+    assert result.stop_reason is ReActStopReason.CONFIDENCE_MET
+    assert len(trace_sink.entries) == 1
+    started_at = trace_sink.entries[0]["started_at"]
+    completed_at = trace_sink.entries[0]["completed_at"]
+    assert started_at is not None and completed_at is not None
+    assert completed_at >= started_at
+    # The 10ms executor delay must be visible in the traced round duration.
+    assert (completed_at - started_at).total_seconds() >= 0.005
