@@ -327,7 +327,7 @@ class TestFpCaseSearch:
         results = await case_kb_service.search_fp_cases(alert_text, top_k=3)
         assert len(results) >= 1
         top = results[0]
-        assert top.chunk_id == make_chunk_id(FP_KB_NAME, "case-00000001")
+        assert top.metadata["case_id"] == "case-00000001"
         assert top.retrieval_method == "vector"
         assert top.score >= 0.5, f"Expected score >= 0.5, got {top.score:.4f}"
 
@@ -437,11 +437,13 @@ class TestArchiveEventAsCase:
                     INSERT INTO security_event
                         (event_id, event_type, title, description, status, severity,
                          risk_score, confidence, final_verdict, entities,
-                         creation_source_ref, disposition_policy, closed_at)
+                         creation_source_ref, source_reference_snapshots,
+                         disposition_policy, closed_at)
                     VALUES
-                        (:eid, 'data_exfiltration', 'Test archive event', 'Test description',
-                         'closed', 'high', 75, 0.8, 'confirmed_threat',
-                         :entities, :ref, 'required', '2024-06-15T10:00:00Z')
+                        (:eid, 'data_exfiltration', 'Test archive event',
+                         'Test description', 'closed', 'high', 75, 0.8,
+                         'confirmed_threat', :entities, :ref, :ref,
+                         'required', '2024-06-15T10:00:00Z')
                     ON CONFLICT (event_id) DO UPDATE
                     SET status = 'closed',
                         final_verdict = 'confirmed_threat',

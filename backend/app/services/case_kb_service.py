@@ -131,5 +131,5 @@ class CaseKBService:
 
 def _derive_case_id(event_id: str) -> str:
     """Deterministically derive a ``case-{8 hex}`` ID from an event_id."""
-    digest = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(event_id.encode()).hexdigest()
     return f"case-{digest[:8]}"
