@@ -241,7 +241,7 @@ async def _add_report(
                     report_id=f"rpt-{uuid.uuid4().hex[:8]}",
                     event_id=event_id,
                     title="test report",
-                    report_data={"sections": []},
+                    sections=[],
                 )
             )
 

@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.errors import (
-    DependencyUnavailableError,
     InvalidStateTransitionError,
     InvalidVerdictStatusCombinationError,
     ValidationError,
@@ -41,8 +40,10 @@ from app.models.source import SourceReference
 from app.models.workflow import TransitionContext
 from app.services.context_service import EventContextStore, ctx_key
 from app.services.degraded_flag_service import DegradedFlagService
+from app.services.event_audit_log_service import EventAuditLogService
 from app.services.event_service import EventService, IngestableSource
 from app.services.source_policy_resolver import SourcePolicyResolver
+from app.services.state_machine_service import StateMachineService
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 DATABASE_URL = os.environ.get(
@@ -97,12 +98,21 @@ async def event_service(
 ) -> EventService:
     degraded = DegradedFlagService(store, session_factory)
     bus = EventBus(redis_client)
+    audit_log = EventAuditLogService(session_factory)
+    state_machine = StateMachineService(
+        session_factory,
+        store,
+        event_bus=bus,
+        audit_log=audit_log,
+        degraded_flags=degraded,
+    )
     return EventService(
         session_factory,
         store,
         event_bus=bus,
         degraded_flags=degraded,
         policy_resolver=SourcePolicyResolver(),
+        state_machine=state_machine,
     )
 
 
@@ -930,9 +940,9 @@ async def test_no_update_event_status_and_illegal_transition_unchanged(
         assert row is not None
         assert row.status == EventStatus.NEW.value
 
-    # Legal edge still requires StateMachineService.
-    with pytest.raises(DependencyUnavailableError):
-        await event_service.transition_status(created.event_id, EventStatus.TRIAGING)
+    # Legal edge delegates to StateMachineService and succeeds.
+    result = await event_service.transition_status(created.event_id, EventStatus.TRIAGING)
+    assert result.status == EventStatus.TRIAGING
 
 
 @pytest.mark.asyncio
