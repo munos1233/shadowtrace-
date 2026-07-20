@@ -20,6 +20,7 @@ from app.agents.triage_agent import (
     _extract_iocs,
     _map_event_type,
     _merge_hint_entities,
+    _resolve_alert_type_from_snapshot,
 )
 from app.core.errors import (
     DependencyUnavailableError,
@@ -60,6 +61,7 @@ class _MockBoundWorkingMemory:
     def for_writer(self, writer: str) -> _MockBoundWorkingMemory:
         """Mint a new mock bound to *writer* (mirrors WorkingMemory.for_writer)."""
         from app.services.working_memory import normalize_writer
+
         return _MockBoundWorkingMemory(writer_name=normalize_writer(writer))
 
     async def read(self, event_id: str, key: str) -> object:
@@ -95,6 +97,7 @@ class _GuardrailMockBoundWorkingMemory:
     def for_writer(self, writer: str) -> _GuardrailMockBoundWorkingMemory:
         """Mint a new guardrail-enforcing mock bound to *writer*."""
         from app.services.working_memory import normalize_writer
+
         return _GuardrailMockBoundWorkingMemory(writer_name=normalize_writer(writer))
 
     async def read(self, event_id: str, key: str) -> object:
@@ -130,15 +133,28 @@ class _MockLLMClient:
         self._raise_error = raise_error
         self.chat_calls: list[dict] = []
 
-    async def chat(self, messages, *, event_id, agent_name, prompt_key,
-                   scenario_id=None, temperature=0.3, max_tokens=4096,
-                   json_mode=False, response_model=None, timeout=None):
-        self.chat_calls.append({
-            "messages": messages,
-            "event_id": event_id,
-            "agent_name": agent_name,
-            "prompt_key": prompt_key,
-        })
+    async def chat(
+        self,
+        messages,
+        *,
+        event_id,
+        agent_name,
+        prompt_key,
+        scenario_id=None,
+        temperature=0.3,
+        max_tokens=4096,
+        json_mode=False,
+        response_model=None,
+        timeout=None,
+    ):
+        self.chat_calls.append(
+            {
+                "messages": messages,
+                "event_id": event_id,
+                "agent_name": agent_name,
+                "prompt_key": prompt_key,
+            }
+        )
         if self._raise_error:
             raise self._raise_error
         return self._response
@@ -203,7 +219,8 @@ class TestApplySeverityRules:
 
     def test_data_exfiltration_with_lateral_is_critical(self):
         severity, need = _apply_severity_rules(
-            EventType.DATA_EXFILTRATION, alert_text="lateral movement detected",
+            EventType.DATA_EXFILTRATION,
+            alert_text="lateral movement detected",
         )
         assert severity == Severity.CRITICAL
         assert need is True
@@ -323,9 +340,13 @@ class TestFPHook:
         fp_memory = _MockBoundWorkingMemory(writer_name="FalsePositiveMatcher")
         agent_memory = _MockBoundWorkingMemory(writer_name="TriageAgent")
         # Pre-populate agent memory with source_snapshot.
-        await agent_memory.write("evt-001", "source_snapshot", {
-            "scenario": "account_anomaly_fp",
-        })
+        await agent_memory.write(
+            "evt-001",
+            "source_snapshot",
+            {
+                "scenario": "account_anomaly_fp",
+            },
+        )
 
         agent = MagicMock()
         agent.working_memory = agent_memory
@@ -338,6 +359,7 @@ class TestFPHook:
         assert result is not None
         assert isinstance(result, dict)
         assert result["matched_rule"] == "ops_change_window_bulk_login"
+        assert result["recommendation"] == "close_as_fp"
 
     @pytest.mark.asyncio
     async def test_write_raises_on_wrong_identity(self):
@@ -350,9 +372,13 @@ class TestFPHook:
         """
         # Agent memory: plain mock (no guardrail) so reading source_snapshot works.
         agent_memory = _MockBoundWorkingMemory(writer_name="TriageAgent")
-        await agent_memory.write("evt-001", "source_snapshot", {
-            "scenario": "account_anomaly_fp",
-        })
+        await agent_memory.write(
+            "evt-001",
+            "source_snapshot",
+            {
+                "scenario": "account_anomaly_fp",
+            },
+        )
 
         # Hook memory: guardrail-enforcing mock bound to WRONG identity.
         hook_memory = _GuardrailMockBoundWorkingMemory(writer_name="TriageAgent")
@@ -408,9 +434,13 @@ class TestFPHook:
         """Hook matches on signature (not scenario) field."""
         fp_memory = _MockBoundWorkingMemory(writer_name="FalsePositiveMatcher")
         agent_memory = _MockBoundWorkingMemory(writer_name="TriageAgent")
-        await agent_memory.write("evt-001", "source_snapshot", {
-            "signature": "ops_change_window_bulk_login",
-        })
+        await agent_memory.write(
+            "evt-001",
+            "source_snapshot",
+            {
+                "signature": "ops_change_window_bulk_login",
+            },
+        )
 
         agent = MagicMock()
         agent.working_memory = agent_memory
@@ -440,7 +470,7 @@ class TestTriageAgentBasic:
         input_ = _make_input(
             raw_event_summary=(
                 "User zhangsan on host PC-FIN-023 executed powershell.exe and "
-                "uploaded data to 203.0.113.88 (evil.example.com)"
+                "uploaded data from 45.153.12.88 to 203.0.113.88 (evil.example.com)"
             ),
         )
         result = await agent._run(input_)
@@ -453,8 +483,36 @@ class TestTriageAgentBasic:
         assert len(result.entities.hosts) >= 1, "Should extract host 'PC-FIN-023'"
         assert len(result.entities.ips) >= 1, "Should extract IP 203.0.113.88"
         assert len(result.entities.domains) >= 1, "Should extract domain 'evil.example.com'"
-        # External IP in IoC list.
+        # ISSUE-032 acceptance #2: main scenario severity high + need_investigation.
+        assert result.severity == Severity.HIGH
+        assert result.need_investigation is True
+        # External IPs in IoC list (including Issue example IP).
         assert "203.0.113.88" in result.ioc_list
+        assert "45.153.12.88" in result.ioc_list
+
+    @pytest.mark.asyncio
+    async def test_map_event_type_from_raw_alert_snapshot_file_fallback(self):
+        """File fallback alert_type comes from raw_alert_snapshot when snapshot has none."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        await wm.write(
+            "evt-fb",
+            "source_snapshot",
+            {
+                "creation_source_ref": {"source_object_id": "file-alert-1"},
+                "raw_alert_snapshot": {
+                    "payload_hash": "abc123",
+                    "primary_entity": "zhangsan",
+                    "raw": {"alert_type": "malicious_process"},
+                },
+            },
+        )
+        agent = TriageAgent(working_memory=wm)
+        input_ = _make_input(
+            "evt-fb",
+            raw_event_summary="benign text without event-type keywords",
+        )
+        result = await agent._run(input_)
+        assert result.event_type == EventType.MALICIOUS_PROCESS
 
     @pytest.mark.asyncio
     async def test_single_login_failure_is_low(self):
@@ -570,8 +628,7 @@ class TestTriageAgentLLM:
         )
         result = await agent._run(input_)
         assert result.degraded is True, (
-            "TimeoutError should trigger regex fallback (degraded=True), "
-            "not crash the agent"
+            "TimeoutError should trigger regex fallback (degraded=True), not crash the agent"
         )
         assert len(result.entities.ips) >= 1
         assert "203.0.113.88" in result.ioc_list
@@ -657,7 +714,7 @@ class TestTriageAgentDegraded:
         assert any("WEB" in (h.hostname or "") for h in result.entities.hosts)
 
     @pytest.mark.asyncio
-    async def test_triage_result_has_agent_trace(self):
+    async def test_triage_result_has_required_fields(self):
         """TriageResult is complete with all required fields."""
         wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
         agent = TriageAgent(working_memory=wm)
@@ -740,22 +797,26 @@ class TestTriageAgentContract:
 
     def test_agent_name_in_io_mapping(self):
         from app.models.agent_io import AGENT_INPUT_BY_NAME
+
         assert AGENT_INPUT_BY_NAME.get("triage_agent") is TriageAgentInput
 
     def test_triage_result_extra_forbid(self):
         """TriageResult rejects extra fields."""
         with pytest.raises(pydantic.ValidationError):
-            TriageResult.model_validate({
-                "event_type": "other",
-                "severity": "low",
-                "need_investigation": False,
-                "unknown_field": "should_reject",
-            })
+            TriageResult.model_validate(
+                {
+                    "event_type": "other",
+                    "severity": "low",
+                    "need_investigation": False,
+                    "unknown_field": "should_reject",
+                }
+            )
 
 
 # --------------------------------------------------------------------------- #
 # Tests: Golden response compatibility
 # --------------------------------------------------------------------------- #
+
 
 class TestGoldenResponse:
     def test_golden_response_parses_as_triage_llm_response(self):
@@ -792,16 +853,17 @@ class _FailingWriteMockWM:
         writer_name: str = "TriageAgent",
         *,
         fail_key: str | None = None,
-        fail_error: Exception = DependencyUnavailableError("wm unavailable"),
+        fail_error: Exception | None = None,
     ) -> None:
         self.writer_name = writer_name
         self._store: dict[str, object] = {}
         self._fail_key = fail_key
-        self._fail_error = fail_error
+        self._fail_error = fail_error or DependencyUnavailableError("wm unavailable")
         self._memory = self
 
     def for_writer(self, writer: str) -> _FailingWriteMockWM:
         from app.services.working_memory import normalize_writer
+
         return _FailingWriteMockWM(
             writer_name=normalize_writer(writer),
             fail_key=self._fail_key,
@@ -1225,6 +1287,39 @@ class TestChineseAlertAccountExtraction:
 
         result = extract_entities_regex("用户名 wangwu 登录失败")
         assert "wangwu" in result.accounts
+
+
+# --------------------------------------------------------------------------- #
+# Tests: _resolve_alert_type_from_snapshot
+# --------------------------------------------------------------------------- #
+
+
+class TestResolveAlertTypeFromSnapshot:
+    def test_top_level_alert_type_preferred(self):
+        snapshot = {
+            "alert_type": "host_compromise",
+            "raw_alert_snapshot": {"raw": {"alert_type": "malicious_process"}},
+        }
+        assert _resolve_alert_type_from_snapshot(snapshot) == "host_compromise"
+
+    def test_raw_alert_snapshot_nested_raw_payload(self):
+        snapshot = {
+            "raw_alert_snapshot": {
+                "payload_hash": "abc",
+                "raw": {"alert_type": "data_exfiltration"},
+            },
+        }
+        assert _resolve_alert_type_from_snapshot(snapshot) == "data_exfiltration"
+
+    def test_raw_alert_snapshot_direct_alert_type(self):
+        snapshot = {
+            "raw_alert_snapshot": {"alert_type": "account_anomaly"},
+        }
+        assert _resolve_alert_type_from_snapshot(snapshot) == "account_anomaly"
+
+    def test_missing_snapshot_returns_none(self):
+        assert _resolve_alert_type_from_snapshot(None) is None
+        assert _resolve_alert_type_from_snapshot({}) is None
 
 
 # --------------------------------------------------------------------------- #

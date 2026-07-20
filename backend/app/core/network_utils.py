@@ -33,9 +33,11 @@ _INTERNAL_NETS: tuple[str, ...] = (
 )
 
 # Exact-match reserved addresses that aren't covered by prefix checks above.
-_RESERVED_ADDRESSES: frozenset[str] = frozenset({
-    "0.0.0.0",
-})
+_RESERVED_ADDRESSES: frozenset[str] = frozenset(
+    {
+        "0.0.0.0",
+    }
+)
 
 
 def is_internal_ip(addr: str) -> bool:

@@ -36,10 +36,10 @@ _DOMAIN_PATTERN: re.Pattern[str] = re.compile(
 _HOSTNAME_PATTERN: re.Pattern[str] = re.compile(
     r"\b"
     r"(?:"
-    r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"        # must include at least one hyphen
-    r"(?:\d|[A-Za-z]{2,})"                              # ends with digit or ≥2 letters
+    r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"  # must include at least one hyphen
+    r"(?:\d|[A-Za-z]{2,})"  # ends with digit or ≥2 letters
     r"|"
-    r"[A-Za-z]{2,}\d{1,4}"                             # PC-FIN-023 style
+    r"[A-Za-z]{2,}\d{1,4}"  # PC-FIN-023 style
     r"|"
     r"[A-Za-z][A-Za-z0-9_]*-(?:SRV|DC|DB|WEB|OPS|FIN|SQL|AD|FS|APP|JUMP|ADMIN|MAIL|PROXY|VPN|NODE|PRD|STG|DEV)"
     r"[A-Za-z0-9_-]*"  # known role suffixes
@@ -104,12 +104,8 @@ def extract_entities_regex(alert_text: str) -> EntityExtractionResult:
     ips = _unique(_IP_PATTERN.findall(alert_text))
     domains = _unique(_DOMAIN_PATTERN.findall(alert_text))
     # Exclude values that already matched as domains.
-    hostnames = _unique(
-        h for h in _HOSTNAME_PATTERN.findall(alert_text) if h not in domains
-    )
-    accounts = _unique(
-        m.group(1) for m in _ACCOUNT_PATTERN.finditer(alert_text)
-    )
+    hostnames = _unique(h for h in _HOSTNAME_PATTERN.findall(alert_text) if h not in domains)
+    accounts = _unique(m.group(1) for m in _ACCOUNT_PATTERN.finditer(alert_text))
     processes = _unique(_PROCESS_PATTERN.findall(alert_text))
     files = _unique(_FILE_PATTERN.findall(alert_text))
 

@@ -84,9 +84,7 @@ _IOC_DOMAIN_PATTERN: _re.Pattern[str] = _re.compile(
 _IOC_HASH_PATTERN: _re.Pattern[str] = _re.compile(
     r"\b([a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64})\b"
 )
-_IOC_URL_PATTERN: _re.Pattern[str] = _re.compile(
-    r"https?://[^\s,;\"'<>]+"
-)
+_IOC_URL_PATTERN: _re.Pattern[str] = _re.compile(r"https?://[^\s,;\"'<>]+")
 
 # --------------------------------------------------------------------------- #
 # FP signatures (P0 default, no vector DB dependency)
@@ -101,6 +99,7 @@ _FP_SIGNATURES: dict[str, str] = {
 # --------------------------------------------------------------------------- #
 # RuleBasedFalsePositiveHook
 # --------------------------------------------------------------------------- #
+
 
 @dataclass
 class RuleBasedFalsePositiveHook:
@@ -120,9 +119,9 @@ class RuleBasedFalsePositiveHook:
 
     def __init__(self, working_memory: BoundWorkingMemory | None = None) -> None:
         """Args:
-            working_memory: BoundWorkingMemory created via
-                ``WorkingMemory.for_writer("RuleBasedFalsePositiveHook")``.
-                If None the hook is a no-op.
+        working_memory: BoundWorkingMemory created via
+            ``WorkingMemory.for_writer("RuleBasedFalsePositiveHook")``.
+            If None the hook is a no-op.
         """
         self._wm = working_memory
 
@@ -177,6 +176,7 @@ class RuleBasedFalsePositiveHook:
 # Helper functions
 # --------------------------------------------------------------------------- #
 
+
 def _apply_severity_rules(
     event_type: EventType,
     alert_text: str = "",
@@ -226,9 +226,14 @@ def _apply_severity_rules(
                 if any(
                     kw in _at
                     for kw in (
-                        "bulk", "mass", "privilege escalation",
-                        "地域异常", "geo-anomaly", "impossible travel",
-                        "brute force", "password spray",
+                        "bulk",
+                        "mass",
+                        "privilege escalation",
+                        "地域异常",
+                        "geo-anomaly",
+                        "impossible travel",
+                        "brute force",
+                        "password spray",
                     )
                 ):
                     severity = Severity.MEDIUM
@@ -291,6 +296,37 @@ def _extract_iocs(
             return (1, value)  # domains, hashes, URLs sorted lexicographically
 
     return sorted(iocs, key=_ioc_sort_key)
+
+
+def _resolve_alert_type_from_snapshot(snapshot: dict[str, Any] | None) -> str | None:
+    """Resolve ``alert_type`` from frozen ``source_snapshot``.
+
+    Primary path: top-level ``alert_type`` on the normalized snapshot.
+    File fallback only: read the compatible ``raw_alert_snapshot`` field when
+    the normalized snapshot has no ``alert_type`` (ISSUE-032 unified naming).
+    """
+    if not isinstance(snapshot, dict):
+        return None
+
+    top_level = snapshot.get("alert_type")
+    if top_level:
+        return str(top_level)
+
+    raw_snap = snapshot.get("raw_alert_snapshot")
+    if not isinstance(raw_snap, dict):
+        return None
+
+    nested_type = raw_snap.get("alert_type")
+    if nested_type:
+        return str(nested_type)
+
+    raw_payload = raw_snap.get("raw")
+    if isinstance(raw_payload, dict):
+        payload_type = raw_payload.get("alert_type")
+        if payload_type:
+            return str(payload_type)
+
+    return None
 
 
 def _map_event_type(
@@ -399,9 +435,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         # via BoundWorkingMemory.for_writer() (the public API).
         if working_memory is not None:
             fp_hook_memory = working_memory.for_writer("RuleBasedFalsePositiveHook")
-            self.pre_triage_hooks.append(
-                RuleBasedFalsePositiveHook(working_memory=fp_hook_memory)
-            )
+            self.pre_triage_hooks.append(RuleBasedFalsePositiveHook(working_memory=fp_hook_memory))
 
     # ------------------------------------------------------------------ #
     # _run
@@ -412,9 +446,9 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         degraded = False
         reasoning_parts: list[str] = []
 
-        # 1. Map event type from source_snapshot when available.
+        # 1. Map event type from source_snapshot (file fallback via raw_alert_snapshot).
         snapshot = await self._read_source_snapshot(input.event_id)
-        raw_type = snapshot.get("alert_type") if isinstance(snapshot, dict) else None
+        raw_type = _resolve_alert_type_from_snapshot(snapshot)
         event_type = _map_event_type(raw_type, input.raw_event_summary)
 
         # 2. Entity extraction — LLM primary, regex fallback.
@@ -600,9 +634,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
     # Persistence
     # ------------------------------------------------------------------ #
 
-    async def _write_triage_result(
-        self, input: TriageAgentInput, result: TriageResult
-    ) -> None:
+    async def _write_triage_result(self, input: TriageAgentInput, result: TriageResult) -> None:
         """Persist ``triage_result`` to ``EventContext``.
 
         GuardrailViolationError (FIELD_OWNERSHIP mismatch) is always
@@ -640,9 +672,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
             result.degraded = True
             if result.reasoning:
                 result.reasoning += " "
-            result.reasoning += (
-                "triage_result persistence failed: working memory unavailable"
-            )
+            result.reasoning += "triage_result persistence failed: working memory unavailable"
             # Best-effort persistence of the degraded flag so recovery /
             # downstream agents can detect the gap.
             await self._try_persist_degraded_flag(input.event_id)
@@ -657,9 +687,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                 result.degraded = True
                 if result.reasoning:
                     result.reasoning += " "
-                result.reasoning += (
-                    f"triage_result persistence failed: {exc.error_code}"
-                )
+                result.reasoning += f"triage_result persistence failed: {exc.error_code}"
                 await self._try_persist_degraded_flag(input.event_id)
             else:
                 raise
@@ -734,4 +762,5 @@ __all__ = [
     "_external_ip_in_text",
     "_map_event_type",
     "_merge_hint_entities",
+    "_resolve_alert_type_from_snapshot",
 ]
