@@ -1188,12 +1188,9 @@ class TestMapEventTypeCoverage:
         assert result == EventType.INSIDER_THREAT
 
     def test_map_event_type_de_escalation_does_not_match(self):
-        """'de-escalation' should NOT match because 'escalation' check uses 'in'."""
-        # NOTE: 'escalation' IS a substring of 'de-escalation', so this DOES
-        # match.  This test documents the current behavior.  A future improvement
-        # could use word-boundary matching.
+        """'de-escalation' does NOT match \bescalation\b (word-boundary check)."""
         result = _map_event_type(None, "de-escalation procedure completed")
-        assert result == EventType.INSIDER_THREAT  # current behavior
+        assert result == EventType.OTHER
 
 
 # --------------------------------------------------------------------------- #

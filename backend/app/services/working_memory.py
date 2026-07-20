@@ -60,6 +60,7 @@ FIELD_OWNERSHIP: dict[str, str] = {
     "quality_scores": "OutputQualityEvaluator",
     "scratchpad": "WorkingMemory",
     "degraded_flags": "DegradedFlagService",
+    "triage_degraded": "TriageAgent",
 }
 
 # P0 RuleBasedFalsePositiveHook shares the FalsePositiveMatcher writer identity.

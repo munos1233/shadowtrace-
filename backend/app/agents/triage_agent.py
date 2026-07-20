@@ -322,7 +322,7 @@ def _map_event_type(
         return EventType.LATERAL_MOVEMENT
     if "host" in text or "compromise" in text or "infected" in text:
         return EventType.HOST_COMPROMISE
-    if "insider" in text or "privilege" in text or "escalation" in text:
+    if "insider" in text or "privilege" in text or _re.search(r"(?<!de-)escalation\b", text):
         return EventType.INSIDER_THREAT
     return EventType.OTHER
 
