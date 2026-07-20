@@ -258,8 +258,12 @@ async def cleanup(
                 orm.EventAuditLog,
                 orm.EventContextJournal,
                 orm.EventContextFieldVersion,
-                orm.DispositionOutbox,
+                orm.ActionTargetResult,      # FK → action_execution_job
+                orm.ActionExecutionJob,      # FK → action
+                orm.DispositionReceipt,      # FK → action
+                orm.DispositionOutbox,       # FK → action
                 orm.Action,
+                orm.Evidence,                # FK → security_event
                 orm.Report,
                 orm.SourceEventLink,
                 orm.SourceObject,
