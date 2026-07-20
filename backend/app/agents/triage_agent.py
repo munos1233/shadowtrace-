@@ -11,6 +11,7 @@ identity (aliased to ``FalsePositiveMatcher`` by ``WRITER_ALIASES``).
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re as _re
 from dataclasses import dataclass
@@ -51,6 +52,10 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 SEVERITY_RULES: dict[str, list[tuple[str, str]]] = {
+    # NOTE: P0 simplification — all data_exfiltration → HIGH regardless of
+    # external IP presence (ISSUE-032 originally said "数据外泄类加外部 IP 为
+    # high"). In practice data exfiltration alerts almost always contain an
+    # external IP; refining this check is deferred to a future issue.
     "high": [
         ("event_type", "data_exfiltration"),
         ("event_type", "malicious_process"),
@@ -201,6 +206,21 @@ def _apply_severity_rules(
     # Check low rules.
     for rule_key, rule_val in SEVERITY_RULES.get("low", []):
         if rule_key == "event_type" and rule_val == event_type_value:
+            # P0 simplification: all account_anomaly → LOW per ISSUE-032.
+            # Upgrade to MEDIUM when alert_text suggests bulk/mass activity,
+            # privilege escalation, or geo-anomaly (to be refined in ISSUE-078).
+            if event_type_value == "account_anomaly" and alert_text:
+                _at = alert_text.lower()
+                if any(
+                    kw in _at
+                    for kw in (
+                        "bulk", "mass", "privilege escalation",
+                        "地域异常", "geo-anomaly", "impossible travel",
+                        "brute force", "password spray",
+                    )
+                ):
+                    severity = Severity.MEDIUM
+                    return severity, True
             severity = Severity.LOW
             return severity, False
 
@@ -237,7 +257,16 @@ def _extract_iocs(
             if addr and not is_internal_ip(addr):
                 iocs.add(addr)
 
-    return sorted(iocs)
+    # Sort: IPs via ipaddress for natural ordering, everything else
+    # lexicographically.  This avoids "8.8.8.8" < "10.0.0.1" in string sort.
+    def _ioc_sort_key(value: str) -> tuple[int, object]:
+        try:
+            addr = ipaddress.ip_address(value)
+            return (0, addr)  # IP addresses sorted numerically
+        except ValueError:
+            return (1, value)  # domains, hashes, URLs sorted lexicographically
+
+    return sorted(iocs, key=_ioc_sort_key)
 
 
 def _map_event_type(
@@ -286,7 +315,9 @@ def _merge_hint_entities(
     """
     merged = EntitySet()
 
-    for category in ("accounts", "hosts", "ips", "domains", "processes", "files"):
+    # Traverse all entity categories defined on EntitySet so new categories
+    # are picked up automatically (instead of a hardcoded six-item tuple).
+    for category in EntitySet.model_fields.keys():
         llm_list: list = getattr(llm_entities, category)
         hint_list: list = getattr(hint_entities, category)
         existing_ids = {e.entity_id for e in llm_list}
@@ -518,8 +549,9 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
 
         GuardrailViolationError (FIELD_OWNERSHIP mismatch) is always
         propagated — it indicates a code defect that must be fixed.
-        Transient I/O failures are logged but do not crash the pipeline
-        (the triage result is still returned to the caller).
+        Transient I/O failures are logged AND reflected on the result
+        (``degraded=True``, reasoning annotation) so the caller knows
+        this triage product was not durably persisted.
         """
         wm = self.working_memory
         if wm is None:
@@ -537,12 +569,19 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                 input.event_id,
             )
             raise
-        except (DependencyUnavailableError, ConnectionError, TimeoutError):
-            # Transient I/O failure (Redis, DB) — log and continue.
+        except (DependencyUnavailableError, ConnectionError, TimeoutError) as exc:
+            # Transient I/O failure (Redis, DB) — mark degraded so the
+            # caller / downstream agents know this result is not durable.
             logger.warning(
                 "Transient failure writing triage_result to EventContext for event=%s",
                 input.event_id,
                 exc_info=True,
+            )
+            result.degraded = True
+            if result.reasoning:
+                result.reasoning += " "
+            result.reasoning += (
+                "triage_result persistence failed: working memory unavailable"
             )
         except ShadowTraceError as exc:
             if exc.retryable:
@@ -552,6 +591,12 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                     exc.error_code,
                     exc_info=True,
                 )
+                result.degraded = True
+                if result.reasoning:
+                    result.reasoning += " "
+                result.reasoning += (
+                    f"triage_result persistence failed: {exc.error_code}"
+                )
             else:
                 raise
 
@@ -560,14 +605,24 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
     # ------------------------------------------------------------------ #
 
     async def _read_source_snapshot(self, event_id: str) -> dict[str, Any] | None:
-        """Read the ``source_snapshot`` field from working memory."""
+        """Read the ``source_snapshot`` field from working memory.
+
+        Only known recoverable errors (transient I/O, guardrail) are caught
+        so programming errors (AttributeError, TypeError, KeyError) propagate
+        and are surfaced rather than silently swallowed.
+        """
         wm = self.working_memory
         if wm is None:
             return None
         try:
             value = await wm.read(event_id, "source_snapshot")
             return value if isinstance(value, dict) else None
-        except Exception:
+        except (
+            DependencyUnavailableError,
+            ConnectionError,
+            TimeoutError,
+            GuardrailViolationError,
+        ):
             return None
 
 

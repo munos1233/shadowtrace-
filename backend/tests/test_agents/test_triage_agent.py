@@ -21,7 +21,11 @@ from app.agents.triage_agent import (
     _map_event_type,
     _merge_hint_entities,
 )
-from app.core.errors import GuardrailViolationError, LLMError
+from app.core.errors import (
+    DependencyUnavailableError,
+    GuardrailViolationError,
+    LLMError,
+)
 from app.models.agent_io import TriageAgentInput, TriageResult
 from app.models.entities import (
     AccountEntity,
@@ -659,3 +663,289 @@ class TestGoldenResponse:
         assert parsed.event_type == EventType.OTHER
         assert isinstance(parsed.entities, EntitySet)
         assert isinstance(parsed.reasoning, str)
+
+
+# --------------------------------------------------------------------------- #
+# Mock WM that raises on write (for transient-failure tests)
+# --------------------------------------------------------------------------- #
+
+
+class _FailingWriteMockWM:
+    """Mock WM that raises on write for a specific key."""
+
+    def __init__(
+        self,
+        writer_name: str = "TriageAgent",
+        *,
+        fail_key: str | None = None,
+        fail_error: Exception = DependencyUnavailableError("wm unavailable"),
+    ) -> None:
+        self.writer_name = writer_name
+        self._store: dict[str, object] = {}
+        self._fail_key = fail_key
+        self._fail_error = fail_error
+        self._memory = self
+
+    def for_writer(self, writer: str) -> _FailingWriteMockWM:
+        from app.services.working_memory import normalize_writer
+        return _FailingWriteMockWM(
+            writer_name=normalize_writer(writer),
+            fail_key=self._fail_key,
+            fail_error=self._fail_error,
+        )
+
+    async def read(self, event_id: str, key: str) -> object:
+        return self._store.get(key)
+
+    async def write(self, event_id: str, key: str, value: object) -> None:
+        if self._fail_key is not None and key == self._fail_key:
+            raise self._fail_error
+        self._store[key] = value
+
+    async def append_scratchpad(self, event_id: str, note: str) -> None:
+        pass
+
+    async def read_scratchpad(self, event_id: str) -> list:
+        return []
+
+
+# --------------------------------------------------------------------------- #
+# Tests: Should-Fix #1 — transient write failure marks degraded
+# --------------------------------------------------------------------------- #
+
+
+class TestWriteTriageResultTransientFailure:
+    @pytest.mark.asyncio
+    async def test_transient_write_failure_marks_degraded(self):
+        """When wm.write raises DependencyUnavailableError, result.degraded=True."""
+        wm = _FailingWriteMockWM(
+            writer_name="TriageAgent",
+            fail_key="triage_result",
+            fail_error=DependencyUnavailableError("Redis down"),
+        )
+        agent = TriageAgent(working_memory=wm)
+
+        input_ = _make_input(
+            raw_event_summary="Host compromise detected on server-01",
+        )
+        result = await agent._run(input_)
+        assert result.degraded is True
+        assert "triage_result persistence failed" in result.reasoning
+        assert "working memory unavailable" in result.reasoning
+
+    @pytest.mark.asyncio
+    async def test_retryable_shadowtrace_error_marks_degraded(self):
+        """When wm.write raises a retryable ShadowTraceError, result.degraded=True."""
+        from app.core.errors import ShadowTraceError
+
+        wm = _FailingWriteMockWM(
+            writer_name="TriageAgent",
+            fail_key="triage_result",
+            fail_error=ShadowTraceError(
+                "DB timeout",
+                error_code="db_timeout",
+                retryable=True,
+            ),
+        )
+        agent = TriageAgent(working_memory=wm)
+
+        input_ = _make_input(raw_event_summary="Test alert")
+        result = await agent._run(input_)
+        assert result.degraded is True
+        assert "triage_result persistence failed: db_timeout" in result.reasoning
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_shadowtrace_error_raises(self):
+        """Non-retryable ShadowTraceError propagates, not swallowed."""
+        from app.core.errors import ShadowTraceError
+
+        wm = _FailingWriteMockWM(
+            writer_name="TriageAgent",
+            fail_key="triage_result",
+            fail_error=ShadowTraceError(
+                "Schema mismatch",
+                error_code="schema_error",
+                retryable=False,
+            ),
+        )
+        agent = TriageAgent(working_memory=wm)
+
+        input_ = _make_input(raw_event_summary="Test alert")
+        with pytest.raises(ShadowTraceError) as exc_info:
+            await agent._run(input_)
+        assert exc_info.value.error_code == "schema_error"
+
+
+# --------------------------------------------------------------------------- #
+# Tests: Should-Fix #3 — account_anomaly keyword-based upgrade
+# --------------------------------------------------------------------------- #
+
+
+class TestAccountAnomalyUpgrade:
+    def test_single_login_failure_is_low(self):
+        """Plain single login failure → LOW (unchanged behavior)."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="User svc-backup failed to login 1 time",
+        )
+        assert severity == Severity.LOW
+        assert need is False
+
+    def test_bulk_account_anomaly_is_medium(self):
+        """Bulk account creation → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="Bulk account creation detected: 50 new users in 5 minutes",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_mass_account_anomaly_is_medium(self):
+        """Mass login failures → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="Mass login failures from multiple IPs detected",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_privilege_escalation_is_medium(self):
+        """Privilege escalation → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="Privilege escalation detected: user granted admin role",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_brute_force_is_medium(self):
+        """Brute force attack → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="Brute force attack on SSH port detected",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_password_spray_is_medium(self):
+        """Password spray → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="Password spray attack targeting O365 accounts",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_chinese_geo_anomaly_is_medium(self):
+        """Chinese geo-anomaly description → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="检测到账号地域异常登录行为",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_impossible_travel_is_medium(self):
+        """Impossible travel → MEDIUM."""
+        severity, need = _apply_severity_rules(
+            EventType.ACCOUNT_ANOMALY,
+            alert_text="Impossible travel: login from Beijing then New York in 10 minutes",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+
+# --------------------------------------------------------------------------- #
+# Tests: Should-Fix #4 — agent_trace recording
+# --------------------------------------------------------------------------- #
+
+
+class TestTriageAgentTrace:
+    @pytest.mark.asyncio
+    async def test_triage_agent_records_agent_trace(self):
+        """TriageAgent.execute() calls trace_service.log_trace."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        trace_service = MagicMock()
+        trace_service.log_trace = MagicMock()
+
+        agent = TriageAgent(working_memory=wm, trace_service=trace_service)
+
+        input_ = _make_input(raw_event_summary="Host compromise detected")
+        await agent.execute(input_)
+
+        # trace_service.log_trace must have been called once.
+        trace_service.log_trace.assert_called_once()
+        call_kwargs = trace_service.log_trace.call_args.kwargs
+        assert call_kwargs["event_id"] == input_.event_id
+        assert call_kwargs["agent_name"] == "triage_agent"
+        assert call_kwargs["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_no_trace_service_no_crash(self):
+        """Agent without trace_service still executes without error."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        agent = TriageAgent(working_memory=wm)  # no trace_service
+
+        input_ = _make_input(raw_event_summary="Test alert")
+        result = await agent.execute(input_)
+        assert isinstance(result, TriageResult)
+
+
+# --------------------------------------------------------------------------- #
+# Tests: Boundary / edge cases (from review recommendations)
+# --------------------------------------------------------------------------- #
+
+
+class TestTriageAgentBoundaries:
+    @pytest.mark.asyncio
+    async def test_empty_alert_returns_other_event_type(self):
+        """Empty alert string → OTHER event type, no crash."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        agent = TriageAgent(working_memory=wm)
+
+        input_ = _make_input(raw_event_summary="")
+        result = await agent._run(input_)
+        assert result.event_type == EventType.OTHER
+        assert isinstance(result.entities, EntitySet)
+
+    @pytest.mark.asyncio
+    async def test_very_long_alert_does_not_crash(self):
+        """Extremely long alert text (>10000 chars) does not crash the agent."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        agent = TriageAgent(working_memory=wm)
+
+        long_text = "Event: " + "suspicious activity " * 2000  # ~24000 chars
+        input_ = _make_input(raw_event_summary=long_text)
+        result = await agent._run(input_)
+        assert isinstance(result, TriageResult)
+        assert result.event_type is not None
+
+    @pytest.mark.asyncio
+    async def test_chinese_alert_entity_extraction(self):
+        """All-Chinese alert with no English keywords → extracts via regex."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        agent = TriageAgent(working_memory=wm)
+
+        # NOTE: IP regex uses \b which requires an ASCII word boundary;
+        # Chinese characters are \w in Python 3 Unicode mode, so the IP
+        # must be whitespace-separated from adjacent CJK text.
+        input_ = _make_input(
+            raw_event_summary=(
+                "用户张三从主机 PC-FIN-023 执行了 powershell.exe "
+                "并上传数据到 203.0.113.88 (evil.example.com)"
+            ),
+        )
+        result = await agent._run(input_)
+        assert isinstance(result, TriageResult)
+        # Regex should still extract the external IP and domain.
+        assert "203.0.113.88" in result.ioc_list
+        assert "evil.example.com" in result.ioc_list
+
+    def test_data_exfiltration_without_external_ip_still_high(self):
+        """Data exfiltration severity is HIGH even when no external IP in text."""
+        severity, need = _apply_severity_rules(
+            EventType.DATA_EXFILTRATION,
+            alert_text="Data exfiltration to internal server",
+        )
+        assert severity == Severity.HIGH
+        assert need is True
