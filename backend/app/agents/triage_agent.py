@@ -507,6 +507,20 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
             entities = await self._regex_fallback(alert_text)
             return entities, True, ""
 
+        except (TimeoutError, OSError) as exc:
+            # LLM transport / network-layer timeout (asyncio.timeout(), socket
+            # errors) — these are not ShadowTraceError subclasses and must be
+            # caught separately so the regex fallback engages instead of the
+            # outer exception handler marking the agent as ``failed``.
+            logger.warning(
+                "LLM transport/timeout error for event=%s: %s",
+                event_id,
+                exc,
+                exc_info=True,
+            )
+            entities = await self._regex_fallback(alert_text)
+            return entities, True, ""
+
         except ShadowTraceError as exc:
             # Known failure modes: timeout, auth, rate-limit, provider error,
             # invalid JSON → all degrade gracefully to regex.
@@ -615,7 +629,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                 input.event_id,
             )
             raise
-        except (DependencyUnavailableError, ConnectionError, TimeoutError) as exc:
+        except (DependencyUnavailableError, ConnectionError, TimeoutError):
             # Transient I/O failure (Redis, DB) — mark degraded so the
             # caller / downstream agents know this result is not durable.
             logger.warning(

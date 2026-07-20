@@ -447,7 +447,12 @@ class TestTriageAgentBasic:
         assert isinstance(result, TriageResult)
         assert result.degraded is True
         assert result.event_type == EventType.DATA_EXFILTRATION  # 'upload' keyword
-        assert len(result.entities.ips) >= 1
+        # All four entity types required by acceptance criteria #1 must be
+        # extracted from a representative data-exfiltration alert text.
+        assert len(result.entities.accounts) >= 1, "Should extract account 'zhangsan'"
+        assert len(result.entities.hosts) >= 1, "Should extract host 'PC-FIN-023'"
+        assert len(result.entities.ips) >= 1, "Should extract IP 203.0.113.88"
+        assert len(result.entities.domains) >= 1, "Should extract domain 'evil.example.com'"
         # External IP in IoC list.
         assert "203.0.113.88" in result.ioc_list
 
@@ -546,6 +551,32 @@ class TestTriageAgentLLM:
         result = await agent._run(input_)
         assert result.degraded is True
         assert "203.0.113.88" in result.ioc_list  # regex extracted IP
+
+    @pytest.mark.asyncio
+    async def test_llm_timeout_triggers_regex_fallback(self):
+        """LLM chat() raises TimeoutError → degraded regex fallback.
+
+        TimeoutError (Python 3.11+, inherits from OSError) is NOT a
+        ShadowTraceError subclass.  The agent must catch it separately
+        and fall back to regex so the main triage pipeline does not fail.
+        """
+        llm_client = _MockLLMClient(raise_error=TimeoutError("LLM timed out"))
+
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        agent = TriageAgent(llm_client=llm_client, working_memory=wm)
+
+        input_ = _make_input(
+            raw_event_summary="User zhangsan on PC-FIN-023 uploaded to 203.0.113.88",
+        )
+        result = await agent._run(input_)
+        assert result.degraded is True, (
+            "TimeoutError should trigger regex fallback (degraded=True), "
+            "not crash the agent"
+        )
+        assert len(result.entities.ips) >= 1
+        assert "203.0.113.88" in result.ioc_list
+        # LLM client should have been called (and then timed out).
+        assert len(llm_client.chat_calls) == 1
 
     @pytest.mark.asyncio
     async def test_empty_source_snapshot_no_crash(self):
