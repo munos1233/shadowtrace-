@@ -1,0 +1,780 @@
+{
+  "version": "1.0.0",
+  "description": "SOAR playbook knowledge base — standard response procedures by event type and severity",
+  "playbooks": [
+    {
+      "playbook_id": "pb-a1b2c3d4",
+      "playbook_name": "Account Anomaly Credential Compromise Response",
+      "event_type": "account_anomaly",
+      "min_severity": "high",
+      "description": "Respond to high-severity account anomalies with credential rotation, session termination, and account disabling.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Query Account Login History",
+          "tool_name": "query_account_login",
+          "action_level": "l0",
+          "precondition": "Account identifier is known",
+          "expected_outcome": "Login timeline and geolocation anomalies identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 2,
+          "action_name": "Disable Compromised Account",
+          "tool_name": "disable_account",
+          "action_level": "l3",
+          "precondition": "Account confirmed as compromised",
+          "expected_outcome": "Account disabled; lateral movement blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 3,
+          "action_name": "Force Logout All Sessions",
+          "tool_name": "force_logout",
+          "action_level": "l3",
+          "precondition": "Account disabled successfully",
+          "expected_outcome": "All active sessions terminated",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Reset Account Password",
+          "tool_name": "reset_password",
+          "action_level": "l4",
+          "precondition": "Account owner identity verified",
+          "expected_outcome": "Password rotated; unauthorized access revoked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Revoke Access Tokens",
+          "tool_name": "revoke_token",
+          "action_level": "l4",
+          "precondition": "Password reset completed",
+          "expected_outcome": "All issued tokens and sessions invalidated",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 6,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Initial containment actions executed",
+          "expected_outcome": "Ticket created for tracking and audit",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 7,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team alerted with incident summary",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-e5f6a7b8",
+      "playbook_name": "Account Anomaly Investigation",
+      "event_type": "account_anomaly",
+      "min_severity": "medium",
+      "description": "Investigate medium-severity account anomalies through login and file access queries before creating a ticket.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Query Account Login History",
+          "tool_name": "query_account_login",
+          "action_level": "l0",
+          "precondition": "Account identifier is known",
+          "expected_outcome": "Login pattern baseline and anomalies identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query File Access Events",
+          "tool_name": "query_file_access",
+          "action_level": "l0",
+          "precondition": "Login anomaly confirmed",
+          "expected_outcome": "Suspicious file access patterns identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Investigation findings documented",
+          "expected_outcome": "Ticket created for tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "Ticket created",
+          "expected_outcome": "Security team notified with findings",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-1c2d3e4f",
+      "playbook_name": "Host Compromise Containment",
+      "event_type": "host_compromise",
+      "min_severity": "high",
+      "description": "Contain a compromised host through isolation, process investigation, and network blocking.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Isolate Host from Network",
+          "tool_name": "isolate_host",
+          "action_level": "l3",
+          "precondition": "Host identified as compromised",
+          "expected_outcome": "Host network-isolated; lateral movement prevented",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query EDR Process Activity",
+          "tool_name": "query_edr_process",
+          "action_level": "l0",
+          "precondition": "Host isolated",
+          "expected_outcome": "Malicious processes identified with full execution chain",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Scan Host for Virus",
+          "tool_name": "scan_host_for_virus",
+          "action_level": "l3",
+          "precondition": "Malicious processes identified",
+          "expected_outcome": "Malware detected and artifacts collected",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Block Suspicious IPs",
+          "tool_name": "block_ip",
+          "action_level": "l2",
+          "precondition": "C2 IPs identified from process/network analysis",
+          "expected_outcome": "C2 communication channels blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Containment actions executed",
+          "expected_outcome": "Ticket created for remediation tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 6,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team alerted with containment summary",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-5a6b7c8d",
+      "playbook_name": "Data Exfiltration High Response",
+      "event_type": "data_exfiltration",
+      "min_severity": "high",
+      "description": "Aggressive containment for critical data exfiltration: disable accounts, isolate hosts, block network channels, and quarantine files.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Disable Exfiltrating Account",
+          "tool_name": "disable_account",
+          "action_level": "l3",
+          "precondition": "Account associated with data exfiltration identified",
+          "expected_outcome": "Account disabled; exfiltration channel cut",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Isolate Affected Host",
+          "tool_name": "isolate_host",
+          "action_level": "l3",
+          "precondition": "Source host identified",
+          "expected_outcome": "Host network-isolated; data staging interrupted",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 3,
+          "action_name": "Block Exfiltration IPs",
+          "tool_name": "block_ip",
+          "action_level": "l2",
+          "precondition": "Destination IPs identified from network flows",
+          "expected_outcome": "External exfiltration endpoints blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Block Exfiltration Domains",
+          "tool_name": "block_domain",
+          "action_level": "l2",
+          "precondition": "Destination domains identified from DNS/flow logs",
+          "expected_outcome": "External exfiltration domains blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Quarantine Suspicious Files",
+          "tool_name": "quarantine_file",
+          "action_level": "l3",
+          "precondition": "Staged or archived files identified on host",
+          "expected_outcome": "Sensitive files quarantined; exfiltration artifacts preserved",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 6,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Containment actions executed",
+          "expected_outcome": "Ticket created for incident tracking and audit",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 7,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team alerted with critical incident summary",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-9e0f1a2b",
+      "playbook_name": "Data Exfiltration Medium Investigation",
+      "event_type": "data_exfiltration",
+      "min_severity": "medium",
+      "description": "Investigate medium-severity data exfiltration indicators through file access and network flow analysis with targeted blocking.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Query File Access Events",
+          "tool_name": "query_file_access",
+          "action_level": "l0",
+          "precondition": "Suspected data exfiltration indicator received",
+          "expected_outcome": "Unusual file access patterns identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query Network Flows",
+          "tool_name": "query_network_flow",
+          "action_level": "l0",
+          "precondition": "File access anomaly confirmed",
+          "expected_outcome": "Large outbound transfers and unusual destinations identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Block Suspicious IPs",
+          "tool_name": "block_ip",
+          "action_level": "l2",
+          "precondition": "External exfiltration IPs confirmed",
+          "expected_outcome": "Exfiltration channels blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Investigation and blocking completed",
+          "expected_outcome": "Ticket created for tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team notified with findings",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-3c4d5e6f",
+      "playbook_name": "Insider Threat High Containment",
+      "event_type": "insider_threat",
+      "min_severity": "high",
+      "description": "Contain high-risk insider threat: disable account, terminate sessions, revoke credentials, and quarantine accessed files.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Disable Insider Account",
+          "tool_name": "disable_account",
+          "action_level": "l3",
+          "precondition": "Insider account identified with high confidence",
+          "expected_outcome": "Account disabled; ongoing malicious activity halted",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Force Logout All Sessions",
+          "tool_name": "force_logout",
+          "action_level": "l3",
+          "precondition": "Account disabled",
+          "expected_outcome": "All active sessions terminated",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 3,
+          "action_name": "Revoke Access Tokens",
+          "tool_name": "revoke_token",
+          "action_level": "l4",
+          "precondition": "Sessions terminated",
+          "expected_outcome": "All credentials and tokens invalidated",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Quarantine Accessed Files",
+          "tool_name": "quarantine_file",
+          "action_level": "l3",
+          "precondition": "Files accessed by insider identified",
+          "expected_outcome": "Sensitive files quarantined; exfiltration prevented",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Query File Access History",
+          "tool_name": "query_file_access",
+          "action_level": "l0",
+          "precondition": "Containment actions executed",
+          "expected_outcome": "Full access audit trail collected for investigation",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 6,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Containment and investigation completed",
+          "expected_outcome": "Ticket created for HR/legal escalation",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 7,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team and stakeholders alerted",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-7a8b9c0d",
+      "playbook_name": "Insider Threat Low Investigation",
+      "event_type": "insider_threat",
+      "min_severity": "low",
+      "description": "Investigate low-severity insider threat indicators through login, file access, and historical case queries without aggressive containment.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Query Account Login History",
+          "tool_name": "query_account_login",
+          "action_level": "l0",
+          "precondition": "Insider threat indicator received",
+          "expected_outcome": "Unusual login patterns and off-hours activity identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query File Access Events",
+          "tool_name": "query_file_access",
+          "action_level": "l0",
+          "precondition": "Login pattern analysis completed",
+          "expected_outcome": "Sensitive file access patterns identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Query Similar Historical Cases",
+          "tool_name": "query_history_cases",
+          "action_level": "l0",
+          "precondition": "File access audit completed",
+          "expected_outcome": "Similar insider cases and outcomes retrieved for reference",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 4,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Investigation findings documented",
+          "expected_outcome": "Ticket created for HR review",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "Ticket created",
+          "expected_outcome": "Security team notified with investigation report",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-f0e1d2c3",
+      "playbook_name": "Malicious Process High Containment",
+      "event_type": "malicious_process",
+      "min_severity": "high",
+      "description": "Contain high-severity malicious process: block process, isolate host, scan for malware, and investigate process lineage.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Block Malicious Process",
+          "tool_name": "block_process",
+          "action_level": "l3",
+          "precondition": "Malicious process hash or name identified",
+          "expected_outcome": "Process execution blocked across fleet",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Isolate Affected Host",
+          "tool_name": "isolate_host",
+          "action_level": "l3",
+          "precondition": "Process blocking executed",
+          "expected_outcome": "Host network-isolated to prevent lateral spread",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 3,
+          "action_name": "Scan Host for Virus",
+          "tool_name": "scan_host_for_virus",
+          "action_level": "l3",
+          "precondition": "Host isolated",
+          "expected_outcome": "Full malware scan completed; threat artifacts collected",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Query EDR Process Activity",
+          "tool_name": "query_edr_process",
+          "action_level": "l0",
+          "precondition": "Process blocked and host isolated",
+          "expected_outcome": "Process lineage and parent-child relationships mapped",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 5,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Containment and investigation completed",
+          "expected_outcome": "Ticket created for remediation tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 6,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team alerted with containment summary",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-b4a5d6e7",
+      "playbook_name": "Malicious Process Medium Response",
+      "event_type": "malicious_process",
+      "min_severity": "medium",
+      "description": "Respond to medium-severity malicious process alerts with process blocking and EDR investigation.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Block Malicious Process",
+          "tool_name": "block_process",
+          "action_level": "l3",
+          "precondition": "Malicious process detected",
+          "expected_outcome": "Process blocked across endpoints",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query EDR Process Activity",
+          "tool_name": "query_edr_process",
+          "action_level": "l0",
+          "precondition": "Process blocked",
+          "expected_outcome": "Process execution chain and scope assessed",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Scan Host for Virus",
+          "tool_name": "scan_host_for_virus",
+          "action_level": "l3",
+          "precondition": "Process scope confirmed to single host",
+          "expected_outcome": "Malware scan completed on affected host",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Response actions completed",
+          "expected_outcome": "Ticket created for tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team notified with response summary",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-c8d9e0f1",
+      "playbook_name": "Suspicious Domain Blocking & Investigation",
+      "event_type": "suspicious_domain",
+      "min_severity": "medium",
+      "description": "Block suspicious domains and investigate related DNS activity and threat intelligence.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Block Suspicious Domain",
+          "tool_name": "block_domain",
+          "action_level": "l2",
+          "precondition": "Suspicious domain identified",
+          "expected_outcome": "Domain blocked at network perimeter",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query DNS Resolution History",
+          "tool_name": "query_dns",
+          "action_level": "l0",
+          "precondition": "Domain blocked",
+          "expected_outcome": "Internal hosts that resolved the domain identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Query Threat Intelligence",
+          "tool_name": "query_threat_intel",
+          "action_level": "l0",
+          "precondition": "DNS history retrieved",
+          "expected_outcome": "Domain reputation, associated IPs, and threat actor context retrieved",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 4,
+          "action_name": "Block Related IPs",
+          "tool_name": "block_ip",
+          "action_level": "l2",
+          "precondition": "Related IPs identified from threat intel",
+          "expected_outcome": "Associated malicious IPs blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Blocking actions executed",
+          "expected_outcome": "Ticket created for tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 6,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team notified with threat summary",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-2a3b4c5d",
+      "playbook_name": "Lateral Movement Containment",
+      "event_type": "lateral_movement",
+      "min_severity": "high",
+      "description": "Contain high-severity lateral movement: isolate hosts, block IPs, disable compromised accounts, and analyze network flows.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Isolate Affected Hosts",
+          "tool_name": "isolate_host",
+          "action_level": "l3",
+          "precondition": "Lateral movement source hosts identified",
+          "expected_outcome": "Source hosts network-isolated; spread halted",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 2,
+          "action_name": "Block Lateral Movement IPs",
+          "tool_name": "block_ip",
+          "action_level": "l2",
+          "precondition": "Lateral movement targets identified",
+          "expected_outcome": "Internal pivot points blocked",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 3,
+          "action_name": "Query Network Flows",
+          "tool_name": "query_network_flow",
+          "action_level": "l0",
+          "precondition": "Containment actions executed",
+          "expected_outcome": "Full lateral movement paths mapped",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 4,
+          "action_name": "Disable Compromised Accounts",
+          "tool_name": "disable_account",
+          "action_level": "l3",
+          "precondition": "Compromised accounts identified from network analysis",
+          "expected_outcome": "Stolen credentials neutralized",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Containment actions executed",
+          "expected_outcome": "Ticket created for incident tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 6,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team alerted with containment map",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-6e7f8a9b",
+      "playbook_name": "Lateral Movement Investigation",
+      "event_type": "lateral_movement",
+      "min_severity": "medium",
+      "description": "Investigate medium-severity lateral movement indicators through network flow and asset queries with targeted blocking.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Query Network Flows",
+          "tool_name": "query_network_flow",
+          "action_level": "l0",
+          "precondition": "Lateral movement indicator received",
+          "expected_outcome": "Unusual internal connections and pivot patterns identified",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query Asset Information",
+          "tool_name": "query_asset_info",
+          "action_level": "l0",
+          "precondition": "Suspicious flows identified",
+          "expected_outcome": "Asset details, ownership, and criticality determined",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Block Suspicious IPs",
+          "tool_name": "block_ip",
+          "action_level": "l2",
+          "precondition": "Lateral movement confirmed between hosts",
+          "expected_outcome": "Pivot points blocked; lateral paths severed",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Investigation and blocking completed",
+          "expected_outcome": "Ticket created for tracking",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 5,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "All prior steps completed",
+          "expected_outcome": "Security team notified with lateral movement map",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    },
+    {
+      "playbook_id": "pb-0d1e2f3a",
+      "playbook_name": "Generic Incident Triage",
+      "event_type": "other",
+      "min_severity": "low",
+      "description": "Conservative triage for uncategorized events: query historical cases and asset info, then create a ticket and notify the team. No aggressive containment actions.",
+      "steps": [
+        {
+          "step_order": 1,
+          "action_name": "Query Similar Historical Cases",
+          "tool_name": "query_history_cases",
+          "action_level": "l0",
+          "precondition": "Uncategorized event received",
+          "expected_outcome": "Similar past incidents and resolutions retrieved",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 2,
+          "action_name": "Query Asset Information",
+          "tool_name": "query_asset_info",
+          "action_level": "l0",
+          "precondition": "Historical cases reviewed",
+          "expected_outcome": "Affected asset inventory and ownership documented",
+          "required_capabilities": []
+        },
+        {
+          "step_order": 3,
+          "action_name": "Create Security Ticket",
+          "tool_name": "create_ticket",
+          "action_level": "l1",
+          "precondition": "Triage queries completed",
+          "expected_outcome": "Ticket created for manual triage and assignment",
+          "required_capabilities": ["entity_response"]
+        },
+        {
+          "step_order": 4,
+          "action_name": "Notify Security Team",
+          "tool_name": "notify_security_team",
+          "action_level": "l1",
+          "precondition": "Ticket created",
+          "expected_outcome": "Security team notified for manual investigation",
+          "required_capabilities": ["entity_response"]
+        }
+      ]
+    }
+  ]
+}
