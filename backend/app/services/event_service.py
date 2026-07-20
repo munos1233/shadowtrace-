@@ -38,7 +38,7 @@ from app.models.ids import canonical_source_identity, new_event_id
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.models.tool_meta import TERMINAL_DISPOSITION_TOOL
-from app.models.workflow import TransitionContext, validate_transition, validate_verdict_status
+from app.models.workflow import TransitionContext, validate_verdict_status
 from app.services.context_service import EventContextStore, event_summary_from_security_event
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.evidence_projection import EvidenceQueryScope
@@ -614,24 +614,14 @@ class EventService:
         operator: str | None = None,
         reason: str | None = None,
     ) -> SecurityEvent:
-        """Validate then delegate status change to StateMachineService (ISSUE-037).
+        """Delegate status change to StateMachineService (ISSUE-037).
 
-        EventService never writes ``security_event.status`` itself. Illegal edges
-        raise ``InvalidStateTransitionError`` with no DB mutation. Trusted gate
-        fields are rebuilt from PostgreSQL; callers may only supply agent inputs
-        such as ``recommendation`` / ``need_investigation``.
+        EventService never writes ``security_event.status`` itself.  All
+        validation — including the CLOSED writeback gate — happens inside
+        ``StateMachineService.transition()`` under ``SELECT … FOR UPDATE``.
+        No pre-validation is done here; the single authoritative path avoids
+        TOCTOU windows, duplicate DB queries, and stale context projections.
         """
-        async with self._session_factory() as session:
-            row = await session.get(orm.SecurityEvent, event_id)
-            if row is None:
-                raise KeyError(f"security_event not found: {event_id}")
-            current = EventStatus(row.status)
-            authoritative = await self._authoritative_transition_context(
-                session, event_id, row, caller=context
-            )
-            # Raises InvalidStateTransitionError before any write.
-            validate_transition(current, target, authoritative)
-
         if self._state_machine is None:
             raise DependencyUnavailableError(
                 "StateMachineService is required for status transitions",
@@ -640,7 +630,7 @@ class EventService:
         return await self._state_machine.transition(
             event_id,
             target,
-            context=authoritative,
+            context=context,
             operator=operator,
             reason=reason,
         )
@@ -735,40 +725,6 @@ class EventService:
             disposition_only_intent=disposition_only_intent,
             response_actions_are_disposition_only=response_actions_are_disposition_only,
             has_entity_side_effect_actions=has_entity_side_effect_actions,
-        )
-
-    async def _authoritative_transition_context(
-        self,
-        session: AsyncSession,
-        event_id: str,
-        row: orm.SecurityEvent,
-        *,
-        caller: TransitionContext | None,
-    ) -> TransitionContext:
-        """Rebuild trusted transition gates from PG; keep only agent inputs from caller."""
-        caller = caller or TransitionContext()
-        verdict_gates = await self._authoritative_verdict_context(session, event_id)
-        return TransitionContext(
-            # Trusted projections — never from API/LLM self-report.
-            final_verdict=FinalVerdict(row.final_verdict),
-            disposition_policy=DispositionPolicy(row.disposition_policy),
-            severity=Severity(row.severity),
-            disposition_only_intent=verdict_gates.disposition_only_intent,
-            response_actions_are_disposition_only=(
-                verdict_gates.response_actions_are_disposition_only
-            ),
-            has_entity_side_effect_actions=verdict_gates.has_entity_side_effect_actions,
-            # CLOSED / writeback gate projections stay fail-closed until ISSUE-037
-            # fills them from Action/report state; do not trust the caller.
-            report_exists=False,
-            force_close=False,
-            applicable_required_actions=[],
-            terminal_event_writeback=None,
-            current_plan_revision=None,
-            current_closure_cycle=None,
-            # Agent business inputs only.
-            need_investigation=caller.need_investigation,
-            recommendation=caller.recommendation,
         )
 
     async def _post_create_side_effects(

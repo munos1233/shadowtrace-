@@ -7,8 +7,8 @@ authoritative resource representation). The two state families are related but
 not 1:1 mapped.
 
 Force-close that bypasses the CLOSED writeback gate is **not** available through
-``validate_transition`` — only a future ``StateMachineService.force_close``
-(admin) may set ``external_unsynced=true``.
+``validate_transition`` — only ``StateMachineService.force_close``
+(admin, ISSUE-037) may set ``external_unsynced=true``.
 """
 
 from __future__ import annotations
