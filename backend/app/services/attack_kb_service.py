@@ -17,7 +17,7 @@ KB_NAME = "attack_kb"
 
 # P0 mock-stage aliases: MockEmbedder cannot cross-match Chinese queries to
 # English technique text. Keyword leg uses expanded terms until remote
-# embeddings land (see GitHub issue filed for ISSUE-042 follow-up).
+# embeddings land (GitHub issue #522).
 _KEYWORD_QUERY_ALIASES: dict[str, str] = {
     "数据外泄": "exfiltration",
 }
