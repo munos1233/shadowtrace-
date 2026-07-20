@@ -34,7 +34,8 @@ from app.models.enums import (
     Severity,
     SourceObjectKind,
 )
-from app.models.ids import canonical_source_identity, new_event_id
+from app.models.ids import canonical_source_identity, new_action_id, new_event_id
+from app.models.report import InvestigationReport
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.models.tool_meta import TERMINAL_DISPOSITION_TOOL
@@ -667,6 +668,167 @@ class EventService:
                 payload["factors"] = list(factor_names)
             await self._bus.publish_event(event_id, "risk_updated", payload)
         return result
+
+    async def upsert_report(self, report: InvestigationReport) -> InvestigationReport:
+        """Idempotent upsert of InvestigationReport by stable ``report_id`` (ISSUE-036)."""
+        now = datetime.now(UTC)
+        sections_payload = [section.model_dump(mode="json") for section in report.sections]
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(
+                    orm.Report,
+                    report.report_id,
+                    with_for_update=True,
+                )
+                if row is None:
+                    row = orm.Report(
+                        report_id=report.report_id,
+                        event_id=report.event_id,
+                        title=report.title,
+                        summary=report.summary,
+                        sections=sections_payload,
+                        final_verdict=report.final_verdict.value,
+                        risk_score=int(report.risk_score),
+                        severity=report.severity.value,
+                        version=1,
+                        generated_by=report.generated_by,
+                        generated_at=report.generated_at or now,
+                        updated_at=now,
+                    )
+                    session.add(row)
+                else:
+                    if row.event_id != report.event_id:
+                        raise ValidationError(
+                            "report_id already bound to a different event_id",
+                            details={
+                                "report_id": report.report_id,
+                                "existing_event_id": row.event_id,
+                                "incoming_event_id": report.event_id,
+                            },
+                        )
+                    row.title = report.title
+                    row.summary = report.summary
+                    row.sections = sections_payload
+                    row.final_verdict = report.final_verdict.value
+                    row.risk_score = int(report.risk_score)
+                    row.severity = report.severity.value
+                    row.version = int(row.version or 1) + 1
+                    row.generated_by = report.generated_by
+                    if report.generated_at is not None:
+                        row.generated_at = report.generated_at
+                    row.updated_at = now
+                await session.flush()
+                await session.refresh(row)
+                return InvestigationReport(
+                    report_id=row.report_id,
+                    event_id=row.event_id,
+                    title=row.title,
+                    summary=row.summary,
+                    sections=report.sections,
+                    final_verdict=FinalVerdict(row.final_verdict),
+                    risk_score=int(row.risk_score),
+                    severity=Severity(row.severity),
+                    version=int(row.version),
+                    generated_by=row.generated_by,
+                    generated_at=row.generated_at,
+                    updated_at=row.updated_at,
+                )
+
+    async def get_report(
+        self,
+        *,
+        report_id: str | None = None,
+        event_id: str | None = None,
+    ) -> InvestigationReport | None:
+        """Load a persisted report by ``report_id`` or ``event_id``."""
+        if report_id is None and event_id is None:
+            raise ValidationError("get_report requires report_id or event_id")
+        async with self._session_factory() as session:
+            row: orm.Report | None = None
+            if report_id is not None:
+                row = await session.get(orm.Report, report_id)
+            elif event_id is not None:
+                row = await session.scalar(
+                    select(orm.Report)
+                    .where(orm.Report.event_id == event_id)
+                    .order_by(orm.Report.updated_at.desc())
+                    .limit(1)
+                )
+            if row is None:
+                return None
+            from app.models.report import ReportSection
+
+            sections = [ReportSection.model_validate(item) for item in (row.sections or [])]
+            return InvestigationReport(
+                report_id=row.report_id,
+                event_id=row.event_id,
+                title=row.title,
+                summary=row.summary,
+                sections=sections,
+                final_verdict=FinalVerdict(row.final_verdict),
+                risk_score=int(row.risk_score),
+                severity=Severity(row.severity),
+                version=int(row.version),
+                generated_by=row.generated_by,
+                generated_at=row.generated_at,
+                updated_at=row.updated_at,
+            )
+
+    async def upsert_generate_report_action(
+        self,
+        event_id: str,
+        *,
+        plan_revision: int = 1,
+    ) -> str:
+        """Idempotent system Action for local report generation (ISSUE-036)."""
+        now = datetime.now(UTC)
+        material = (
+            f"{event_id}|{int(plan_revision)}|generate_report|system|system|"
+            f"|immediate|"
+        )
+        fingerprint = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        async with self._session_factory() as session:
+            async with session.begin():
+                existing = await session.scalar(
+                    select(orm.Action).where(orm.Action.action_fingerprint == fingerprint)
+                )
+                if existing is not None:
+                    existing.status = "success"
+                    existing.executed_at = now
+                    existing.updated_at = now
+                    existing.reason = "报告自动生成"
+                    await session.flush()
+                    return existing.action_id
+
+                action_id = new_action_id()
+                session.add(
+                    orm.Action(
+                        action_id=action_id,
+                        event_id=event_id,
+                        plan_revision=int(plan_revision),
+                        action_fingerprint=fingerprint,
+                        action_category="system",
+                        action_name="generate_report",
+                        tool_name="generate_report",
+                        action_level="l0",
+                        target_type="system",
+                        target="system",
+                        parameters={},
+                        status="success",
+                        auto_execute=True,
+                        reason="报告自动生成",
+                        impact_assessment=None,
+                        execution_owner=None,
+                        writeback_required=False,
+                        writeback_applicable=False,
+                        writeback_readiness="not_required",
+                        writeback_status=None,
+                        executed_at=now,
+                        source_action_id=None,
+                    )
+                )
+                await session.flush()
+                return action_id
 
     async def transition_status(
         self,
