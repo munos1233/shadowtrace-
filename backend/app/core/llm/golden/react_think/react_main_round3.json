@@ -1,0 +1,16 @@
+{
+  "content": {
+    "thought": "DNS confirms the domain resolves to the flagged IP; one last flow query corroborates the actual outbound transfer volume from the host.",
+    "action": {
+      "action_type": "call_tool",
+      "target_name": "query_network_flow",
+      "params": {"src_ip": "10.20.30.23", "time_range": {"start": "2024-06-15T08:00:00Z", "end": "2024-06-15T10:00:00Z"}},
+      "rationale": "flow records confirm the exfiltration path end to end"
+    },
+    "candidates": ["query_network_flow"]
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 66,
+  "completion_tokens": 43,
+  "total_tokens": 109
+}

@@ -1,0 +1,16 @@
+{
+  "content": {
+    "thought": "The upload destination IP has no reputation data yet; query threat intelligence first to establish whether the indicator is known-malicious.",
+    "action": {
+      "action_type": "call_tool",
+      "target_name": "query_threat_intel",
+      "params": {"indicator": "203.0.113.88"},
+      "rationale": "threat intel corroborates the exfiltration destination before deeper queries"
+    },
+    "candidates": ["query_threat_intel", "query_dns"]
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 58,
+  "completion_tokens": 41,
+  "total_tokens": 99
+}

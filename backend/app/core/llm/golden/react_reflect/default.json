@@ -1,0 +1,12 @@
+{
+  "content": {
+    "reflection": "Default reflection: progress cannot be assessed without scenario-specific evidence.",
+    "confidence": 0.3,
+    "gap": "scenario-specific evidence missing",
+    "evidence_refs": []
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 36,
+  "completion_tokens": 20,
+  "total_tokens": 56
+}

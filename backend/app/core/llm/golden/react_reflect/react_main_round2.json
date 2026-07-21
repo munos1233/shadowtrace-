@@ -1,0 +1,12 @@
+{
+  "content": {
+    "reflection": "DNS records show unknown-upload-example.com resolving to the flagged IP; the outbound transfer itself still needs corroboration.",
+    "confidence": 0.6,
+    "gap": "need network flow evidence confirming the outbound transfer from the host",
+    "evidence_refs": ["ev-ti-001", "ev-dns-002"]
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 58,
+  "completion_tokens": 40,
+  "total_tokens": 98
+}

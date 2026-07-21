@@ -1,0 +1,16 @@
+{
+  "content": {
+    "thought": "Threat intel flags the indicator as suspicious; next resolve the suspicious domain to confirm it points at the same infrastructure.",
+    "action": {
+      "action_type": "call_tool",
+      "target_name": "query_dns",
+      "params": {"domain": "unknown-upload-example.com", "time_range": {"start": "2024-06-15T08:00:00Z", "end": "2024-06-15T10:00:00Z"}},
+      "rationale": "DNS resolution links the domain observed in the alert to the flagged IP"
+    },
+    "candidates": ["query_dns", "query_network_flow"]
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 64,
+  "completion_tokens": 45,
+  "total_tokens": 109
+}
