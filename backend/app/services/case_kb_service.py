@@ -25,7 +25,7 @@ HISTORY_KB_NAME = "history_case_kb"
 
 # Mock-stage keyword expansions until remote embeddings land (GitHub issue #522).
 _FP_KEYWORD_ALIASES: dict[str, str] = {
-    "ops-change-bot": ("ops-change-bot PC-OPS-JUMP-01 bulk login change window password rotation"),
+    "ops-change-bot": "ops-change-bot PC-OPS-JUMP-01 bulk login change window jump host",
 }
 
 
