@@ -125,7 +125,11 @@ class RuleBasedFalsePositiveHook:
         """
         self._wm = working_memory
 
-    async def __call__(self, agent: BaseAgent[TriageAgentInput, TriageResult], input: TriageAgentInput) -> None:
+    async def __call__(
+        self,
+        agent: BaseAgent[TriageAgentInput, TriageResult],
+        input: TriageAgentInput,
+    ) -> None:
         wm = self._wm
         if wm is None:
             return
