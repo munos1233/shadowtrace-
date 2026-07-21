@@ -292,8 +292,7 @@ class TestEventHandlers:
         # The sid should only be in its own room (self) and global.
         ns_rooms = sio.manager.rooms.get(SOCKETIO_NAMESPACE, {})
         event_rooms = {
-            r for r in ns_rooms
-            if r is not None and isinstance(r, str) and r.startswith("event:")
+            r for r in ns_rooms if r is not None and isinstance(r, str) and r.startswith("event:")
         }
         for room in event_rooms:
             assert sid not in ns_rooms[room], f"sid should NOT be in {room}"

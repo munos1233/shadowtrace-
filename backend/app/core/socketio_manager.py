@@ -163,8 +163,7 @@ class SocketIOManager:
                     )
                     break
                 logger.warning(
-                    "SocketIOManager subscriber error — retrying in %.1fs "
-                    "(attempt %d/%d)",
+                    "SocketIOManager subscriber error — retrying in %.1fs (attempt %d/%d)",
                     _RECONNECT_DELAY_S,
                     self._consecutive_failures,
                     _MAX_CONSECUTIVE_FAILURES,
@@ -236,9 +235,7 @@ class SocketIOManager:
         try:
             channel = channel_raw.decode("utf-8")
         except UnicodeDecodeError:
-            logger.warning(
-                "SocketIOManager channel name contains invalid UTF-8 — dropped"
-            )
+            logger.warning("SocketIOManager channel name contains invalid UTF-8 — dropped")
             return
 
         if not channel.startswith(_EVENTS_CHANNEL_PREFIX):
