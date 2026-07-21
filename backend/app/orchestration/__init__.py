@@ -14,6 +14,7 @@ from app.orchestration.react_engine import (
     ReActTraceSink,
     ReadOnlyReActExecutor,
 )
+from app.orchestration.workflow_graph import planner_node
 
 __all__ = [
     "ConvergenceGuard",
@@ -26,4 +27,5 @@ __all__ = [
     "StopDecision",
     "StopReason",
     "make_tool_call_signature",
+    "planner_node",
 ]

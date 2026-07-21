@@ -1,0 +1,62 @@
+{
+  "content": {
+    "plan_id": "pln-a1b2c3d4",
+    "event_id": "evt-20260101-0a1b2c3d",
+    "steps": [
+      {
+        "step_order": 1,
+        "step_goal": "收集威胁情报：查询IOC信誉与关联域名",
+        "assigned_agent": "evidence_agent",
+        "required_tools": ["query_threat_intel", "query_dns", "query_whois"],
+        "success_criteria": "获取至少2条IOC的外部情报数据"
+      },
+      {
+        "step_order": 2,
+        "step_goal": "采集终端与网络证据：进程、连接、文件访问",
+        "assigned_agent": "evidence_agent",
+        "required_tools": ["query_process_tree", "query_network_connections", "query_file_events"],
+        "success_criteria": "获取进程树和网络连接记录"
+      },
+      {
+        "step_order": 3,
+        "step_goal": "采集身份与访问证据：登录记录、账号活动",
+        "assigned_agent": "evidence_agent",
+        "required_tools": ["query_login_history", "query_account_activity"],
+        "success_criteria": "获取账号登录和活动记录"
+      },
+      {
+        "step_order": 4,
+        "step_goal": "采集数据安全证据：文件访问、外传检测",
+        "assigned_agent": "evidence_agent",
+        "required_tools": ["query_data_access_logs", "query_dlp_events"],
+        "success_criteria": "获取数据访问和外传检测记录"
+      },
+      {
+        "step_order": 5,
+        "step_goal": "综合风险评估：基于证据计算风险分数",
+        "assigned_agent": "risk_agent",
+        "required_tools": [],
+        "success_criteria": "产出risk_score >= 0且包含至少3个风险因子"
+      },
+      {
+        "step_order": 6,
+        "step_goal": "生成处置方案：根据风险等级规划响应动作",
+        "assigned_agent": "response_agent",
+        "required_tools": [],
+        "success_criteria": "产出至少1个处置Action"
+      }
+    ],
+    "budget": {
+      "max_tool_calls": 30,
+      "max_llm_calls": 20,
+      "max_duration_s": 300
+    },
+    "revision": 0,
+    "revise_reason": null,
+    "degraded": false
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 150,
+  "completion_tokens": 300,
+  "total_tokens": 450
+}

@@ -1,6 +1,7 @@
 """Agents package (ISSUE-005)."""
 
 from app.agents.base import AgentOutput, BaseAgent
+from app.agents.planner_agent import PlannerAgent
 from app.models.agent_io import (
     AGENT_INPUT_MODELS,
     AgentInput,
@@ -26,6 +27,7 @@ __all__ = [
     "EvidenceAgentInput",
     "GraphAgentInput",
     "MemoryAgentInput",
+    "PlannerAgent",
     "PlannerAgentInput",
     "RAGAgentInput",
     "ReportAgentInput",
