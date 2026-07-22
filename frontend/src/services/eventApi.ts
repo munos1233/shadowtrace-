@@ -5,8 +5,14 @@ import type {
   EventDetailResponse,
   EventListParams,
   EventListResponse,
+  ExecutionJobResponse,
+  SourceRecordResponse,
 } from "../types/event";
-import type { ActionListResponse } from "../types/action";
+import type {
+  ActionListResponse,
+  ResolveUnknownRequest,
+  ResolveWritebackRequest,
+} from "../types/action";
 import type { InvestigationReport } from "../types/report";
 import type { AgentTrace, AuditLog, DecisionTrace } from "../types/trace";
 
@@ -79,8 +85,10 @@ export function approveAction(actionId: string) {
 // Source records & connectors
 // ------------------------------------------------------------------ //
 
-export function getSourceRecord(eventId: string) {
-  return apiClient.get<unknown>(`/events/${eventId}/source-record`);
+export function getSourceRecord(sourceRecordId: string) {
+  return apiClient.get<SourceRecordResponse>(
+    `/source-records/${sourceRecordId}`,
+  );
 }
 
 export function listConnectors() {
@@ -91,8 +99,8 @@ export function listConnectors() {
 // Execution jobs
 // ------------------------------------------------------------------ //
 
-export function getExecutionJob(eventId: string, jobId: string) {
-  return apiClient.get<unknown>(`/events/${eventId}/execution-jobs/${jobId}`);
+export function getExecutionJob(jobId: string) {
+  return apiClient.get<ExecutionJobResponse>(`/execution-jobs/${jobId}`);
 }
 
 // ------------------------------------------------------------------ //
@@ -130,10 +138,16 @@ export function retryWriteback(writebackId: string) {
 // Admin-only resolve actions
 // ------------------------------------------------------------------ //
 
-export function resolveUnknownAction(actionId: string, resolution: string) {
-  return apiClient.post(`/actions/${actionId}/resolve`, { resolution });
+export function resolveUnknownAction(
+  actionId: string,
+  body: ResolveUnknownRequest,
+) {
+  return apiClient.post(`/actions/${actionId}/resolve-unknown`, body);
 }
 
-export function resolveWriteback(writebackId: string, resolution: string) {
-  return apiClient.post(`/writebacks/${writebackId}/resolve`, { resolution });
+export function resolveWriteback(
+  writebackId: string,
+  body: ResolveWritebackRequest,
+) {
+  return apiClient.post(`/writebacks/${writebackId}/resolve`, body);
 }

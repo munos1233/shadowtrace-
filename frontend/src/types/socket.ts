@@ -1,31 +1,55 @@
-/** Socket.IO event types — matching contracts/socketio/events.schema.json */
+/** Socket.IO types — ISSUE-040 envelope + payloads from events.schema.json */
 
-import type { EventStatus, WritebackStatus } from "./event";
+import type { WritebackStatus } from "./event";
 
-export interface SocketStateChange {
+/** Wire envelope emitted on namespace /events as event name "event". */
+export interface SocketEventEnvelope {
+  type: string;
   event_id: string;
-  old_status: EventStatus;
-  new_status: EventStatus;
+  sequence: number;
   timestamp: string;
+  payload: Record<string, unknown>;
 }
 
-export interface SocketEventCreated {
+export interface SocketEventCreatedPayload {
   event_id: string;
-  event_type: string;
-  title: string;
-  severity: string;
-  timestamp: string;
+  severity?: string;
+  event_type?: string;
+  source_product?: string;
+  created_at?: string;
 }
 
-export interface SocketWritebackUpdated {
-  event_id: string;
+export interface SocketStateChangePayload {
+  from_status: string;
+  to_status: string;
+  operator?: string;
+  external_unsynced?: boolean;
+  reason?: string;
+}
+
+/** Socket schema uses uppercase provider codes; map to API WritebackStatus. */
+export type SocketWritebackStatusCode =
+  | "PENDING"
+  | "ACCEPTED"
+  | "CONFIRMED"
+  | "FAILED"
+  | "CONFLICT"
+  | "UNKNOWN";
+
+export interface SocketWritebackUpdatedPayload {
+  disposition_id: string;
   writeback_id: string;
-  status: WritebackStatus;
-  timestamp: string;
+  status: SocketWritebackStatusCode | string;
+  provider_code?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
-/** Discriminated union of all socket events */
 export type SocketEvent =
-  | { type: "event_created"; payload: SocketEventCreated }
-  | { type: "state_change"; payload: SocketStateChange }
-  | { type: "writeback_updated"; payload: SocketWritebackUpdated };
+  | { type: "event_created"; event_id: string; payload: SocketEventCreatedPayload }
+  | { type: "state_change"; event_id: string; payload: SocketStateChangePayload }
+  | { type: "writeback_updated"; event_id: string; payload: SocketWritebackUpdatedPayload };
+
+export function mapSocketWritebackStatus(status: string): WritebackStatus {
+  return status.toLowerCase() as WritebackStatus;
+}

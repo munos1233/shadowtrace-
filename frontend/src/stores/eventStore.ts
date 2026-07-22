@@ -1,7 +1,13 @@
 /** Event store — zustand slice for event list + cache (ISSUE-067). */
 
 import { create } from "zustand";
-import type { EventListItem, EventDetailResponse, EventListParams } from "../types/event";
+import type {
+  EventListItem,
+  EventDetailResponse,
+  EventListParams,
+  EventStatus,
+} from "../types/event";
+import { mapSocketWritebackStatus } from "../types/socket";
 import { socketClient } from "../services/socketClient";
 import { listEvents } from "../services/eventApi";
 
@@ -54,6 +60,11 @@ export const useEventStore = create<EventState>((set, get) => ({
 
   setCurrentEvent(event) {
     set({ currentEvent: event });
+    const eventId = event?.event?.event_id;
+    if (eventId) {
+      socketClient.connect();
+      socketClient.subscribe(eventId);
+    }
   },
 
   startPolling(intervalMs) {
@@ -71,15 +82,27 @@ export const useEventStore = create<EventState>((set, get) => ({
     socketClient.connect();
     const unsub = socketClient.onEvent((evt) => {
       if (evt.type === "event_created") {
-        // will appear on next poll
         get().loadEvents();
       } else if (evt.type === "state_change") {
-        get()._applySocketUpdate(evt.payload.event_id, {
-          status: evt.payload.new_status,
+        get()._applySocketUpdate(evt.event_id, {
+          status: evt.payload.to_status as EventStatus,
         });
+        const current = get().currentEvent;
+        if (current?.event?.event_id === evt.event_id) {
+          set({
+            currentEvent: {
+              ...current,
+              event: {
+                ...current.event,
+                status: evt.payload.to_status as EventStatus,
+              },
+            },
+          });
+        }
       } else if (evt.type === "writeback_updated") {
-        get()._applySocketUpdate(evt.payload.event_id, {
-          writeback_overall_status: evt.payload.status,
+        const status = mapSocketWritebackStatus(String(evt.payload.status));
+        get()._applySocketUpdate(evt.event_id, {
+          writeback_overall_status: status,
         });
       }
     });

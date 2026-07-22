@@ -31,3 +31,25 @@ export interface ActionListResponse {
   page_size: number;
   items: Action[];
 }
+
+export type ResolveUnknownResolution =
+  | "mark_success"
+  | "mark_failed"
+  | "manual_confirmed";
+
+export interface ResolveUnknownRequest {
+  resolution: ResolveUnknownResolution;
+  comment: string;
+  evidence_ref?: string | null;
+}
+
+export type ResolveWritebackResolution =
+  | "manual_confirmed"
+  | "mark_failed"
+  | "abandon";
+
+export interface ResolveWritebackRequest {
+  resolution: ResolveWritebackResolution;
+  comment: string;
+  evidence_ref?: string | null;
+}

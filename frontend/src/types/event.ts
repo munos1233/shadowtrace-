@@ -109,37 +109,61 @@ export type ResponsePlanGeneratedBy = "llm" | "template";
 export type EffectStatus = "verified" | "failed" | "skipped" | "unverifiable";
 
 /* ------------------------------------------------------------------ */
-/*  Entity models                                                     */
+/*  Entity models (aligned with backend app/models/entities.py)       */
 /* ------------------------------------------------------------------ */
 
-export interface AccountEntity {
+export interface EntitySourceReference {
+  source_id: string;
+  source_type: string;
+  object_kind: string;
+  object_id: string;
+  source_status_raw?: string;
+}
+
+export interface BaseEntity {
+  entity_id: string;
+  source_refs?: EntitySourceReference[];
+  attributes?: Record<string, unknown>;
+}
+
+export interface AccountEntity extends BaseEntity {
   entity_type: "account";
-  accounts: string[];
+  username?: string | null;
+  domain?: string | null;
+  display_name?: string | null;
 }
 
-export interface HostEntity {
+export interface HostEntity extends BaseEntity {
   entity_type: "host";
-  hosts: string[];
+  hostname?: string | null;
+  ip?: string | null;
+  os?: string | null;
 }
 
-export interface IpEntity {
+export interface IpEntity extends BaseEntity {
   entity_type: "ip";
-  ips: string[];
+  address?: string | null;
+  scope?: "external" | "internal" | "unknown";
 }
 
-export interface DomainEntity {
+export interface DomainEntity extends BaseEntity {
   entity_type: "domain";
-  domains: string[];
+  fqdn?: string | null;
 }
 
-export interface ProcessEntity {
+export interface ProcessEntity extends BaseEntity {
   entity_type: "process";
-  processes: string[];
+  name?: string | null;
+  pid?: number | null;
+  command_line?: string | null;
+  hash?: string | null;
 }
 
-export interface FileEntity {
+export interface FileEntity extends BaseEntity {
   entity_type: "file";
-  files: string[];
+  path?: string | null;
+  name?: string | null;
+  hash?: string | null;
 }
 
 export type EntityItem =
@@ -151,12 +175,12 @@ export type EntityItem =
   | FileEntity;
 
 export interface EntitySet {
-  accounts: string[];
-  hosts: string[];
-  ips: string[];
-  domains: string[];
-  processes: string[];
-  files: string[];
+  accounts: AccountEntity[];
+  hosts: HostEntity[];
+  ips: IpEntity[];
+  domains: DomainEntity[];
+  processes: ProcessEntity[];
+  files: FileEntity[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -353,4 +377,21 @@ export interface WritebackRecord {
   confirmed_at: string | null;
   retry_count: number;
   error_detail: string | null;
+}
+
+export interface SourceRecordResponse {
+  source_record_id: string;
+  reference: SourceReference;
+  normalized?: Record<string, unknown>;
+  current_source_disposition?: string;
+  source_sync_state?: string | null;
+}
+
+export interface ExecutionJobResponse {
+  job_id: string;
+  event_id: string;
+  action_id: string;
+  status: string;
+  attempt?: number;
+  target_results?: Record<string, unknown>[];
 }
