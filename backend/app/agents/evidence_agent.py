@@ -6,6 +6,7 @@ Concurrency upgrade is ISSUE-034. This module only implements the serial path.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -229,12 +230,14 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
         self.query_timeout_s = query_timeout_s
         # Populated each run for agent_trace / acceptance checks.
         self.last_query_timings: list[dict[str, Any]] = []
+        self.last_persist_error: str | None = None
 
     async def _run(self, input: EvidenceAgentInput) -> EvidenceOutput:
         if self.tool_executor is None:
             raise RuntimeError("EvidenceAgent requires tool_executor")
 
         self.last_query_timings = []
+        self.last_persist_error = None
         time_range = self._resolve_time_range(input)
         collected: list[Evidence] = []
         success_sources: list[str] = []
@@ -388,6 +391,7 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
         scope: EvidenceQueryScope | None,
     ) -> tuple[ToolResult | None, int, str | None]:
         assert self.tool_executor is not None
+        started = time.perf_counter()
         try:
             if scope is not None:
                 with bind_evidence_query_scope(scope):
@@ -409,16 +413,20 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
             tool_result = (
                 result if isinstance(result, ToolResult) else ToolResult.model_validate(result)
             )
-            timing = int(tool_result.execution_time_ms or 0)
+            wall_ms = max(0, int((time.perf_counter() - started) * 1000))
+            # Prefer provider-reported duration when present; else wall clock.
+            reported = int(tool_result.execution_time_ms or 0)
+            timing = reported if reported > 0 else wall_ms
             return tool_result, timing, None
         except Exception as exc:
+            wall_ms = max(0, int((time.perf_counter() - started) * 1000))
             logger.info(
                 "evidence query failed tool=%s event=%s err=%s",
                 tool_name,
                 event_id,
                 exc,
             )
-            return None, 0, str(exc)
+            return None, wall_ms, str(exc)
 
     async def _note_timing(
         self,
@@ -444,8 +452,30 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
             return
         try:
             await self.evidence_repository.upsert_batch(evidence_list)
-        except Exception:
-            logger.warning("evidence upsert failed; continuing without DB write", exc_info=True)
+            self.last_persist_error = None
+        except Exception as exc:
+            self.last_persist_error = str(exc)
+            logger.error(
+                "evidence upsert failed; EventContext kept but evidence table may be incomplete",
+                exc_info=True,
+            )
+            # Visible in agent_trace query_timings + scratchpad without aborting collection.
+            self.last_query_timings.append(
+                {
+                    "tool_name": "evidence_upsert",
+                    "source": "persist",
+                    "status": "persist_failed",
+                    "execution_time_ms": 0,
+                    "error": str(exc),
+                }
+            )
+            event_id = evidence_list[0].event_id
+            await self._note_timing(
+                event_id,
+                "evidence_upsert",
+                status=f"persist_failed:{exc}",
+                execution_time_ms=0,
+            )
 
     async def _write_context(self, event_id: str, output: EvidenceOutput) -> None:
         if self.working_memory is None:
@@ -460,6 +490,56 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
             logger.warning(
                 "failed to write evidence_output to working memory event=%s",
                 event_id,
+                exc_info=True,
+            )
+
+    async def _record_trace(
+        self,
+        *,
+        input: EvidenceAgentInput,
+        output: EvidenceOutput | None,
+        status: str,
+        started_at: datetime,
+        completed_at: datetime | None,
+        error_detail: str | None = None,
+    ) -> None:
+        """Persist agent_trace including per-query timings (ISSUE-033 验收)."""
+        if self.trace_service is None:
+            return
+        if output is not None:
+            envelope: dict[str, Any] = {
+                **output.model_dump(mode="json"),
+                "query_timings": list(self.last_query_timings),
+                "persist_ok": self.last_persist_error is None,
+            }
+            if self.last_persist_error is not None:
+                envelope["persist_error"] = self.last_persist_error
+        else:
+            envelope = {
+                "query_timings": list(self.last_query_timings),
+                "persist_ok": self.last_persist_error is None,
+                "persist_error": self.last_persist_error,
+            }
+        try:
+            await self.trace_service.log_trace(
+                event_id=input.event_id,
+                agent_name=self.agent_name,
+                input_data=input,
+                output_data=envelope,
+                status=status,
+                started_at=started_at,
+                completed_at=completed_at,
+                error_detail=error_detail,
+                llm_model=(
+                    getattr(self.llm_client, "model_name", None) if self.llm_client else None
+                ),
+                llm_tokens_used=None,
+            )
+        except Exception:
+            logger.warning(
+                "AgentTraceService write failed for event=%s agent=%s",
+                input.event_id,
+                self.agent_name,
                 exc_info=True,
             )
 

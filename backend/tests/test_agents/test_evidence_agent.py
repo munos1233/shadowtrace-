@@ -251,6 +251,13 @@ async def test_all_seven_sources_completed_timeline_and_persistence(
     assert len(trace_service.traces) == 1
     assert trace_service.traces[0]["agent_name"] == "evidence_agent"
     assert trace_service.traces[0]["status"] == "completed"
+    trace_out = trace_service.traces[0]["output_data"]
+    assert isinstance(trace_out, dict)
+    assert "query_timings" in trace_out
+    assert len(trace_out["query_timings"]) == len(EVIDENCE_QUERY_ORDER)
+    assert {row["tool_name"] for row in trace_out["query_timings"]} == set(EVIDENCE_QUERY_ORDER)
+    assert all("execution_time_ms" in row for row in trace_out["query_timings"])
+    assert trace_out.get("persist_ok") is True
 
 
 async def test_three_tool_failures_partial_done_penalty(
@@ -423,3 +430,73 @@ async def test_evidence_table_count_matches_list_after_upsert(
     stored = await evidence_repo.list_by_event(event_id)
     assert len(stored) == len(output.evidence_list)
     assert {s.evidence_id for s in stored} == {e.evidence_id for e in output.evidence_list}
+
+
+class _FailingEvidenceRepository(InMemoryEvidenceRepository):
+    async def upsert_batch(self, evidence_list: list[Evidence]) -> None:
+        raise RuntimeError("simulated upsert failure")
+
+
+async def test_agent_trace_payload_includes_query_timings(
+    tool_executor: Any,
+    evidence_projection: EvidenceProjection,
+    wm: _FakeWorkingMemory,
+    evidence_repo: InMemoryEvidenceRepository,
+    trace_service: _RecordingTraceService,
+) -> None:
+    """Acceptance: agent_trace output_data carries per-query timings."""
+    event_id = f"evt-evd-trace-{new_sfx()}"
+    agent = _build_agent(
+        tool_executor=tool_executor,
+        wm=wm,
+        evidence_repo=evidence_repo,
+        trace_service=trace_service,
+    )
+    with bind_evidence_projection(evidence_projection):
+        with bind_evidence_query_scope(DEFAULT_SCOPE):
+            await agent.execute(
+                EvidenceAgentInput(
+                    event_id=event_id,
+                    triage_result=_main_scenario_triage(),
+                )
+            )
+    payload = trace_service.traces[0]["output_data"]
+    timings = payload["query_timings"]
+    assert len(timings) == 7
+    assert all(isinstance(row["execution_time_ms"], int) for row in timings)
+    assert payload["collection_status"] == CollectionStatus.COMPLETED.value
+    assert payload["persist_ok"] is True
+
+
+async def test_persist_failure_is_visible_in_trace_and_agent_state(
+    tool_executor: Any,
+    evidence_projection: EvidenceProjection,
+    wm: _FakeWorkingMemory,
+    trace_service: _RecordingTraceService,
+) -> None:
+    """DB upsert failure must not be silent: last_persist_error + trace persist_ok=false."""
+    event_id = f"evt-evd-persist-fail-{new_sfx()}"
+    agent = _build_agent(
+        tool_executor=tool_executor,
+        wm=wm,
+        evidence_repo=_FailingEvidenceRepository(),
+        trace_service=trace_service,
+    )
+    with bind_evidence_projection(evidence_projection):
+        with bind_evidence_query_scope(DEFAULT_SCOPE):
+            output = await agent.execute(
+                EvidenceAgentInput(
+                    event_id=event_id,
+                    triage_result=_main_scenario_triage(),
+                )
+            )
+    # Collection still returns evidence (tool path succeeded).
+    assert len(output.evidence_list) >= 5
+    assert agent.last_persist_error is not None
+    assert "simulated upsert failure" in agent.last_persist_error
+    payload = trace_service.traces[0]["output_data"]
+    assert payload["persist_ok"] is False
+    assert "simulated upsert failure" in str(payload.get("persist_error"))
+    assert any(row.get("status") == "persist_failed" for row in payload["query_timings"])
+    notes = wm.scratchpad.get(event_id, [])
+    assert any("persist_failed" in note for note in notes)
