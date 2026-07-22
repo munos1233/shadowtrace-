@@ -137,7 +137,7 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
             rag_output=input.rag_output,
         )
         self.last_verdict = verdict
-        await self._persist_verdict(input.event_id, verdict)
+        await self._persist_verdict(input.event_id, verdict, risk_score=assessment.risk_score)
         return assessment
 
     async def _score_with_llm(
@@ -305,7 +305,13 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
             )
             raise
 
-    async def _persist_verdict(self, event_id: str, verdict: FinalVerdict) -> None:
+    async def _persist_verdict(
+        self,
+        event_id: str,
+        verdict: FinalVerdict,
+        *,
+        risk_score: int,
+    ) -> None:
         if self.event_service is None:
             return
         try:
@@ -316,10 +322,14 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
             )
         except Exception:
             logger.warning(
-                "set_final_verdict failed event=%s verdict=%s",
+                "set_final_verdict failed event=%s verdict=%s risk_score=%s",
                 event_id,
                 verdict.value,
+                risk_score,
                 exc_info=True,
             )
-            if verdict in {FinalVerdict.CONFIRMED_THREAT, FinalVerdict.FALSE_POSITIVE}:
+            if (
+                verdict in {FinalVerdict.CONFIRMED_THREAT, FinalVerdict.FALSE_POSITIVE}
+                or risk_score >= 70
+            ):
                 raise

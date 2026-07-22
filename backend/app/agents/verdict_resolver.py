@@ -6,9 +6,11 @@ from typing import Any
 
 from app.models.agent_io import RAGOutput, RiskAssessment
 from app.models.enums import FinalVerdict
+from app.models.workflow import FP_HIGH_THRESHOLD, FP_LOW_THRESHOLD
 
-FP_HIGH_SCORE = 0.9
-FP_MEDIUM_SCORE = 0.7
+# Backward-compatible aliases for tests / imports.
+FP_HIGH_SCORE = FP_HIGH_THRESHOLD
+FP_MEDIUM_SCORE = FP_LOW_THRESHOLD
 
 
 class VerdictResolver:
@@ -37,9 +39,9 @@ class VerdictResolver:
         fp_score = self._fp_score(fp, rag_output)
         risk_score = int(risk_assessment.risk_score)
 
-        if fp_score >= FP_HIGH_SCORE and risk_score < 40:
+        if fp_score >= FP_HIGH_THRESHOLD and risk_score < 40:
             return FinalVerdict.FALSE_POSITIVE
-        if fp_score >= FP_MEDIUM_SCORE:
+        if fp_score >= FP_LOW_THRESHOLD:
             return FinalVerdict.POSSIBLE_FALSE_POSITIVE
         if risk_score >= 70:
             return FinalVerdict.CONFIRMED_THREAT

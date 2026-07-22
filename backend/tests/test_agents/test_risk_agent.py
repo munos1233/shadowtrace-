@@ -294,6 +294,41 @@ def test_calibrate_confidence_below_raw_when_temperature_gt_one() -> None:
     assert abs(calibrated - raw / 1.2) < 1e-9
 
 
+def test_rule_engine_all_zero_baseline() -> None:
+    """Empty failed collection → each dimension stays at low baselines."""
+    engine = RiskScoringEngine()
+    empty = EvidenceOutput(
+        evidence_list=[],
+        overall_confidence=0.0,
+        collection_status=CollectionStatus.FAILED,
+    )
+    triage = TriageResult(
+        event_type=EventType.OTHER,
+        severity=Severity.LOW,
+        need_investigation=False,
+    )
+    scores = engine.score(triage_result=triage, evidence_output=empty)
+    assert scores["evidence_confidence"][0] == 0.0
+    assert scores["asset_impact"][0] <= 25.0
+    assert scores["behavior_anomaly"][0] <= 20.0
+    assert scores["threat_intel"][0] <= 25.0
+    merged = sum(scores[name][0] * FACTOR_WEIGHTS[name] for name in FACTOR_WEIGHTS)
+    assert merged < 30.0
+
+
+def test_rule_engine_saturated_scores_reach_high_risk() -> None:
+    """Rich main-scenario evidence drives merged rule path toward high risk."""
+    engine = RiskScoringEngine()
+    event_id = f"evt-{uuid4().hex[:8]}"
+    rich = _main_evidence(event_id)
+    scores = engine.score(triage_result=_main_triage(), evidence_output=rich)
+    assert all(0.0 <= score <= 100.0 for score, _ in scores.values())
+    assert scores["attack_stage"][0] >= 70.0
+    assert scores["threat_intel"][0] >= 70.0
+    merged = sum(scores[name][0] * FACTOR_WEIGHTS[name] for name in FACTOR_WEIGHTS)
+    assert merged >= 70.0
+
+
 def test_rule_engine_boundary_all_zero_and_all_hundred() -> None:
     engine = RiskScoringEngine()
     empty = EvidenceOutput(
@@ -313,8 +348,6 @@ def test_rule_engine_boundary_all_zero_and_all_hundred() -> None:
     rich = _main_evidence(event_id)
     high = engine.score(triage_result=_main_triage(), evidence_output=rich)
     assert all(0.0 <= score <= 100.0 for score, _ in high.values())
-    assert high["attack_stage"][0] >= 70.0
-    assert high["threat_intel"][0] >= 70.0
 
 
 @pytest.mark.asyncio
@@ -427,3 +460,30 @@ async def test_verdict_written_only_via_event_service(
     )
     assert len(event_service.verdicts) == 1
     assert len(event_service.risk_updates) == 1
+
+
+class _FailingRiskSyncEventService(_FakeEventService):
+    async def update_risk_fields(self, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("risk db sync unavailable")
+
+
+@pytest.mark.asyncio
+async def test_risk_db_sync_failure_propagates(wm: _FakeWorkingMemory) -> None:
+    """update_risk_fields failure must abort RiskAgent after WM write attempt."""
+    event_id = f"evt-risk-sync-fail-{uuid4().hex[:8]}"
+    agent = RiskAgent(
+        llm_client=_FailingLLM(),
+        working_memory=wm,
+        event_service=_FailingRiskSyncEventService(),
+    )
+    with pytest.raises(RuntimeError, match="risk db sync unavailable"):
+        await agent.execute(
+            RiskAgentInput(
+                event_id=event_id,
+                triage_result=_main_triage(),
+                evidence_output=_main_evidence(event_id),
+            )
+        )
+    stored = await wm.read(event_id, "risk_assessment")
+    assert stored is not None
+    assert stored["risk_score"] >= 70
