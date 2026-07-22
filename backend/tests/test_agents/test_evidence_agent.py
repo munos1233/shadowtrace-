@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -692,7 +693,7 @@ async def test_sqlalchemy_evidence_upsert_keeps_higher_confidence() -> None:
         await engine.dispose()
         pytest.skip("PostgreSQL not reachable; start Compose postgres first")
 
-    command.upgrade(cfg, "head")
+    await asyncio.to_thread(command.upgrade, cfg, "head")
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     repo = SqlAlchemyEvidenceRepository(session_factory)
     event_id = f"evt-evd-sql-{new_sfx()}"
