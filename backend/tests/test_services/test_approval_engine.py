@@ -175,7 +175,6 @@ async def _cleanup_db(
 ) -> AsyncIterator[None]:
     await _truncate_business_tables(session_factory)
     yield
-    await _truncate_business_tables(session_factory)
 
 
 @pytest_asyncio.fixture
@@ -183,7 +182,6 @@ async def cleanup(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[None]:
     yield
-    await _truncate_business_tables(session_factory)
 
 
 def _sfx() -> str:

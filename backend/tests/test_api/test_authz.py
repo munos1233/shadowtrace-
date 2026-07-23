@@ -77,8 +77,7 @@ def client() -> TestClient:
     app.dependency_overrides[get_approval_engine] = _stub_engine
     app.dependency_overrides[get_event_service] = _stub_event_service
     app.dependency_overrides[get_state_machine] = _stub_state_machine
-    with TestClient(app) as test_client:
-        yield test_client
+    yield TestClient(app)
     app.dependency_overrides.pop(get_approval_engine, None)
     app.dependency_overrides.pop(get_event_service, None)
     app.dependency_overrides.pop(get_state_machine, None)

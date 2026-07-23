@@ -78,8 +78,10 @@ def client(
         return event_service
 
     app.dependency_overrides[get_event_service] = _override_event_service
-    with TestClient(app) as test_client:
-        yield test_client
+    # Do not use ``with TestClient(...)`` — its __exit__ closes the pytest-asyncio
+    # loop before async fixture teardown (clean_state, session_factory, redis).
+    yield TestClient(app)
+    app.dependency_overrides.pop(get_event_service, None)
 
 
 # --------------------------------------------------------------------------- #

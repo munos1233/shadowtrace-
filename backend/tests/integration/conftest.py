@@ -116,17 +116,10 @@ async def clean_state(
     session_factory: async_sessionmaker[AsyncSession],
     redis_client: RedisClient,
 ) -> AsyncIterator[None]:
-    """Reset PG/Redis around a test.
-
-    Not autouse: ``tool_system`` chains in this package are in-memory and must
-    not pull Dockerized Postgres/Redis. Real ``@pytest.mark.integration``
-    modules opt in via ``pytest.mark.usefixtures("clean_state")``.
-    """
+    """Reset PG/Redis before each test (next test's setup re-truncates)."""
     await _truncate_business_tables(session_factory)
     await _clear_shadowtrace_keys(redis_client)
     yield
-    await _clear_shadowtrace_keys(redis_client)
-    await _truncate_business_tables(session_factory)
 
 
 @pytest.fixture

@@ -94,12 +94,10 @@ async def clean_state(
     session_factory: async_sessionmaker[AsyncSession],
     redis_client: RedisClient,
 ) -> AsyncIterator[None]:
-    """Reset PG/Redis around every test (opt-in — request this fixture explicitly)."""
+    """Reset PG/Redis before each test (next test's setup re-truncates)."""
     await _truncate_business_tables(session_factory)
     await _clear_shadowtrace_keys(redis_client)
     yield
-    await _clear_shadowtrace_keys(redis_client)
-    await _truncate_business_tables(session_factory)
 
 
 @pytest.fixture
