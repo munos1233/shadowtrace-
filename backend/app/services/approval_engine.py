@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -368,13 +368,6 @@ class ApprovalEngine:
                         details={"action_id": action_id},
                     )
                 action = _action_from_orm(row)
-                if action.status is not ActionStatus.WAITING_APPROVAL:
-                    raise InvalidStateTransitionError(
-                        "action is not waiting for approval",
-                        current=action.status.value,
-                        target=target_status.value,
-                        details={"action_id": action_id},
-                    )
 
                 record = await self._load_record_row(session, action_id, approval_cycle=0)
                 if record is None:
@@ -393,6 +386,14 @@ class ApprovalEngine:
                             "current_operator": record.operator,
                             "current_status": row.status,
                         },
+                    )
+
+                if action.status is not ActionStatus.WAITING_APPROVAL:
+                    raise InvalidStateTransitionError(
+                        "action is not waiting for approval",
+                        current=action.status.value,
+                        target=target_status.value,
+                        details={"action_id": action_id},
                     )
 
                 if decision_id:
@@ -682,11 +683,14 @@ class ApprovalEngine:
         action_id: str,
         approval_cycle: int,
     ) -> ApprovalRecordORM | None:
-        return await session.scalar(
-            select(ApprovalRecordORM).where(
-                ApprovalRecordORM.action_id == action_id,
-                ApprovalRecordORM.approval_cycle == approval_cycle,
-            )
+        return cast(
+            ApprovalRecordORM | None,
+            await session.scalar(
+                select(ApprovalRecordORM).where(
+                    ApprovalRecordORM.action_id == action_id,
+                    ApprovalRecordORM.approval_cycle == approval_cycle,
+                )
+            ),
         )
 
     async def _load_action_row(
@@ -699,7 +703,7 @@ class ApprovalEngine:
         stmt = select(orm.Action).where(orm.Action.action_id == action_id)
         if for_update:
             stmt = stmt.with_for_update()
-        return await session.scalar(stmt)
+        return cast(orm.Action | None, await session.scalar(stmt))
 
     async def _load_plan_response_actions(
         self,

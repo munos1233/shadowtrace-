@@ -51,6 +51,7 @@ CORE_TABLES = {
     "knowledge_chunk",
     "graph_node",
     "graph_edge",
+    "approval_record",
 }
 
 
