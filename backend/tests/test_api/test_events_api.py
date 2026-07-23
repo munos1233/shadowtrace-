@@ -23,9 +23,31 @@ from app.models.enums import (
     WritebackReadiness,
     WritebackStatus,
 )
+from app.models.tool_meta import ToolResult, ToolResultStatus
 from app.services.event_service import EventService
 
 pytestmark = [pytest.mark.integration]
+
+
+class _MockToolExecutor:
+    """Minimal mock tool executor for EvidenceAgent tests."""
+
+    async def call(
+        self,
+        tool_name: str,
+        params: dict,
+        event_id: str,
+        **kwargs: object,
+    ) -> ToolResult:
+        return ToolResult(
+            call_id=f"call-mock-{tool_name}",
+            tool_name=tool_name,
+            provider_name="mock",
+            status=ToolResultStatus.SUCCESS,
+            data={"results": []},
+            execution_time_ms=1,
+        )
+
 
 _DEV_TOKENS = json.dumps(
     {
@@ -151,6 +173,7 @@ async def _seed_reporting_required_event(
                     row_version=1,
                 )
             )
+            await session.flush()
             session.add(
                 orm.EventAuditLog(
                     event_id=event_id,
@@ -299,7 +322,7 @@ async def test_create_event_returns_201(
                 "source_object_id": "ALT-99901",
                 "source_status_raw": "open",
                 "source_disposition": "pending",
-                "schema_version": 1,
+                "schema_version": "1",
             },
         },
         headers=_hdr(),
@@ -331,7 +354,7 @@ async def test_create_event_rejects_unknown_fields(
                 "source_object_id": "ALT-99902",
                 "source_status_raw": "open",
                 "source_disposition": "pending",
-                "schema_version": 1,
+                "schema_version": "1",
             },
         },
         headers=_hdr(),
@@ -930,7 +953,7 @@ async def test_investigate_high_risk_http_polls_to_reporting(
         source_object_id="INC-HTTP-HIGH-001",
         source_status_raw="open",
         source_disposition=SourceDisposition.PENDING,
-        schema_version=1,
+        schema_version="1",
     )
     ingest = IngestableSource(
         reference=ref,
@@ -1113,7 +1136,7 @@ async def test_full_analysis_pipeline_happy_path(
     )
     evidence = EvidenceAgent(
         llm_client=None,
-        tool_executor=None,
+        tool_executor=_MockToolExecutor(),
         working_memory=wm.for_writer("EvidenceAgent"),
     )
     rag = RAGAgent(
@@ -1198,7 +1221,7 @@ async def test_high_risk_event_stays_reporting(
     )
     evidence = EvidenceAgent(
         llm_client=None,
-        tool_executor=None,
+        tool_executor=_MockToolExecutor(),
         working_memory=wm.for_writer("EvidenceAgent"),
     )
     rag = RAGAgent(
@@ -1241,7 +1264,7 @@ async def test_high_risk_event_stays_reporting(
         source_object_id="INC-HIGH-001",
         source_status_raw="open",
         source_disposition=SourceDisposition.PENDING,
-        schema_version=1,
+        schema_version="1",
     )
     ingest = IngestableSource(
         reference=ref,
@@ -1301,7 +1324,7 @@ async def test_analysis_only_complete_persisted_in_context(
     )
     evidence = EvidenceAgent(
         llm_client=None,
-        tool_executor=None,
+        tool_executor=_MockToolExecutor(),
         working_memory=wm.for_writer("EvidenceAgent"),
     )
     rag = RAGAgent(

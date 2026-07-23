@@ -43,6 +43,7 @@ EXPECTED_CONTEXT_FIELDS = {
     "disposition_commands",
     "disposition_receipts",
     "writeback_summary",
+    "analysis_only_complete",
     "state_history",
     "replan_count",
     "budget_usage",
