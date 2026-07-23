@@ -44,6 +44,8 @@ testpaths = ["tests"]
 markers = [
   "integration: requires real PostgreSQL and Redis services",
   "tool_system: Registry/Executor/Mock tool-system integration chains (ISSUE-025)",
+  "rag: RAG + risk scoring integration (ISSUE-047)",
+  "e2e_basic: analysis-only golden-path integration (ISSUE-039)",
 ]
 
 [tool.coverage.run]
