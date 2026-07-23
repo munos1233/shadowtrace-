@@ -29,9 +29,14 @@ from app.core.event_bus import EventBus
 from app.core.redis_client import RedisClient
 from app.db import models as orm
 from app.models.enums import (
+    ActionCategory,
+    ActionExecutionPhase,
+    ActionLevel,
+    ActionStatus,
     DispositionPolicy,
     EventStatus,
     EventType,
+    ExecutionOwner,
     FinalVerdict,
     Severity,
     SourceObjectKind,
@@ -1245,6 +1250,95 @@ async def test_upsert_report_idempotent_by_report_id(
             .all()
         )
         assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_response_plan_actions_idempotent_by_fingerprint(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from app.agents.response_agent import (
+        compute_action_fingerprint,
+        derive_stable_action_id,
+        generate_response_plan_id,
+    )
+    from app.models.action import Action
+    from app.models.agent_io import ResponsePlan, ResponsePlanGeneratedBy
+
+    sfx = _sfx()
+    created = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(kind=SourceObjectKind.INCIDENT, object_id=f"INC-rsp-{sfx}"),
+            title="response-plan-upsert",
+            source_type="mock_xdr",
+        )
+    )
+    assert created.event_id
+    event_id = created.event_id
+    fingerprint = compute_action_fingerprint(
+        event_id=event_id,
+        plan_revision=1,
+        tool_name="create_ticket",
+        target_type="ticket",
+        canonical_target="ticket",
+        normalized_params_hash="abc123",
+        execution_owner=ExecutionOwner.XDR_MANAGED,
+        source_locator_hash="loc",
+        execution_phase=ActionExecutionPhase.IMMEDIATE,
+        approved_template_hash="",
+    )
+    action = Action(
+        action_id=derive_stable_action_id(fingerprint),
+        event_id=event_id,
+        plan_revision=1,
+        action_fingerprint=fingerprint,
+        action_category=ActionCategory.RESPONSE,
+        action_name="Create ticket",
+        tool_name="create_ticket",
+        action_level=ActionLevel.L1,
+        execution_phase=ActionExecutionPhase.IMMEDIATE,
+        target_type="ticket",
+        target="ticket",
+        parameters={"title": "t", "description": "d"},
+        status=ActionStatus.PENDING,
+        provider_name="mock_xdr",
+        execution_owner=ExecutionOwner.XDR_MANAGED,
+    )
+    plan = ResponsePlan(
+        plan_id=generate_response_plan_id(event_id, 1),
+        actions=[action],
+        strategy_summary="integration",
+        generated_by=ResponsePlanGeneratedBy.TEMPLATE,
+    )
+
+    first = await event_service.upsert_response_plan_actions(
+        event_id,
+        plan_revision=1,
+        actions=[action],
+        response_plan=plan,
+    )
+    second = await event_service.upsert_response_plan_actions(
+        event_id,
+        plan_revision=1,
+        actions=[action],
+        response_plan=plan,
+    )
+    assert first[0].action_id == second[0].action_id
+
+    async with session_factory() as session:
+        rows = (
+            await session.execute(select(orm.Action).where(orm.Action.event_id == event_id))
+        ).scalars().all()
+        assert len(rows) == 1
+        journal = await session.scalar(
+            select(func.count())
+            .select_from(orm.EventContextJournal)
+            .where(
+                orm.EventContextJournal.event_id == event_id,
+                orm.EventContextJournal.field_name == "response_plan",
+            )
+        )
+        assert int(journal or 0) >= 1
 
 
 @pytest.mark.asyncio

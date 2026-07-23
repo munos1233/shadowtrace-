@@ -10,9 +10,17 @@ from __future__ import annotations
 import logging
 
 from app.agents.planner_agent import PlannerAgent
-from app.models.agent_io import ExecutionPlan, PlannerAgentInput, TriageResult
+from app.agents.rag_agent import RAGAgent
+from app.models.agent_io import (
+    EvidenceOutput,
+    ExecutionPlan,
+    PlannerAgentInput,
+    RAGOutput,
+    TriageResult,
+)
 from app.models.context import EventContext
 from app.models.enums import EventType, Severity
+from app.services.analysis_only_pipeline import run_rag_stage
 
 logger = logging.getLogger(__name__)
 
@@ -120,4 +128,25 @@ async def planner_node(
     return await planner.execute(input)
 
 
-__all__ = ["planner_node"]
+async def rag_node(
+    event_context: EventContext,
+    rag_agent: RAGAgent,
+    *,
+    triage_result: TriageResult,
+    evidence_output: EvidenceOutput,
+) -> RAGOutput | None:
+    """LangGraph node: RAG retrieval after evidence, before risk (ISSUE-047).
+
+    Failures degrade to ``None`` so RiskAgent can continue without enhancement.
+    """
+    event_id = event_context.event.event_id if event_context.event else "unknown"
+    output, _degraded = await run_rag_stage(
+        rag_agent,
+        event_id=event_id,
+        triage_result=triage_result,
+        evidence_output=evidence_output,
+    )
+    return output
+
+
+__all__ = ["planner_node", "rag_node"]

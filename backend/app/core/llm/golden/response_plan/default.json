@@ -1,0 +1,35 @@
+{
+  "content": {
+    "actions": [
+      {
+        "tool_name": "disable_account",
+        "target_type": "account",
+        "target": "svc-backup",
+        "parameters": {},
+        "reason": "Disable suspected compromised service account"
+      },
+      {
+        "tool_name": "block_ip",
+        "target_type": "ip",
+        "target": "203.0.113.50",
+        "parameters": {},
+        "reason": "Block external exfil destination"
+      },
+      {
+        "tool_name": "create_ticket",
+        "target_type": "ticket",
+        "target": "ticket",
+        "parameters": {
+          "title": "Data exfiltration response",
+          "description": "Automated containment plan"
+        },
+        "reason": "Track investigation actions"
+      }
+    ],
+    "strategy_summary": "Contain compromised account and block external exfil endpoint"
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 180,
+  "completion_tokens": 140,
+  "total_tokens": 320
+}

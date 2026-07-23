@@ -122,6 +122,40 @@ def _journal_value(value: Any) -> Any:
     return _to_jsonable(value)
 
 
+async def append_context_journal_in_session(
+    session: AsyncSession,
+    event_id: str,
+    field_name: str,
+    value: Any,
+) -> int:
+    """Append one EventContext journal entry inside an existing DB transaction."""
+    if field_name not in CONTEXT_FIELD_NAMES:
+        raise KeyError(f"unknown EventContext field: {field_name!r}")
+    stored = _journal_value(value)
+    result = await session.execute(
+        text(
+            "INSERT INTO event_context_field_version "
+            "(event_id, field_name, current_version) "
+            "VALUES (:event_id, :field_name, 1) "
+            "ON CONFLICT (event_id, field_name) DO UPDATE "
+            "SET current_version = event_context_field_version.current_version + 1 "
+            "RETURNING current_version"
+        ),
+        {"event_id": event_id, "field_name": field_name},
+    )
+    new_version = int(result.one()[0])
+    session.add(
+        orm.EventContextJournal(
+            event_id=event_id,
+            field_name=field_name,
+            value=stored if isinstance(stored, dict) else {"_scalar": stored},
+            version=new_version,
+        )
+    )
+    await session.flush()
+    return new_version
+
+
 def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
     """Build the EventContext ``event`` field (EventSummary) from the ORM row."""
     policy = DispositionPolicy(row.disposition_policy)

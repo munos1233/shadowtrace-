@@ -1,4 +1,4 @@
-"""Agents package (ISSUE-005 / ISSUE-033/034/035/036 / ISSUE-049 / ISSUE-050)."""
+"""Agents package (ISSUE-005 through ISSUE-057)."""
 
 from app.agents.base import AgentOutput, BaseAgent
 from app.agents.confidence_calibration import calibrate_confidence
@@ -9,6 +9,7 @@ from app.agents.graph_builder import GraphBuilder
 from app.agents.planner_agent import PlannerAgent
 from app.agents.report_agent import ReportAgent
 from app.agents.report_section_builder import ReportSectionBuilder
+from app.agents.response_agent import ResponseAgent
 from app.agents.risk_agent import RiskAgent
 from app.agents.risk_scoring_engine import RiskScoringEngine, severity_from_score
 from app.agents.verdict_resolver import VerdictResolver
@@ -47,6 +48,7 @@ __all__ = [
     "ReportAgent",
     "ReportAgentInput",
     "ReportSectionBuilder",
+    "ResponseAgent",
     "ResponseAgentInput",
     "RiskAgent",
     "RiskAgentInput",

@@ -35,12 +35,18 @@ from app.models.enums import (
     SourceObjectKind,
 )
 from app.models.ids import canonical_source_identity, new_action_id, new_event_id
+from app.models.action import Action
+from app.models.agent_io import ResponsePlan
 from app.models.report import InvestigationReport
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.models.tool_meta import TERMINAL_DISPOSITION_TOOL
 from app.models.workflow import TransitionContext, validate_verdict_status
-from app.services.context_service import EventContextStore, event_summary_from_security_event
+from app.services.context_service import (
+    EventContextStore,
+    append_context_journal_in_session,
+    event_summary_from_security_event,
+)
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.evidence_projection import EvidenceQueryScope
 from app.services.source_policy_resolver import (
@@ -826,6 +832,56 @@ class EventService:
                 )
                 await session.flush()
                 return action_id
+
+    async def upsert_response_plan_actions(
+        self,
+        event_id: str,
+        *,
+        plan_revision: int,
+        actions: list[Action],
+        response_plan: ResponsePlan | None = None,
+    ) -> list[Action]:
+        """Idempotent upsert of ResponsePlan actions by ``action_fingerprint`` (ISSUE-057)."""
+        from app.agents.response_agent import _supersede_undeployed_deferred, _upsert_action_row
+
+        persisted: list[Action] = []
+        async with self._session_factory() as session:
+            async with session.begin():
+                for action in actions:
+                    if action.event_id != event_id:
+                        raise ValidationError(
+                            "action.event_id mismatch",
+                            details={"expected": event_id, "actual": action.event_id},
+                        )
+                    action_id = await _upsert_action_row(session, action)
+                    persisted.append(action.model_copy(update={"action_id": action_id}))
+                if response_plan is not None:
+                    await append_context_journal_in_session(
+                        session,
+                        event_id,
+                        "response_plan",
+                        response_plan.model_dump(mode="json"),
+                    )
+        return persisted
+
+    async def supersede_undeployed_deferred(
+        self,
+        event_id: str,
+        *,
+        old_revision: int,
+        new_revision: int,
+    ) -> int:
+        """Mark undeployed deferred actions SUPERSEDED when replanning (ISSUE-057)."""
+        from app.agents.response_agent import _supersede_undeployed_deferred
+
+        async with self._session_factory() as session:
+            async with session.begin():
+                return await _supersede_undeployed_deferred(
+                    session,
+                    event_id=event_id,
+                    old_revision=int(old_revision),
+                    new_revision=int(new_revision),
+                )
 
     async def transition_status(
         self,
