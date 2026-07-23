@@ -19,7 +19,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -31,6 +31,7 @@ from app.core.errors import (
 from app.core.event_bus import EventBus
 from app.core.redis_client import RedisClient
 from app.db import models as orm
+from app.db.base import Base
 from app.models.enums import (
     DispositionPolicy,
     EventStatus,
@@ -52,6 +53,16 @@ DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace",
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+BUSINESS_TABLES = tuple(sorted(Base.metadata.tables))
+
+
+async def _truncate_business_tables(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    quoted = ", ".join(f'"{table}"' for table in BUSINESS_TABLES)
+    async with sf() as session:
+        async with session.begin():
+            await session.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
 
 # --------------------------------------------------------------------------- #
 # Module-level fixtures
@@ -299,26 +310,9 @@ async def _add_response_action(
 async def cleanup(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[None]:
-    """Clean all event-related rows between tests."""
+    """Reset business tables before each test (includes approval_record FK chain)."""
+    await _truncate_business_tables(session_factory)
     yield
-    async with session_factory() as session:
-        async with session.begin():
-            for table in (
-                orm.EventAuditLog,
-                orm.EventContextJournal,
-                orm.EventContextFieldVersion,
-                orm.ActionTargetResult,  # FK → action_execution_job
-                orm.ActionExecutionJob,  # FK → action
-                orm.DispositionReceipt,  # FK → action
-                orm.DispositionOutbox,  # FK → action
-                orm.Action,
-                orm.Evidence,  # FK → security_event
-                orm.Report,
-                orm.SourceEventLink,
-                orm.SourceObject,
-                orm.SecurityEvent,
-            ):
-                await session.execute(delete(table))
 
 
 # ===================================================================
