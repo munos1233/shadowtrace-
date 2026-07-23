@@ -19,6 +19,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.agents.report_section_builder import SECTION_SPECS
 from app.core.errors import (
     InvalidStateTransitionError,
     InvalidVerdictStatusCombinationError,
@@ -41,10 +42,9 @@ from app.models.enums import (
     SourceObjectKind,
     WritebackReadiness,
 )
-from app.models.source import SourceReference
-from app.models.report import InvestigationReport, ReportSection
 from app.models.ids import report_id_for_event
-from app.agents.report_section_builder import SECTION_SPECS
+from app.models.report import InvestigationReport, ReportSection
+from app.models.source import SourceReference
 from app.models.workflow import TransitionContext
 from app.services.context_service import EventContextStore, ctx_key
 from app.services.degraded_flag_service import DegradedFlagService
@@ -1241,10 +1241,14 @@ async def test_upsert_report_idempotent_by_report_id(
 
     async with session_factory() as session:
         rows = (
-            await session.execute(
-                select(orm.Report).where(orm.Report.event_id == created.event_id)
+            (
+                await session.execute(
+                    select(orm.Report).where(orm.Report.event_id == created.event_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
 
 
@@ -1323,8 +1327,10 @@ async def test_upsert_response_plan_actions_idempotent_by_fingerprint(
 
     async with session_factory() as session:
         rows = (
-            await session.execute(select(orm.Action).where(orm.Action.event_id == event_id))
-        ).scalars().all()
+            (await session.execute(select(orm.Action).where(orm.Action.event_id == event_id)))
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
         journal = await session.scalar(
             select(func.count())
