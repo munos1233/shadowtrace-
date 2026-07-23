@@ -416,6 +416,104 @@ async def test_force_close_requires_admin(
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_close_triaging_not_required_succeeds(
+    client: TestClient,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Close a TRIAGING not_required event succeeds after generating report."""
+    event_id = await _create_test_event(
+        event_service,
+        title="Close TRIAGING test",
+        severity=Severity.LOW,
+    )
+
+    # Transition to TRIAGING directly via DB.
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
+            assert row is not None
+            row.status = EventStatus.TRIAGING.value
+            row.row_version = int(row.row_version or 1) + 1
+            session.add(
+                orm.EventAuditLog(
+                    event_id=event_id,
+                    from_status="new",
+                    to_status="triaging",
+                    operator="test",
+                    reason="test_setup:triaging",
+                )
+            )
+            await session.flush()
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/close",
+        json={"reason": "quick close test"},
+        headers=_hdr(),
+    )
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert data["event_id"] == event_id
+    assert data["status"] == "closed"
+
+    # Verify report was generated and is queryable.
+    report_resp = client.get(
+        f"/api/v1/events/{event_id}/report",
+        headers=_hdr(),
+    )
+    assert report_resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_close_failed_succeeds_with_report(
+    client: TestClient,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Close a FAILED event succeeds after generating report."""
+    event_id = await _create_test_event(
+        event_service,
+        title="Close FAILED test",
+        severity=Severity.LOW,
+    )
+
+    # Transition to FAILED directly via DB.
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
+            assert row is not None
+            row.status = EventStatus.FAILED.value
+            row.row_version = int(row.row_version or 1) + 1
+            session.add(
+                orm.EventAuditLog(
+                    event_id=event_id,
+                    from_status="new",
+                    to_status="failed",
+                    operator="test",
+                    reason="test_setup:failed",
+                )
+            )
+            await session.flush()
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/close",
+        json={"reason": "close failed test"},
+        headers=_hdr(),
+    )
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert data["event_id"] == event_id
+    assert data["status"] == "closed"
+
+    # Verify report was generated and is queryable.
+    report_resp = client.get(
+        f"/api/v1/events/{event_id}/report",
+        headers=_hdr(),
+    )
+    assert report_resp.status_code == 200
+
+
 # --------------------------------------------------------------------------- #
 # Tests: POST /events/{id}/investigate
 # --------------------------------------------------------------------------- #
@@ -502,6 +600,25 @@ async def test_investigate_closed_rejected(
     assert data["error_code"] == "invalid_state_transition"
 
 
+@pytest.mark.asyncio
+async def test_investigate_returns_202(
+    client: TestClient,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """POST /events/{id}/investigate returns 202 with task_id matching event_id."""
+    event_id = await _create_test_event(event_service, title="Investigate 202 test")
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 202, f"Expected 202 Accepted, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert data["task_id"] == event_id
+    assert data["event_id"] == event_id
+
+
 # --------------------------------------------------------------------------- #
 # Conftest-level integration: run the full analysis pipeline end-to-end
 # --------------------------------------------------------------------------- #
@@ -564,6 +681,7 @@ async def test_full_analysis_pipeline_happy_path(
         evidence_agent=evidence,
         risk_agent=risk,
         report_agent=report,
+        context_store=store,
     )
 
     # Create a not_required low-severity event.
@@ -642,6 +760,7 @@ async def test_high_risk_event_stays_reporting(
         evidence_agent=evidence,
         risk_agent=risk,
         report_agent=report,
+        context_store=store,
     )
 
     # Create a required high-severity event by going through the ingest path.
@@ -683,3 +802,78 @@ async def test_high_risk_event_stays_reporting(
         event = await event_service.get_event(event_id)
         assert event is not None
         assert event.status == EventStatus.REPORTING
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_complete_persisted_in_context(
+    client: TestClient,
+    event_service: EventService,
+    state_machine_service,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """analysis_only_complete is persisted to EventContextStore after pipeline runs."""
+    from app.agents.evidence_agent import EvidenceAgent
+    from app.agents.report_agent import ReportAgent
+    from app.agents.risk_agent import RiskAgent
+    from app.agents.triage_agent import TriageAgent
+    from app.core.config import get_settings
+    from app.core.redis_client import RedisClient
+    from app.services.analysis_only_pipeline import AnalysisOnlyPipeline
+    from app.services.context_service import EventContextStore
+    from app.services.degraded_flag_service import DegradedFlagService
+    from app.services.working_memory import WorkingMemory
+
+    settings = get_settings()
+
+    redis = RedisClient(url=settings.redis_url)
+    store = EventContextStore(redis, session_factory)
+    degraded = DegradedFlagService(store, session_factory)
+    wm = WorkingMemory(store=store, redis=redis, degraded_flags=degraded)
+
+    triage = TriageAgent(
+        llm_client=None,
+        working_memory=wm.for_writer("TriageAgent"),
+    )
+    evidence = EvidenceAgent(
+        llm_client=None,
+        tool_executor=None,
+        working_memory=wm.for_writer("EvidenceAgent"),
+    )
+    risk = RiskAgent(
+        llm_client=None,
+        working_memory=wm.for_writer("RiskAgent"),
+        event_service=event_service,
+    )
+    report = ReportAgent(
+        llm_client=None,
+        working_memory=wm.for_writer("ReportAgent"),
+        event_service=event_service,
+    )
+
+    pipeline = AnalysisOnlyPipeline(
+        event_service=event_service,
+        state_machine=state_machine_service,
+        triage_agent=triage,
+        evidence_agent=evidence,
+        risk_agent=risk,
+        report_agent=report,
+        context_store=store,
+    )
+
+    # Create a not_required low-severity event (short-circuit close path).
+    event = await event_service.create_event(
+        {"title": "Persistence test", "description": "Low risk"},
+        source_type="manual",
+        title="Persistence test",
+        event_type=EventType.ACCOUNT_ANOMALY,
+        severity=Severity.LOW,
+    )
+    event_id = event.event_id
+
+    # Run the pipeline.
+    result = await pipeline.run(event_id)
+    assert result["analysis_only_complete"] is True
+
+    # Verify persistence via EventContextStore.
+    stored_value = await store.get(event_id, "analysis_only_complete")
+    assert stored_value is True, f"Expected analysis_only_complete=True in context, got {stored_value!r}"

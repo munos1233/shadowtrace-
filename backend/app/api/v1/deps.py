@@ -159,6 +159,7 @@ async def get_pipeline() -> Any:
             evidence_agent=evidence,
             risk_agent=risk,
             report_agent=report,
+            context_store=_get_context_store(),
         )
     return _pipeline
 

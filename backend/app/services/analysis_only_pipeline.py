@@ -66,6 +66,7 @@ class AnalysisOnlyPipeline:
         evidence_agent: EvidenceAgent,
         risk_agent: RiskAgent,
         report_agent: ReportAgent,
+        context_store: Any | None = None,
     ) -> None:
         self._event_service = event_service
         self._state_machine = state_machine
@@ -73,6 +74,7 @@ class AnalysisOnlyPipeline:
         self._evidence = evidence_agent
         self._risk = risk_agent
         self._report = report_agent
+        self._context_store = context_store
 
     async def run(self, event_id: str) -> dict[str, Any]:
         """Execute the analysis-only pipeline for *event_id*.
@@ -180,6 +182,7 @@ class AnalysisOnlyPipeline:
                 "AnalysisOnlyPipeline: event=%s requires disposition, staying at REPORTING",
                 event_id,
             )
+            await self._persist_analysis_only_complete(event_id)
             return {
                 "event_id": event_id,
                 "status": EventStatus.REPORTING.value,
@@ -197,6 +200,7 @@ class AnalysisOnlyPipeline:
             operator=_PIPELINE_OPERATOR,
             reason="analysis_pipeline:complete_not_required",
         )
+        await self._persist_analysis_only_complete(event_id)
         return {
             "event_id": event_id,
             "status": EventStatus.CLOSED.value,
@@ -260,6 +264,18 @@ class AnalysisOnlyPipeline:
     # Short-circuit close
     # ------------------------------------------------------------------ #
 
+    async def _persist_analysis_only_complete(self, event_id: str) -> None:
+        """Persist analysis_only_complete=true to EventContextStore."""
+        if self._context_store is not None:
+            try:
+                await self._context_store.set(event_id, "analysis_only_complete", True)
+            except Exception:
+                logger.warning(
+                    "Failed to persist analysis_only_complete for event=%s",
+                    event_id,
+                    exc_info=True,
+                )
+
     async def _short_circuit_close(
         self,
         event_id: str,
@@ -320,6 +336,7 @@ class AnalysisOnlyPipeline:
             reason="analysis_pipeline:short_circuit_closed",
         )
 
+        await self._persist_analysis_only_complete(event_id)
         return {
             "event_id": event_id,
             "status": EventStatus.CLOSED.value,

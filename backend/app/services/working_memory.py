@@ -27,6 +27,7 @@ WRITE_CAS_MAX_ATTEMPTS = 3
 # --------------------------------------------------------------------------- #
 
 FIELD_OWNERSHIP: dict[str, str] = {
+    "analysis_only_complete": "AnalysisOnlyPipeline",
     "event": "EventService",
     "source_snapshot": "EventService",
     "source_sync_state": "SourceIngester",

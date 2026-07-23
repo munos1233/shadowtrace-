@@ -71,6 +71,7 @@ class EventContext(BaseModel):
     writeback_summary: WritebackSummary | None = None
 
     # --- orchestration bookkeeping ---
+    analysis_only_complete: bool = False
     state_history: list[dict[str, Any]] = Field(default_factory=list)
     replan_count: int = 0
     budget_usage: dict[str, Any] = Field(default_factory=dict)
