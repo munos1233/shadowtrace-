@@ -18,7 +18,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -28,6 +28,7 @@ from app.core.errors import ApprovalDecisionConflictError, InvalidStateTransitio
 from app.core.event_bus import EventBus
 from app.core.redis_client import RedisClient
 from app.db import models as orm
+from app.db.base import Base
 from app.db.orm.approval import ApprovalRecordORM
 from app.models.action import TERMINAL_DISPOSITION_TOOL, Action
 from app.models.agent_io import RiskAssessment, ScoringMode
@@ -63,6 +64,16 @@ DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace",
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+BUSINESS_TABLES = tuple(sorted(Base.metadata.tables))
+
+
+async def _truncate_business_tables(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    quoted = ", ".join(f'"{table}"' for table in BUSINESS_TABLES)
+    async with sf() as session:
+        async with session.begin():
+            await session.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
 
 
 class FakeEventBus:
@@ -162,26 +173,9 @@ async def engine(
 async def _cleanup_db(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[None]:
-    async with session_factory() as session:
-        async with session.begin():
-            for table in (
-                ApprovalRecordORM,
-                orm.EventAuditLog,
-                orm.EventContextJournal,
-                orm.EventContextFieldVersion,
-                orm.ActionTargetResult,
-                orm.ActionExecutionJob,
-                orm.DispositionReceipt,
-                orm.DispositionOutbox,
-                orm.Action,
-                orm.Evidence,
-                orm.Report,
-                orm.SourceEventLink,
-                orm.SourceObject,
-                orm.SecurityEvent,
-            ):
-                await session.execute(delete(table))
+    await _truncate_business_tables(session_factory)
     yield
+    await _truncate_business_tables(session_factory)
 
 
 @pytest_asyncio.fixture
@@ -189,25 +183,7 @@ async def cleanup(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[None]:
     yield
-    async with session_factory() as session:
-        async with session.begin():
-            for table in (
-                ApprovalRecordORM,
-                orm.EventAuditLog,
-                orm.EventContextJournal,
-                orm.EventContextFieldVersion,
-                orm.ActionTargetResult,
-                orm.ActionExecutionJob,
-                orm.DispositionReceipt,
-                orm.DispositionOutbox,
-                orm.Action,
-                orm.Evidence,
-                orm.Report,
-                orm.SourceEventLink,
-                orm.SourceObject,
-                orm.SecurityEvent,
-            ):
-                await session.execute(delete(table))
+    await _truncate_business_tables(session_factory)
 
 
 def _sfx() -> str:

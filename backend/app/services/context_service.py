@@ -30,6 +30,7 @@ from app.models.enums import (
     WritebackReadiness,
     WritebackStatus,
 )
+from app.models.security_event import SecurityEvent
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,37 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
         disposition_policy=policy,
         external_unsynced=bool(row.external_unsynced),
         escalated=bool(row.escalated),
+    )
+
+
+def event_summary_from_event_model(event: SecurityEvent) -> EventSummary:
+    """Build EventSummary from the Pydantic SecurityEvent returned by EventService."""
+    policy = event.disposition_policy
+    writeback_required = policy is DispositionPolicy.REQUIRED
+    if not writeback_required:
+        writeback_readiness = WritebackReadiness.NOT_REQUIRED
+    elif event.disposition_source_ref is None:
+        writeback_readiness = WritebackReadiness.SOURCE_UNRESOLVED
+    else:
+        writeback_readiness = WritebackReadiness.CAPABILITY_UNKNOWN
+    return EventSummary(
+        event_id=event.event_id,
+        event_type=event.event_type,
+        title=event.title,
+        status=event.status,
+        severity=event.severity,
+        risk_score=event.risk_score,
+        final_verdict=event.final_verdict,
+        writeback_required=writeback_required,
+        writeback_readiness=writeback_readiness,
+        writeback_overall_status=None,
+        pending_writeback_count=0,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+        occurred_at=event.occurred_at,
+        disposition_policy=policy,
+        external_unsynced=event.external_unsynced,
+        escalated=event.escalated,
     )
 
 

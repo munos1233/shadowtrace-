@@ -208,11 +208,13 @@ class ApprovalEngine:
     ) -> ApprovalDecision:
         existing = await self._load_record(action.action_id, approval_cycle)
         if existing is not None:
-            return ApprovalDecision(
+            decision = ApprovalDecision(
                 decision=ApprovalDecisionKind(existing.decision),
                 rule_applied=str((existing.detail or {}).get("rule_applied", "existing_record")),
                 reason=str((existing.detail or {}).get("reason", "existing approval record")),
             )
+            await self._sync_action_status_from_decision(action, decision)
+            return decision
 
         gate = evaluate_hard_gates(action, manifest=self._manifest)
         if gate is not None:
@@ -544,6 +546,38 @@ class ApprovalEngine:
             .where(orm.Action.action_id == action.action_id)
             .values(status=target.value, updated_at=datetime.now(UTC))
         )
+
+    async def _sync_action_status_from_decision(
+        self,
+        action: Action,
+        decision: ApprovalDecision,
+    ) -> None:
+        """Ensure persisted action status matches an existing approval record."""
+        expected_status: ActionStatus | None
+        if decision.decision is ApprovalDecisionKind.AUTO_APPROVE:
+            expected_status = ActionStatus.APPROVED
+        elif decision.decision is ApprovalDecisionKind.AUTO_REJECT:
+            expected_status = ActionStatus.REJECTED
+        elif decision.decision is ApprovalDecisionKind.REQUIRE_APPROVAL:
+            expected_status = ActionStatus.WAITING_APPROVAL
+        else:
+            expected_status = None
+        if expected_status is None or action.status is expected_status:
+            return
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await self._load_action_row(session, action.action_id, for_update=True)
+                if row is None:
+                    return
+                current = _action_from_orm(row)
+                if current.status is expected_status:
+                    return
+                await self._set_action_status(
+                    session,
+                    current,
+                    expected_status,
+                    has_approval_evidence=expected_status is ActionStatus.APPROVED,
+                )
 
     async def _ensure_event_waiting_approval(self, event_id: str) -> None:
         if self._state_machine is None:

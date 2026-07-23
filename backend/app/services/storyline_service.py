@@ -307,13 +307,13 @@ class StorylineService:
             )
 
         if len(sorted_evidence) < 3:
-            phases = _build_scarce_single_phase(sorted_evidence)
-            _backfill_technique_ids(phases, technique_matches)
+            scarce_phases = _build_scarce_single_phase(sorted_evidence)
+            _backfill_technique_ids(scarce_phases, technique_matches)
             return AttackStoryline(
                 storyline_id=new_storyline_id(),
                 event_id=event_id,
-                narrative_summary=_summary_for_phases(phases),
-                phases=phases,
+                narrative_summary=_summary_for_phases(scarce_phases),
+                phases=scarce_phases,
                 generated_by=StorylineGeneratedBy.RULE,
             )
 

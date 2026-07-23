@@ -105,6 +105,7 @@ async def _create_test_event(
 
 
 async def _seed_reporting_required_event(
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
     *,
     title: str = "Reporting required event",
@@ -112,51 +113,33 @@ async def _seed_reporting_required_event(
     outbox_status: WritebackStatus | None = None,
     include_action: bool = True,
 ) -> str:
-    """Insert a REPORTING event with optional writeback action/outbox rows."""
-    import hashlib
-    from datetime import UTC, datetime
+    """Create a REPORTING event with optional writeback action/outbox rows."""
     from uuid import uuid4
 
     from app.models.enums import DispositionIntentKind
 
+    event = await event_service.create_event(
+        {"title": title, "description": "Writeback gate test fixture"},
+        source_type="mock_xdr",
+        title=title,
+        event_type=EventType.DATA_EXFILTRATION,
+        severity=Severity.HIGH,
+    )
+    event_id = event.event_id
     sfx = uuid4().hex[:8]
-    event_id = f"evt-{sfx}"
-    now = datetime.now(UTC)
 
     async with session_factory() as session:
         async with session.begin():
-            session.add(
-                orm.SecurityEvent(
-                    event_id=event_id,
-                    event_type="data_exfiltration",
-                    title=title,
-                    description="Writeback gate test fixture",
-                    status=EventStatus.REPORTING.value,
-                    severity=Severity.HIGH.value,
-                    final_verdict=FinalVerdict.CONFIRMED_THREAT.value,
-                    risk_score=85,
-                    entities={},
-                    creation_source_ref={
-                        "source_kind": "incident",
-                        "source_product": "mock_xdr",
-                        "source_tenant_id": "t1",
-                        "connector_id": f"conn-{sfx}",
-                        "source_object_id": f"INC-{sfx}",
-                        "raw_payload_hash": hashlib.sha256(b"wb").hexdigest(),
-                        "schema_version": "1",
-                        "ingested_at": now.isoformat(),
-                    },
-                    source_reference_snapshots=[],
-                    disposition_policy=DispositionPolicy.REQUIRED.value,
-                    source_type="mock_xdr",
-                    occurred_at=now,
-                    row_version=1,
-                )
-            )
+            row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
+            assert row is not None
+            row.status = EventStatus.REPORTING.value
+            row.final_verdict = FinalVerdict.CONFIRMED_THREAT.value
+            row.risk_score = 85
+            row.disposition_policy = DispositionPolicy.REQUIRED.value
             session.add(
                 orm.EventAuditLog(
                     event_id=event_id,
-                    from_status="new",
+                    from_status=EventStatus.NEW.value,
                     to_status=EventStatus.REPORTING.value,
                     operator="test",
                     reason="test_setup:reporting",
@@ -694,10 +677,12 @@ async def test_close_failed_succeeds_with_report(
 @pytest.mark.asyncio
 async def test_close_reporting_writeback_not_configured_rejected(
     client: TestClient,
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """REPORTING + required policy without disposition actions is blocked."""
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         include_action=False,
     )
@@ -715,9 +700,11 @@ async def test_close_reporting_writeback_not_configured_rejected(
 @pytest.mark.asyncio
 async def test_close_reporting_writeback_pending_rejected(
     client: TestClient,
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         outbox_status=WritebackStatus.PENDING,
     )
@@ -735,9 +722,11 @@ async def test_close_reporting_writeback_pending_rejected(
 @pytest.mark.asyncio
 async def test_close_reporting_writeback_failed_rejected(
     client: TestClient,
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         outbox_status=WritebackStatus.FAILED,
     )
@@ -755,9 +744,11 @@ async def test_close_reporting_writeback_failed_rejected(
 @pytest.mark.asyncio
 async def test_close_reporting_writeback_conflict_rejected(
     client: TestClient,
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         outbox_status=WritebackStatus.CONFLICT,
     )
@@ -775,9 +766,11 @@ async def test_close_reporting_writeback_conflict_rejected(
 @pytest.mark.asyncio
 async def test_close_reporting_writeback_unsupported_readiness_rejected(
     client: TestClient,
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         writeback_readiness=WritebackReadiness.CAPABILITY_UNKNOWN,
         outbox_status=WritebackStatus.PENDING,
@@ -796,9 +789,11 @@ async def test_close_reporting_writeback_unsupported_readiness_rejected(
 @pytest.mark.asyncio
 async def test_close_reporting_writeback_unknown_rejected(
     client: TestClient,
+    event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         outbox_status=WritebackStatus.UNKNOWN,
     )
@@ -821,6 +816,7 @@ async def test_close_reporting_verdict_change_preserves_report_sections(
 ) -> None:
     """Changing verdict on a full report must not replace sections with quick-close placeholders."""
     event_id = await _seed_reporting_required_event(
+        event_service,
         session_factory,
         outbox_status=WritebackStatus.CONFIRMED,
     )

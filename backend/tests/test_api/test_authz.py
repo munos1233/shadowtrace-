@@ -67,7 +67,7 @@ def client() -> TestClient:
             return None
 
         async def list_events(self, **kwargs: object) -> object:
-            from app.models.security_event import EventListResult
+            from app.services.event_service import EventListResult
 
             return EventListResult(items=[], total=0, page=1, page_size=20)
 
