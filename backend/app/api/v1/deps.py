@@ -10,8 +10,9 @@ circular imports with ``app.api.v1.schemas`` → ``app.services.context_service`
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -133,6 +134,9 @@ async def get_approval_engine() -> Any:
             context_store=_get_context_store(),
         )
     return _approval_engine
+
+
+ApprovalEngineDep = Annotated[Any, Depends(get_approval_engine)]
 
 
 async def _get_wm() -> Any:

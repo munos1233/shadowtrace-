@@ -70,6 +70,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "event_not_found": ErrorCategory.USER_INPUT,
     "not_found": ErrorCategory.USER_INPUT,
     "approval_required": ErrorCategory.PERMANENT,
+    "approval_decision_conflict": ErrorCategory.PERMANENT,
     "validation_error": ErrorCategory.USER_INPUT,
     "unauthorized": ErrorCategory.USER_INPUT,
     "forbidden": ErrorCategory.USER_INPUT,

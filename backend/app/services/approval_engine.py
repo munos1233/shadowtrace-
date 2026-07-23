@@ -368,15 +368,9 @@ class ApprovalEngine:
                         details={"action_id": action_id},
                     )
                 action = _action_from_orm(row)
-
                 record = await self._load_record_row(session, action_id, approval_cycle=0)
-                if record is None:
-                    raise ResourceNotFoundError(
-                        "approval record missing",
-                        details={"action_id": action_id},
-                    )
 
-                if record.decided_at is not None:
+                if record is not None and record.decided_at is not None:
                     if decision_id and record.decision_id == decision_id:
                         return
                     raise ApprovalDecisionConflictError(
@@ -393,6 +387,12 @@ class ApprovalEngine:
                         "action is not waiting for approval",
                         current=action.status.value,
                         target=target_status.value,
+                        details={"action_id": action_id},
+                    )
+
+                if record is None:
+                    raise ResourceNotFoundError(
+                        "approval record missing",
                         details={"action_id": action_id},
                     )
 

@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from app.api.v1 import schemas as s
-from app.api.v1.deps import get_approval_engine
+from app.api.v1.deps import ApprovalEngineDep
 from app.core.auth import ROLE_ADMIN, ROLE_APPROVER, Principal, require_roles
-
-if TYPE_CHECKING:
-    from app.services.approval_engine import ApprovalEngine
 
 router = APIRouter(tags=["actions"])
 
@@ -21,7 +18,7 @@ async def approve_action(
     action_id: str,
     body: s.ActionApproveRequest,
     principal: Annotated[Principal, require_roles(ROLE_APPROVER)],
-    engine: Annotated[ApprovalEngine, Depends(get_approval_engine)],
+    engine: ApprovalEngineDep,
 ) -> s.ActionOperationResponse:
     await engine.approve(
         action_id,
@@ -42,7 +39,7 @@ async def reject_action(
     action_id: str,
     body: s.ActionRejectRequest,
     principal: Annotated[Principal, require_roles(ROLE_APPROVER)],
-    engine: Annotated[ApprovalEngine, Depends(get_approval_engine)],
+    engine: ApprovalEngineDep,
 ) -> s.ActionOperationResponse:
     await engine.reject(
         action_id,
