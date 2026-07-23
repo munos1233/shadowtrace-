@@ -111,3 +111,8 @@ def report_id_for_event(event_id: str) -> str:
 def new_report_id(event_id: str) -> str:
     """Alias for :func:`report_id_for_event`; requires event_id (never random)."""
     return report_id_for_event(event_id)
+
+
+def new_storyline_id() -> str:
+    """Return a random storyline id: ``sty-{8hex}``."""
+    return f"sty-{_rand_hex()}"
