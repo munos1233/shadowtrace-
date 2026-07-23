@@ -329,6 +329,15 @@ class ApprovalRequiredError(ShadowTraceError):
     default_retryable = False
 
 
+class ApprovalDecisionConflictError(ShadowTraceError):
+    """Another approver already decided or decision_id reused (ISSUE-058)."""
+
+    status_code = 409
+    default_error_code = "approval_decision_conflict"
+    default_category = ErrorCategory.PERMANENT
+    default_retryable = False
+
+
 # Writeback / disposition HTTP domain errors (ISSUE-004 codes; registered above).
 
 

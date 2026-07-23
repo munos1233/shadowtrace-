@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.v1 import schemas as s
+from app.api.v1.deps import get_approval_engine
 from app.core.auth import ROLE_ADMIN, ROLE_APPROVER, Principal, require_roles
 
 router = APIRouter(tags=["actions"])
@@ -17,10 +18,19 @@ async def approve_action(
     action_id: str,
     body: s.ActionApproveRequest,
     principal: Annotated[Principal, require_roles(ROLE_APPROVER)],
+    engine: Annotated[object, Depends(get_approval_engine)],
 ) -> s.ActionOperationResponse:
-    # operator is the authenticated subject; the body can never specify it.
+    await engine.approve(
+        action_id,
+        principal,
+        body.comment,
+        body.decision_id,
+    )
     return s.ActionOperationResponse(
-        action_id=action_id, status="approved", decision_id=body.decision_id, message="approved"
+        action_id=action_id,
+        status="approved",
+        decision_id=body.decision_id,
+        message="approved",
     )
 
 
@@ -29,9 +39,19 @@ async def reject_action(
     action_id: str,
     body: s.ActionRejectRequest,
     principal: Annotated[Principal, require_roles(ROLE_APPROVER)],
+    engine: Annotated[object, Depends(get_approval_engine)],
 ) -> s.ActionOperationResponse:
+    await engine.reject(
+        action_id,
+        principal,
+        body.comment,
+        body.decision_id,
+    )
     return s.ActionOperationResponse(
-        action_id=action_id, status="rejected", decision_id=body.decision_id, message="rejected"
+        action_id=action_id,
+        status="rejected",
+        decision_id=body.decision_id,
+        message="rejected",
     )
 
 

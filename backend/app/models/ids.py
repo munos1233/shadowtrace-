@@ -78,6 +78,10 @@ def new_action_id() -> str:
     return f"act-{_rand_hex()}"
 
 
+def new_approval_id() -> str:
+    return f"apv-{_rand_hex()}"
+
+
 def new_job_id() -> str:
     return f"job-{_rand_hex()}"
 

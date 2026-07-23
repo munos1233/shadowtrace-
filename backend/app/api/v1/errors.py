@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.core.auth import AuthenticationError, AuthorizationError
 from app.core.errors import (
     APIError,
+    ApprovalDecisionConflictError,
     ApprovalRequiredError,
     DispositionPermissionDenied,
     EventNotFoundError,
@@ -39,6 +40,7 @@ __all__ = [
     "InvalidStateTransitionError",
     "InvalidVerdictStatusCombinationError",
     "ApprovalRequiredError",
+    "ApprovalDecisionConflictError",
     "WritebackPendingError",
     "WritebackFailedError",
     "WritebackConflictError",
