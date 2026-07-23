@@ -1,4 +1,4 @@
-"""FastAPI dependency injection for services (ISSUE-038).
+"""FastAPI dependency injection for services (ISSUE-038 / ISSUE-058).
 
 Lazily creates singleton service instances from settings. Tests override
 via ``app.dependency_overrides``.
@@ -33,6 +33,7 @@ _event_service: Any = None  # EventService
 _state_machine: Any = None  # StateMachineService
 _event_bus: Any = None  # EventBus
 _pipeline: Any = None  # AnalysisOnlyPipeline
+_approval_engine: Any = None  # ApprovalEngine
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -118,6 +119,22 @@ async def get_state_machine() -> Any:
     return _state_machine
 
 
+async def get_approval_engine() -> Any:
+    """Return the tiered approval engine singleton (ISSUE-058)."""
+    global _approval_engine
+    if _approval_engine is None:
+        from app.services.approval_engine import ApprovalEngine
+
+        state_machine = await get_state_machine()
+        _approval_engine = ApprovalEngine(
+            _get_session_factory(),
+            event_bus=_get_event_bus(),
+            state_machine=state_machine,
+            context_store=_get_context_store(),
+        )
+    return _approval_engine
+
+
 async def _get_wm() -> Any:
     """Return a shared WorkingMemory instance."""
     from app.services.working_memory import WorkingMemory
@@ -186,7 +203,7 @@ async def get_pipeline() -> Any:
 def reset_deps() -> None:
     """Reset all lazy singletons (for tests)."""
     global _session_factory, _redis_client, _context_store, _degraded_flags
-    global _audit_log, _event_service, _state_machine, _event_bus, _pipeline
+    global _audit_log, _event_service, _state_machine, _event_bus, _pipeline, _approval_engine
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -196,3 +213,4 @@ def reset_deps() -> None:
     _state_machine = None
     _event_bus = None
     _pipeline = None
+    _approval_engine = None
