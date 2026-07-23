@@ -10,11 +10,11 @@ from uuid import uuid4
 import pytest
 
 from app.agents.response_agent import (
+    ActionCandidate,
     ResponseAgent,
+    ResponsePolicyFilter,
     _cap_low_severity_candidates,
     _enforce_execution_owner_consistency,
-    ActionCandidate,
-    ResponsePolicyFilter,
     approval_confidence_for_disposition_only,
     build_mock_capability_manifest,
     compute_action_fingerprint,
@@ -793,7 +793,7 @@ async def test_playbook_expands_all_entity_targets() -> None:
 
 def test_enforce_execution_owner_consistency_drops_direct_tool() -> None:
     manifest = build_mock_capability_manifest()
-    policy_filter = ResponsePolicyFilter(
+    ResponsePolicyFilter(
         manifest=manifest,
         entities=_entities(),
         disposition_policy=DispositionPolicy.REQUIRED,

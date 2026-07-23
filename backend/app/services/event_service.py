@@ -24,6 +24,8 @@ from app.core.config import get_settings
 from app.core.errors import DependencyUnavailableError, EventNotFoundError, ValidationError
 from app.core.event_bus import EventBus
 from app.db import models as orm
+from app.models.action import Action
+from app.models.agent_io import ResponsePlan
 from app.models.disposition import SourceObjectLocator
 from app.models.entities import EntitySet
 from app.models.enums import (
@@ -35,8 +37,6 @@ from app.models.enums import (
     SourceObjectKind,
 )
 from app.models.ids import canonical_source_identity, new_action_id, new_event_id
-from app.models.action import Action
-from app.models.agent_io import ResponsePlan
 from app.models.report import InvestigationReport
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
@@ -842,7 +842,7 @@ class EventService:
         response_plan: ResponsePlan | None = None,
     ) -> list[Action]:
         """Idempotent upsert of ResponsePlan actions by ``action_fingerprint`` (ISSUE-057)."""
-        from app.agents.response_agent import _supersede_undeployed_deferred, _upsert_action_row
+        from app.agents.response_agent import _upsert_action_row
 
         persisted: list[Action] = []
         async with self._session_factory() as session:
