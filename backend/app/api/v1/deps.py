@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.core.redis_client import RedisClient
+    from app.services.approval_engine import ApprovalEngine
 
 
 @lru_cache
-def _redis_client():
+def _redis_client() -> RedisClient:
     from app.core.redis_client import RedisClient
 
     return RedisClient()
 
 
-def get_approval_engine():
+def get_approval_engine() -> ApprovalEngine:
     """Construct the tiered approval engine with runtime infrastructure."""
     from app.core.event_bus import EventBus
     from app.db.session import get_session_factory

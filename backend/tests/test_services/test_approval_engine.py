@@ -617,7 +617,7 @@ async def test_required_deferred_rejected_blocks_executing(
         event_id,
         _action_model(
             event_id=event_id,
-            action_level=ActionLevel.L0,
+            action_level=ActionLevel.L4,
             tool_name=TERMINAL_DISPOSITION_TOOL,
             execution_phase=ActionExecutionPhase.POST_VERIFY,
             execution_owner=ExecutionOwner.XDR_MANAGED,
