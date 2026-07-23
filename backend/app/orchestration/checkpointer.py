@@ -6,8 +6,9 @@ Falls back to in-memory storage when Redis is unavailable.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
-import pickle
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
@@ -20,6 +21,7 @@ from langgraph.checkpoint.base import (
     CheckpointTuple,
 )
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.redis_client import RedisClient
 
@@ -47,6 +49,7 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         self._redis = redis_client
         self._ttl = ttl_seconds
         self._inner = InMemorySaver()
+        self._serde = JsonPlusSerializer()
         self.memory_fallback = False
 
     @classmethod
@@ -155,10 +158,15 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
             "writes": writes,
             "blobs": blobs,
         }
-        return pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+        type_tag, blob = self._serde.dumps_typed(payload)
+        envelope = {"serde": type_tag, "payload": base64.b64encode(blob).decode("ascii")}
+        return json.dumps(envelope).encode("utf-8")
 
     def _import_thread_state(self, thread_id: str, raw: bytes) -> None:
-        payload = pickle.loads(raw)
+        envelope = json.loads(raw.decode("utf-8"))
+        type_tag = envelope["serde"]
+        blob = base64.b64decode(envelope["payload"])
+        payload = self._serde.loads_typed((type_tag, blob))
         self._inner.storage[thread_id] = payload["storage"]
         for key, value in payload.get("writes", {}).items():
             self._inner.writes[key] = value
@@ -173,7 +181,8 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         try:
             raw = await self._redis.get_client().get(checkpoint_key_for_event(thread_id))
             if raw:
-                self._import_thread_state(thread_id, raw)
+                blob = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+                self._import_thread_state(thread_id, blob)
         except Exception:
             logger.warning(
                 "failed to load checkpoint from Redis for event=%s; continuing empty",

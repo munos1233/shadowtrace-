@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import InvalidStateTransitionError, ValidationError
-from app.core.event_bus import EventBus
 from app.db import models as orm
 from app.models.enums import (
     DispositionPolicy,
@@ -43,32 +42,46 @@ class WorkflowRuntimeService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         *,
+        event_service: Any | None = None,
         context_store: EventContextStore | None = None,
-        event_bus: EventBus | None = None,
     ) -> None:
         self._session_factory = session_factory
+        self._event_service = event_service
         self._context_store = context_store
-        self._event_bus = event_bus
 
     async def begin_disposition_only(self, event_id: str) -> None:
         """Atomically mark FP verdict, raise confidence, and persist intent."""
+        if self._event_service is None:
+            raise RuntimeError("event_service is required for begin_disposition_only")
+
         fp_score = await self._read_fp_max_score(event_id)
+        verdict_changed = False
+        result: Any = None
+        summary: Any = None
+
         async with self._session_factory() as session:
             async with session.begin():
-                row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
-                if row is None:
-                    raise KeyError(f"security_event not found: {event_id}")
-
                 if not await self._fp_signal_from_context(session, event_id):
                     raise ValidationError(
                         "begin_disposition_only requires close_as_fp false_positive_match",
                         details={"event_id": event_id},
                     )
 
-                previous_verdict = row.final_verdict
-                row.final_verdict = FinalVerdict.FALSE_POSITIVE.value
+                (
+                    verdict_changed,
+                    result,
+                    summary,
+                ) = await self._event_service.apply_final_verdict_in_session(
+                    session,
+                    event_id,
+                    FinalVerdict.FALSE_POSITIVE,
+                    operator=_RUNTIME_OPERATOR,
+                )
+
+                row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
+                if row is None:
+                    raise KeyError(f"security_event not found: {event_id}")
                 row.confidence = max(float(row.confidence or 0.0), fp_score)
-                row.row_version = int(row.row_version or 1) + 1
                 row.updated_at = datetime.now(UTC)
 
                 await append_context_journal_in_session(
@@ -83,26 +96,28 @@ class WorkflowRuntimeService:
                         from_status=row.status,
                         to_status=row.status,
                         operator=_RUNTIME_OPERATOR,
-                        reason=(
-                            f"begin_disposition_only:"
-                            f"verdict={previous_verdict}->{FinalVerdict.FALSE_POSITIVE.value}"
-                        ),
+                        reason="begin_disposition_only:confidence+intent",
                     )
                 )
                 await session.flush()
 
+        if verdict_changed:
+            await self._event_service.publish_final_verdict_mutation(
+                event_id,
+                FinalVerdict.FALSE_POSITIVE,
+                operator=_RUNTIME_OPERATOR,
+                result=result,
+                summary=summary,
+            )
+
         if self._context_store is not None:
             await self._context_store.set(event_id, "disposition_only_intent", True)
 
-        if self._event_bus is not None:
-            await self._event_bus.publish_event(
-                event_id,
-                "final_verdict_updated",
-                {
-                    "final_verdict": FinalVerdict.FALSE_POSITIVE.value,
-                    "operator": _RUNTIME_OPERATOR,
-                },
-            )
+    async def read_disposition_only_intent(self, event_id: str) -> bool:
+        """Return server-persisted disposition_only_intent from journal."""
+        async with self._session_factory() as session:
+            intent = await self._journal_scalar(session, event_id, "disposition_only_intent")
+        return bool(intent)
 
     async def set_execution_substate(
         self,

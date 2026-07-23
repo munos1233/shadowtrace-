@@ -52,8 +52,8 @@ def route_after_triage(state: InvestigationState) -> str:
 
 
 def route_after_planner(state: InvestigationState) -> str:
-    """Disposition-only intent routes directly to response; otherwise investigate."""
-    if state.get("disposition_only_intent"):
+    """Route using server-persisted intent reflected in ``disposition_only_active``."""
+    if state.get("disposition_only_active"):
         return ROUTE_AFTER_PLANNER_RESPONSE
     return ROUTE_AFTER_PLANNER_EVIDENCE
 
@@ -79,6 +79,6 @@ def route_after_verify(state: InvestigationState) -> str:
         return ROUTE_AFTER_VERIFY_WRITEBACK
     if state.get("verify_need_action_replan"):
         return ROUTE_AFTER_VERIFY_REPLAN
-    if state.get("disposition_only_intent"):
+    if state.get("disposition_only_active"):
         return ROUTE_AFTER_VERIFY_HALT
     return ROUTE_AFTER_VERIFY_REPORT

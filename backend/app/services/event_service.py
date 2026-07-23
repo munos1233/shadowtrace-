@@ -586,50 +586,79 @@ class EventService:
         changed = False
         async with self._session_factory() as session:
             async with session.begin():
-                row = await session.get(
-                    orm.SecurityEvent,
+                changed, result, summary = await self.apply_final_verdict_in_session(
+                    session,
                     event_id,
-                    with_for_update=True,
+                    verdict,
+                    operator=operator or "EventService",
                 )
-                if row is None:
-                    raise KeyError(f"security_event not found: {event_id}")
-
-                ctx = await self._authoritative_verdict_context(session, event_id)
-
-                validate_verdict_status(verdict, EventStatus(row.status), ctx)
-
-                previous = row.final_verdict
-                if previous != verdict.value:
-                    changed = True
-                    row.final_verdict = verdict.value
-                    row.row_version = int(row.row_version or 1) + 1
-                    session.add(
-                        orm.EventAuditLog(
-                            event_id=event_id,
-                            from_status=row.status,
-                            to_status=row.status,
-                            operator=operator or "EventService",
-                            reason=f"final_verdict:{previous}->{verdict.value}",
-                        )
-                    )
-                    await session.flush()
-                    await session.refresh(row)
-                result = _security_event_from_row(row)
-                summary = event_summary_from_security_event(row)
 
         if changed:
-            await self._sync_event_summary_after_mutation(
+            await self.publish_final_verdict_mutation(
                 event_id,
-                committed_version=result.row_version,
+                verdict,
+                operator=operator or "EventService",
+                result=result,
                 summary=summary,
             )
-            if self._bus is not None:
-                await self._bus.publish_event(
-                    event_id,
-                    "final_verdict_updated",
-                    {"final_verdict": verdict.value, "operator": operator},
-                )
         return result
+
+    async def apply_final_verdict_in_session(
+        self,
+        session: AsyncSession,
+        event_id: str,
+        verdict: FinalVerdict,
+        *,
+        operator: str,
+    ) -> tuple[bool, SecurityEvent, EventSummary]:
+        """Apply ``final_verdict`` inside a caller-owned transaction (ISSUE-048)."""
+        row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
+        if row is None:
+            raise KeyError(f"security_event not found: {event_id}")
+
+        ctx = await self._authoritative_verdict_context(session, event_id)
+        validate_verdict_status(verdict, EventStatus(row.status), ctx)
+
+        previous = row.final_verdict
+        changed = previous != verdict.value
+        if changed:
+            row.final_verdict = verdict.value
+            row.row_version = int(row.row_version or 1) + 1
+            session.add(
+                orm.EventAuditLog(
+                    event_id=event_id,
+                    from_status=row.status,
+                    to_status=row.status,
+                    operator=operator,
+                    reason=f"final_verdict:{previous}->{verdict.value}",
+                )
+            )
+            await session.flush()
+            await session.refresh(row)
+        result = _security_event_from_row(row)
+        summary = event_summary_from_security_event(row)
+        return changed, result, summary
+
+    async def publish_final_verdict_mutation(
+        self,
+        event_id: str,
+        verdict: FinalVerdict,
+        *,
+        operator: str,
+        result: SecurityEvent,
+        summary: EventSummary,
+    ) -> None:
+        await self._sync_event_summary_after_mutation(
+            event_id,
+            committed_version=result.row_version,
+            summary=summary,
+        )
+        if self._bus is not None:
+            await self._bus.publish_event(
+                event_id,
+                "final_verdict_updated",
+                {"final_verdict": verdict.value, "operator": operator},
+            )
 
     async def update_risk_fields(
         self,

@@ -7,13 +7,16 @@ for the LangGraph investigation StateGraph (ISSUE-048).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Any, Protocol, cast
 
+from langchain_core.runnables.config import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.planner_agent import PlannerAgent
 from app.agents.rag_agent import RAGAgent
+from app.core.errors import InvalidStateTransitionError
 from app.models.agent_io import (
     EvidenceAgentInput,
     EvidenceOutput,
@@ -61,10 +64,15 @@ from app.orchestration.workflow_routes import (
     route_after_verify,
 )
 from app.services.analysis_only_pipeline import run_rag_stage
+from app.services.context_service import EventContextStore
 from app.services.degraded_flag_service import format_degraded_flag
 from app.services.state_machine_service import StateMachineService
 
 logger = logging.getLogger(__name__)
+
+CompiledInvestigationGraph = CompiledStateGraph[
+    InvestigationState, None, InvestigationState, InvestigationState
+]
 
 _GRAPH_OPERATOR = "InvestigationGraph"
 
@@ -106,6 +114,7 @@ class _AgentLike(Protocol):
 
 class _WorkflowRuntimeLike(Protocol):
     async def begin_disposition_only(self, event_id: str) -> None: ...
+    async def read_disposition_only_intent(self, event_id: str) -> bool: ...
     async def set_execution_substate(
         self,
         event_id: str,
@@ -132,8 +141,109 @@ class _DegradedFlagLike(Protocol):
     ) -> list[str]: ...
 
 
+class _EventServiceLike(Protocol):
+    async def set_final_verdict(
+        self,
+        event_id: str,
+        verdict: FinalVerdict,
+        *,
+        operator: str | None = None,
+    ) -> Any: ...
+
+
 def _trace(node_name: str) -> dict[str, list[str]]:
     return {"node_trace": [node_name]}
+
+
+def _patch_state(*parts: Mapping[str, Any]) -> InvestigationState:
+    merged: dict[str, Any] = {}
+    for part in parts:
+        merged.update(part)
+    return cast(InvestigationState, merged)
+
+
+async def _read_persisted_disposition_only_intent(
+    services: dict[str, Any],
+    event_id: str,
+) -> bool:
+    runtime = services.get("workflow_runtime")
+    if runtime is not None and hasattr(runtime, "read_disposition_only_intent"):
+        return bool(await runtime.read_disposition_only_intent(event_id))
+    store = cast(EventContextStore | None, services.get("context_store"))
+    if store is not None:
+        value = await store.get(event_id, "disposition_only_intent")
+        return bool(value)
+    return False
+
+
+async def _hydrate_context_fields(
+    services: dict[str, Any],
+    event_id: str,
+    target: dict[str, Any],
+) -> None:
+    store = cast(EventContextStore | None, services.get("context_store"))
+    if store is None:
+        return
+    ctx = await store.get_full_context(event_id)
+    if ctx.false_positive_match is not None:
+        target["false_positive_match"] = ctx.false_positive_match
+    if ctx.source_snapshot is not None:
+        target["source_snapshot"] = ctx.source_snapshot
+    if ctx.event is not None:
+        target.setdefault("disposition_policy", ctx.event.disposition_policy.value)
+        target.setdefault("severity", ctx.event.severity.value)
+        if ctx.event.writeback_readiness is not None:
+            target.setdefault(
+                "event_status_update_readiness",
+                ctx.event.writeback_readiness.value,
+            )
+
+
+async def _mark_graph_failed(services: dict[str, Any], state: InvestigationState) -> None:
+    state_machine = services.get("state_machine")
+    if state_machine is None:
+        return
+    try:
+        await cast(StateMachineService, state_machine).transition(
+            state["event_id"],
+            EventStatus.FAILED,
+            operator=_GRAPH_OPERATOR,
+            reason="investigation_graph:error",
+        )
+    except Exception:
+        logger.exception(
+            "failed to transition event=%s to FAILED after graph error",
+            state.get("event_id"),
+        )
+
+
+def _wrap_node(
+    services: dict[str, Any],
+    fn: Callable[[InvestigationState], Coroutine[Any, Any, InvestigationState]],
+) -> Callable[[InvestigationState], Coroutine[Any, Any, InvestigationState]]:
+    async def wrapped(state: InvestigationState) -> InvestigationState:
+        try:
+            return await fn(state)
+        except Exception:
+            await _mark_graph_failed(services, state)
+            raise
+
+    return wrapped
+
+
+async def invoke_investigation_graph(
+    graph: CompiledInvestigationGraph,
+    state: InvestigationState,
+    config: RunnableConfig,
+    services: dict[str, Any],
+) -> InvestigationState:
+    """Run the compiled graph; on failure mark FAILED then re-raise."""
+    try:
+        result = await graph.ainvoke(state, config)
+        return cast(InvestigationState, result)
+    except Exception as exc:
+        await _mark_graph_failed(services, state)
+        raise exc
 
 
 def _event_summary_from_state(state: InvestigationState) -> EventSummary:
@@ -196,7 +306,7 @@ def build_investigation_graph(
     checkpointer: Any | None = None,
     interrupt_before: list[str] | None = None,
     interrupt_after: list[str] | None = None,
-) -> CompiledStateGraph:
+) -> CompiledInvestigationGraph:
     """Build and compile the investigation LangGraph (dependency injection only)."""
     triage_agent = cast(_AgentLike, agents["triage_agent"])
     planner_agent = cast(PlannerAgent, agents["planner_agent"])
@@ -206,6 +316,7 @@ def build_investigation_graph(
     rag_agent = agents.get("rag_agent")
     workflow_runtime = cast(_WorkflowRuntimeLike | None, services.get("workflow_runtime"))
     degraded_flags = cast(_DegradedFlagLike | None, services.get("degraded_flags"))
+    event_service = cast(_EventServiceLike | None, services.get("event_service"))
 
     async def triage_node(state: InvestigationState) -> InvestigationState:
         triage_input = TriageAgentInput(
@@ -215,18 +326,25 @@ def build_investigation_graph(
         result = await triage_agent.execute(triage_input)
         if not isinstance(result, TriageResult):
             raise TypeError("triage_agent must return TriageResult")
-        update: InvestigationState = {
+        update: dict[str, Any] = {
             **_trace(NODE_TRIAGE),
             "triage_result": result.model_dump(mode="json"),
             "need_investigation": result.need_investigation,
             "severity": result.severity.value,
         }
-        return update
+        await _hydrate_context_fields(services, state["event_id"], update)
+        return _patch_state(update)
 
     async def begin_disposition_only_node(state: InvestigationState) -> InvestigationState:
         if workflow_runtime is None:
             raise RuntimeError("workflow_runtime is required for disposition-only path")
         await workflow_runtime.begin_disposition_only(state["event_id"])
+        if workflow_runtime is not None:
+            await workflow_runtime.assert_disposition_only_transition_allowed(
+                state["event_id"],
+                target=EventStatus.PLANNING_RESPONSE,
+                current=EventStatus(state.get("event_status", EventStatus.TRIAGING.value)),
+            )
         status_update = await _transition_status(
             services,
             state,
@@ -239,12 +357,15 @@ def build_investigation_graph(
             ),
             reason="disposition_only:begin",
         )
-        return {
-            **_trace(NODE_BEGIN_DISPOSITION_ONLY),
-            **status_update,
-            "disposition_only_intent": True,
-            "final_verdict": FinalVerdict.FALSE_POSITIVE.value,
-        }
+        return _patch_state(
+            _trace(NODE_BEGIN_DISPOSITION_ONLY),
+            status_update,
+            {
+                "disposition_only_intent": True,
+                "disposition_only_active": True,
+                "final_verdict": FinalVerdict.FALSE_POSITIVE.value,
+            },
+        )
 
     async def manual_hold_node(state: InvestigationState) -> InvestigationState:
         readiness = state.get(
@@ -262,21 +383,37 @@ def build_investigation_graph(
                 readiness,
                 writer="StateMachineService",
             )
-        return {
-            **_trace(NODE_MANUAL_HOLD),
-            "degraded_flags": flags,
-            "halted": True,
-            "execution_substate": ExecutionSubstate.NONE.value,
-        }
+        return _patch_state(
+            _trace(NODE_MANUAL_HOLD),
+            {
+                "degraded_flags": flags,
+                "halted": True,
+                "execution_substate": ExecutionSubstate.NONE.value,
+            },
+        )
 
     async def close_node(state: InvestigationState) -> InvestigationState:
+        policy = DispositionPolicy(state.get("disposition_policy", "not_required"))
+        severity = Severity(state.get("severity", Severity.MEDIUM.value))
+        is_fp = (state.get("false_positive_match") or {}).get("recommendation") == "close_as_fp"
+        if (
+            event_service is not None
+            and policy is DispositionPolicy.NOT_REQUIRED
+            and (severity is Severity.LOW or is_fp)
+            and is_fp
+        ):
+            await event_service.set_final_verdict(
+                state["event_id"],
+                FinalVerdict.FALSE_POSITIVE,
+                operator=_GRAPH_OPERATOR,
+            )
         ctx = TransitionContext(
             disposition_policy=DispositionPolicy(state.get("disposition_policy", "not_required")),
             severity=Severity(state.get("severity", Severity.MEDIUM.value)),
             recommendation=(state.get("false_positive_match") or {}).get("recommendation"),
-            final_verdict=FinalVerdict(state["final_verdict"])
-            if state.get("final_verdict")
-            else None,
+            final_verdict=(
+                FinalVerdict(fv) if (fv := state.get("final_verdict")) is not None else None
+            ),
             report_exists=bool(state.get("report_generated")),
         )
         status_update = await _transition_status(
@@ -286,15 +423,33 @@ def build_investigation_graph(
             context=ctx,
             reason="investigation:close",
         )
-        return {**_trace(NODE_CLOSE), **status_update, "halted": False}
+        return _patch_state(_trace(NODE_CLOSE), status_update, {"halted": False})
 
     async def planner_graph_node(state: InvestigationState) -> InvestigationState:
-        disposition_only = bool(state.get("disposition_only_intent"))
-        event_context = _event_context_from_state(state)
+        persisted = await _read_persisted_disposition_only_intent(services, state["event_id"])
+        if state.get("disposition_only_intent") and not persisted:
+            if workflow_runtime is not None:
+                await workflow_runtime.assert_disposition_only_transition_allowed(
+                    state["event_id"],
+                    target=EventStatus.PLANNING_RESPONSE,
+                    current=EventStatus(state.get("event_status", EventStatus.TRIAGING.value)),
+                )
+            raise InvalidStateTransitionError(
+                "forged disposition_only_intent without server persistence",
+                current=state.get("event_status", EventStatus.TRIAGING.value),
+                target=EventStatus.PLANNING_RESPONSE.value,
+                details={"event_id": state["event_id"]},
+            )
+        disposition_only = persisted
+        event_context = _event_context_from_state(
+            _patch_state(state, {"disposition_only_intent": persisted})
+        )
         plan = await planner_node(event_context, planner_agent, disposition_only=disposition_only)
-        update: InvestigationState = {
+        update: dict[str, Any] = {
             **_trace(NODE_PLANNER),
             "execution_plan": plan.model_dump(mode="json"),
+            "disposition_only_active": persisted,
+            "disposition_only_intent": persisted,
         }
         if disposition_only:
             status_update = await _transition_status(
@@ -310,7 +465,7 @@ def build_investigation_graph(
                 reason="disposition_only:plan",
             )
             update.update(status_update)
-        return update
+        return _patch_state(update)
 
     async def evidence_node(state: InvestigationState) -> InvestigationState:
         triage = TriageResult.model_validate(state["triage_result"])
@@ -328,20 +483,22 @@ def build_investigation_graph(
             raise TypeError("evidence_agent must return EvidenceOutput")
         await _transition_status(
             services,
-            {**state, **status_update},
+            _patch_state(state, status_update),
             EventStatus.ANALYZING,
             reason="investigation:analyze",
         )
-        return {
-            **_trace(NODE_EVIDENCE),
-            **status_update,
-            "event_status": EventStatus.ANALYZING.value,
-            "evidence_output": evidence.model_dump(mode="json"),
-        }
+        return _patch_state(
+            _trace(NODE_EVIDENCE),
+            status_update,
+            {
+                "event_status": EventStatus.ANALYZING.value,
+                "evidence_output": evidence.model_dump(mode="json"),
+            },
+        )
 
     async def rag_graph_node(state: InvestigationState) -> InvestigationState:
         if rag_agent is None or not state.get("include_rag"):
-            return _trace(NODE_RAG)
+            return _patch_state(_trace(NODE_RAG))
         triage = TriageResult.model_validate(state["triage_result"])
         evidence = EvidenceOutput.model_validate(state["evidence_output"])
         event_context = _event_context_from_state(state)
@@ -351,10 +508,10 @@ def build_investigation_graph(
             triage_result=triage,
             evidence_output=evidence,
         )
-        update: InvestigationState = _trace(NODE_RAG)
+        rag_update: dict[str, Any] = {**_trace(NODE_RAG)}
         if output is not None:
-            update["rag_output"] = output.model_dump(mode="json")
-        return update
+            rag_update["rag_output"] = output.model_dump(mode="json")
+        return _patch_state(rag_update)
 
     async def risk_node(state: InvestigationState) -> InvestigationState:
         triage = TriageResult.model_validate(state["triage_result"])
@@ -384,30 +541,32 @@ def build_investigation_graph(
             EventStatus.PLANNING_RESPONSE,
             reason="investigation:plan_response",
         )
-        return {
-            **_trace(NODE_RISK),
-            "event_status": EventStatus.PLANNING_RESPONSE.value,
-            "risk_assessment": assessment.model_dump(mode="json"),
-            "severity": assessment.severity.value,
-        }
+        return _patch_state(
+            _trace(NODE_RISK),
+            {
+                "event_status": EventStatus.PLANNING_RESPONSE.value,
+                "risk_assessment": assessment.model_dump(mode="json"),
+                "severity": assessment.severity.value,
+            },
+        )
 
     async def response_node(state: InvestigationState) -> InvestigationState:
+        verdict_raw = state.get("final_verdict")
+        verdict = FinalVerdict(verdict_raw) if verdict_raw else None
         await _transition_status(
             services,
             state,
             EventStatus.WAITING_APPROVAL,
             context=TransitionContext(
-                disposition_only_intent=bool(state.get("disposition_only_intent")),
-                final_verdict=FinalVerdict(state["final_verdict"])
-                if state.get("final_verdict")
-                else None,
+                disposition_only_intent=bool(state.get("disposition_only_active")),
+                final_verdict=verdict,
             ),
             reason="investigation:response_stub",
         )
-        return {
-            **_trace(NODE_RESPONSE),
-            "event_status": EventStatus.WAITING_APPROVAL.value,
-        }
+        return _patch_state(
+            _trace(NODE_RESPONSE),
+            {"event_status": EventStatus.WAITING_APPROVAL.value},
+        )
 
     async def approval_node(state: InvestigationState) -> InvestigationState:
         if state.get("needs_approval_wait"):
@@ -417,11 +576,13 @@ def build_investigation_graph(
                     ExecutionSubstate.WAITING_APPROVAL,
                     event_status=EventStatus.WAITING_APPROVAL,
                 )
-            return {
-                **_trace(NODE_APPROVAL),
-                "execution_substate": ExecutionSubstate.WAITING_APPROVAL.value,
-                "event_status": EventStatus.WAITING_APPROVAL.value,
-            }
+            return _patch_state(
+                _trace(NODE_APPROVAL),
+                {
+                    "execution_substate": ExecutionSubstate.WAITING_APPROVAL.value,
+                    "event_status": EventStatus.WAITING_APPROVAL.value,
+                },
+            )
         if workflow_runtime is not None:
             await workflow_runtime.set_execution_substate(
                 state["event_id"],
@@ -434,11 +595,13 @@ def build_investigation_graph(
             EventStatus.EXECUTING_RESPONSE,
             reason="investigation:approval_stub",
         )
-        return {
-            **_trace(NODE_APPROVAL),
-            "event_status": EventStatus.EXECUTING_RESPONSE.value,
-            "execution_substate": ExecutionSubstate.NONE.value,
-        }
+        return _patch_state(
+            _trace(NODE_APPROVAL),
+            {
+                "event_status": EventStatus.EXECUTING_RESPONSE.value,
+                "execution_substate": ExecutionSubstate.NONE.value,
+            },
+        )
 
     async def approval_wait_node(state: InvestigationState) -> InvestigationState:
         if workflow_runtime is not None:
@@ -447,11 +610,13 @@ def build_investigation_graph(
                 ExecutionSubstate.WAITING_APPROVAL,
                 event_status=EventStatus.WAITING_APPROVAL,
             )
-        return {
-            **_trace(NODE_APPROVAL_WAIT),
-            "execution_substate": ExecutionSubstate.WAITING_APPROVAL.value,
-            "halted": True,
-        }
+        return _patch_state(
+            _trace(NODE_APPROVAL_WAIT),
+            {
+                "execution_substate": ExecutionSubstate.WAITING_APPROVAL.value,
+                "halted": True,
+            },
+        )
 
     async def execute_node(state: InvestigationState) -> InvestigationState:
         await _transition_status(
@@ -460,26 +625,30 @@ def build_investigation_graph(
             EventStatus.VERIFYING,
             reason="investigation:execute_stub",
         )
-        return {
-            **_trace(NODE_EXECUTE),
-            "event_status": EventStatus.VERIFYING.value,
-        }
+        return _patch_state(
+            _trace(NODE_EXECUTE),
+            {"event_status": EventStatus.VERIFYING.value},
+        )
 
     async def verify_node(state: InvestigationState) -> InvestigationState:
-        update: InvestigationState = _trace(NODE_VERIFY)
-        if state.get("disposition_only_intent"):
-            update["verify_need_manual_resolution"] = False
-            update["verify_need_writeback_recovery"] = False
-            update["verify_need_action_replan"] = False
-        else:
-            await _transition_status(
-                services,
-                state,
-                EventStatus.REPORTING,
-                reason="investigation:verify_stub",
+        update: dict[str, Any] = {**_trace(NODE_VERIFY)}
+        if state.get("disposition_only_active"):
+            update.update(
+                {
+                    "verify_need_manual_resolution": False,
+                    "verify_need_writeback_recovery": False,
+                    "verify_need_action_replan": False,
+                }
             )
-            update["event_status"] = EventStatus.REPORTING.value
-        return update
+            return _patch_state(update)
+        await _transition_status(
+            services,
+            state,
+            EventStatus.REPORTING,
+            reason="investigation:verify_stub",
+        )
+        update["event_status"] = EventStatus.REPORTING.value
+        return _patch_state(update)
 
     async def replan_node(state: InvestigationState) -> InvestigationState:
         await _transition_status(
@@ -488,10 +657,10 @@ def build_investigation_graph(
             EventStatus.REPLANNING,
             reason="investigation:replan_stub",
         )
-        return {
-            **_trace(NODE_REPLAN),
-            "event_status": EventStatus.REPLANNING.value,
-        }
+        return _patch_state(
+            _trace(NODE_REPLAN),
+            {"event_status": EventStatus.REPLANNING.value},
+        )
 
     async def report_node(state: InvestigationState) -> InvestigationState:
         evidence = EvidenceOutput.model_validate(state["evidence_output"])
@@ -509,37 +678,41 @@ def build_investigation_graph(
                 risk_assessment=assessment,
             )
         )
-        return {
-            **_trace(NODE_REPORT),
-            "event_status": EventStatus.REPORTING.value,
-            "report_generated": report is not None,
-        }
+        return _patch_state(
+            _trace(NODE_REPORT),
+            {
+                "event_status": EventStatus.REPORTING.value,
+                "report_generated": report is not None,
+            },
+        )
 
     async def halt_node(state: InvestigationState) -> InvestigationState:
-        return {
-            **_trace(NODE_HALT),
-            "halted": True,
-        }
+        return _patch_state(_trace(NODE_HALT), {"halted": True})
 
-    graph: StateGraph = StateGraph(InvestigationState)
-    graph.add_node(NODE_TRIAGE, triage_node)
-    graph.add_node(NODE_BEGIN_DISPOSITION_ONLY, begin_disposition_only_node)
-    graph.add_node(NODE_MANUAL_HOLD, manual_hold_node)
-    graph.add_node(NODE_CLOSE, close_node)
-    graph.add_node(NODE_PLANNER, planner_graph_node)
-    graph.add_node(NODE_EVIDENCE, evidence_node)
-    graph.add_node(NODE_RISK, risk_node)
-    graph.add_node(NODE_RESPONSE, response_node)
-    graph.add_node(NODE_APPROVAL, approval_node)
-    graph.add_node(NODE_APPROVAL_WAIT, approval_wait_node)
-    graph.add_node(NODE_EXECUTE, execute_node)
-    graph.add_node(NODE_VERIFY, verify_node)
-    graph.add_node(NODE_REPLAN, replan_node)
-    graph.add_node(NODE_REPORT, report_node)
-    graph.add_node(NODE_HALT, halt_node)
+    def _register(
+        name: str, fn: Callable[[InvestigationState], Coroutine[Any, Any, InvestigationState]]
+    ) -> None:
+        graph.add_node(name, cast(Any, _wrap_node(services, fn)))
+
+    graph: StateGraph[InvestigationState] = StateGraph(InvestigationState)
+    _register(NODE_TRIAGE, triage_node)
+    _register(NODE_BEGIN_DISPOSITION_ONLY, begin_disposition_only_node)
+    _register(NODE_MANUAL_HOLD, manual_hold_node)
+    _register(NODE_CLOSE, close_node)
+    _register(NODE_PLANNER, planner_graph_node)
+    _register(NODE_EVIDENCE, evidence_node)
+    _register(NODE_RISK, risk_node)
+    _register(NODE_RESPONSE, response_node)
+    _register(NODE_APPROVAL, approval_node)
+    _register(NODE_APPROVAL_WAIT, approval_wait_node)
+    _register(NODE_EXECUTE, execute_node)
+    _register(NODE_VERIFY, verify_node)
+    _register(NODE_REPLAN, replan_node)
+    _register(NODE_REPORT, report_node)
+    _register(NODE_HALT, halt_node)
 
     if rag_agent is not None:
-        graph.add_node(NODE_RAG, rag_graph_node)
+        _register(NODE_RAG, rag_graph_node)
 
     graph.add_edge(START, NODE_TRIAGE)
     graph.add_conditional_edges(
@@ -606,7 +779,6 @@ def build_investigation_graph(
         interrupt_before=interrupt_before,
         interrupt_after=interrupt_after,
     )
-
 
 
 def _synthesized_fallback_triage(
@@ -748,6 +920,7 @@ __all__ = [
     "NODE_VERIFY",
     "P0_NODE_SEQUENCE",
     "build_investigation_graph",
+    "invoke_investigation_graph",
     "planner_node",
     "rag_node",
 ]

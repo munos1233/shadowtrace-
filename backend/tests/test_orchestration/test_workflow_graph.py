@@ -31,6 +31,7 @@ from app.models.report import InvestigationReport
 from app.orchestration.checkpointer import RedisCheckpointer, checkpoint_key_for_event
 from app.orchestration.graph_state import InvestigationState
 from app.orchestration.workflow_graph import (
+    NODE_BEGIN_DISPOSITION_ONLY,
     NODE_CLOSE,
     NODE_HALT,
     NODE_MANUAL_HOLD,
@@ -78,6 +79,7 @@ def _base_state(**overrides: Any) -> InvestigationState:
         "node_trace": [],
         "halted": False,
         "disposition_only_intent": False,
+        "disposition_only_active": False,
         "include_rag": False,
         "memory_checkpointer": False,
         "report_generated": False,
@@ -232,12 +234,12 @@ class TestRouteAfterTriage:
 
 class TestRouteAfterPlanner:
     def test_disposition_only_response(self) -> None:
-        assert route_after_planner(_base_state(disposition_only_intent=True)) == (
+        assert route_after_planner(_base_state(disposition_only_active=True)) == (
             ROUTE_AFTER_PLANNER_RESPONSE
         )
 
     def test_investigate_evidence(self) -> None:
-        assert route_after_planner(_base_state(disposition_only_intent=False)) == (
+        assert route_after_planner(_base_state(disposition_only_active=False)) == (
             ROUTE_AFTER_PLANNER_EVIDENCE
         )
 
@@ -273,7 +275,7 @@ class TestRouteAfterVerify:
         )
 
     def test_disposition_halt(self) -> None:
-        assert route_after_verify(_base_state(disposition_only_intent=True)) == (
+        assert route_after_verify(_base_state(disposition_only_active=True)) == (
             ROUTE_AFTER_VERIFY_HALT
         )
 
@@ -360,8 +362,15 @@ async def test_disposition_only_halts_before_closed() -> None:
     calls: list[str] = []
 
     class TrackingRuntime:
+        def __init__(self) -> None:
+            self._intent = False
+
         async def begin_disposition_only(self, event_id: str) -> None:
             calls.append(event_id)
+            self._intent = True
+
+        async def read_disposition_only_intent(self, event_id: str) -> bool:
+            return self._intent
 
         async def set_execution_substate(self, *args: Any, **kwargs: Any) -> None:
             return None
@@ -419,27 +428,96 @@ async def test_disposition_only_plan_is_stable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_forged_disposition_only_intent_rejected() -> None:
-    class DenyRuntime:
-        async def assert_disposition_only_transition_allowed(
-            self,
-            event_id: str,
-            *,
-            target: EventStatus,
-            current: EventStatus,
-        ) -> None:
-            raise InvalidStateTransitionError(
-                "forged disposition_only_intent",
-                current=current.value,
-                target=target.value,
+async def test_triage_hydrates_false_positive_match_from_context_store() -> None:
+    fp = {"recommendation": "close_as_fp", "max_score": 0.92}
+    calls: list[str] = []
+
+    class FakeContextStore:
+        async def get_full_context(self, event_id: str) -> Any:
+            from app.models.context import EventContext
+            from app.models.security_event import EventSummary
+
+            return EventContext(
+                event=EventSummary(
+                    event_id=event_id,
+                    event_type=EventType.OTHER,
+                    title="hydrate",
+                    status=EventStatus.TRIAGING,
+                    severity=Severity.MEDIUM,
+                    risk_score=0,
+                    final_verdict=FinalVerdict.NONE,
+                    writeback_required=True,
+                    writeback_readiness=WritebackReadiness.READY,
+                    disposition_policy=DispositionPolicy.REQUIRED,
+                ),
+                false_positive_match=fp,
             )
 
+    class TrackingRuntime:
+        async def begin_disposition_only(self, event_id: str) -> None:
+            calls.append(event_id)
+
+        async def read_disposition_only_intent(self, event_id: str) -> bool:
+            return event_id in calls
+
+        async def set_execution_substate(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        async def assert_disposition_only_transition_allowed(
+            self, *args: Any, **kwargs: Any
+        ) -> None:
+            return None
+
+    sm = FakeStateMachine()
+    services = _make_services(sm)
+    services["context_store"] = FakeContextStore()
+    services["workflow_runtime"] = TrackingRuntime()
+    graph = build_investigation_graph(_make_agents(), services)
+    final = await graph.ainvoke(
+        _base_state(
+            disposition_policy=DispositionPolicy.REQUIRED.value,
+            event_status_update_readiness=WritebackReadiness.READY.value,
+        ),
+        {"configurable": {"thread_id": "evt-hydrate-fp"}},
+    )
+    assert calls == ["evt-graph-001"]
+    assert NODE_BEGIN_DISPOSITION_ONLY in final["node_trace"]
+    assert final.get("false_positive_match") == fp
+
+
+@pytest.mark.asyncio
+async def test_forged_disposition_only_intent_rejected() -> None:
+    graph = build_investigation_graph(_make_agents(), _make_services())
     with pytest.raises(InvalidStateTransitionError):
-        await DenyRuntime().assert_disposition_only_transition_allowed(
-            "evt-forged",
-            target=EventStatus.PLANNING_RESPONSE,
-            current=EventStatus.TRIAGING,
+        await graph.ainvoke(
+            _base_state(disposition_only_intent=True),
+            {"configurable": {"thread_id": "evt-forged-intent"}},
         )
+
+
+@pytest.mark.asyncio
+async def test_graph_node_failure_marks_failed() -> None:
+    class FailingTriage(StubAgent):
+        async def execute(self, input: Any) -> Any:
+            raise RuntimeError("triage boom")
+
+    sm = FakeStateMachine()
+    agents = _make_agents()
+    agents["triage_agent"] = FailingTriage(
+        TriageResult(
+            event_type=EventType.OTHER,
+            severity=Severity.MEDIUM,
+            need_investigation=True,
+            reasoning="x",
+        )
+    )
+    graph = build_investigation_graph(agents, _make_services(sm))
+    with pytest.raises(RuntimeError, match="triage boom"):
+        await graph.ainvoke(
+            _base_state(event_id="evt-fail-graph"),
+            {"configurable": {"thread_id": "evt-fail-graph"}},
+        )
+    assert sm.status is EventStatus.FAILED
 
 
 @pytest.mark.asyncio

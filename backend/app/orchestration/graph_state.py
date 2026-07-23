@@ -36,6 +36,7 @@ class InvestigationState(TypedDict, total=False):
     false_positive_match: dict[str, Any] | None
     source_snapshot: dict[str, Any] | None
     disposition_only_intent: bool
+    disposition_only_active: bool
     execution_substate: str
     execution_plan: dict[str, Any] | None
     event_status_update_readiness: str
