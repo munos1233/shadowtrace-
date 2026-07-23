@@ -47,6 +47,7 @@ from app.models.enums import (
     EventType,
     FinalVerdict,
     Severity,
+    SourceObjectKind,
     WritebackReadiness,
     WritebackStatus,
 )
@@ -458,7 +459,7 @@ async def create_event(
     )
     from app.services.context_service import event_summary_from_security_event
 
-    return event_summary_from_security_event(event)
+    return event_summary_from_security_event(event)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -1281,7 +1282,7 @@ async def select_disposition_source(
                     source_product=source_obj.source_product,
                     source_tenant_id=source_obj.source_tenant_id,
                     connector_id=source_obj.connector_id,
-                    source_kind=source_obj.source_kind,
+                    source_kind=SourceObjectKind(source_obj.source_kind),
                     source_object_id=source_obj.source_object_id,
                 )
                 return s.DispositionSourceSelectResponse(
