@@ -64,6 +64,7 @@ async def _truncate_business_tables(
         async with session.begin():
             await session.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
 
+
 # --------------------------------------------------------------------------- #
 # Module-level fixtures
 # --------------------------------------------------------------------------- #
