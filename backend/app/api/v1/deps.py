@@ -38,6 +38,9 @@ _super_agent: Any = None  # SuperAgent
 _event_lease: Any = None  # EventLease
 _investigation_stack: dict[str, Any] | None = None
 _approval_engine: Any = None  # ApprovalEngine
+_disposition_sync: Any = None  # DispositionSyncService
+_action_execution: Any = None  # ActionExecutionService
+_adapter_registry: Any = None  # DispositionAdapterRegistry
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -140,6 +143,62 @@ async def get_approval_engine() -> Any:
 
 
 ApprovalEngineDep = Annotated[Any, Depends(get_approval_engine)]
+
+
+def _get_adapter_registry() -> Any:
+    global _adapter_registry
+    if _adapter_registry is None:
+        from app.adapters.mock_xdr import MockXDRDispositionAdapter
+        from app.adapters.registry import DispositionAdapterRegistry
+
+        settings = get_settings()
+        registry = DispositionAdapterRegistry()
+        base_url = settings.disposition_base_url or "http://mock-xdr"
+        adapter = MockXDRDispositionAdapter(
+            base_url=base_url,
+            read_token="mock-read-token",
+            write_token="mock-write-token",
+        )
+        registry.register("mock_xdr", adapter)
+        _adapter_registry = registry
+    return _adapter_registry
+
+
+async def get_disposition_sync() -> Any:
+    global _disposition_sync
+    if _disposition_sync is None:
+        from app.core.guardrails import OutboundDispositionGuard
+        from app.services.disposition_sync_service import DispositionSyncService
+
+        _disposition_sync = DispositionSyncService(
+            _get_session_factory(),
+            context_store=_get_context_store(),
+            adapter_registry=_get_adapter_registry(),
+            outbound_guard=OutboundDispositionGuard(),
+            event_bus=_get_event_bus(),
+        )
+    return _disposition_sync
+
+
+async def get_action_execution() -> Any:
+    global _action_execution
+    if _action_execution is None:
+        from app.services.action_execution_service import ActionExecutionService
+
+        stack = await _get_investigation_stack()
+        _action_execution = ActionExecutionService(
+            _get_session_factory(),
+            disposition_sync=await get_disposition_sync(),
+            tool_executor=stack["tool_executor"],
+            state_machine=stack["state_machine"],
+            context_store=_get_context_store(),
+            event_bus=_get_event_bus(),
+        )
+    return _action_execution
+
+
+DispositionSyncDep = Annotated[Any, Depends(get_disposition_sync)]
+ActionExecutionDep = Annotated[Any, Depends(get_action_execution)]
 
 
 async def _get_wm() -> Any:
@@ -329,6 +388,7 @@ def reset_deps() -> None:
     global _session_factory, _redis_client, _context_store, _degraded_flags
     global _audit_log, _event_service, _state_machine, _event_bus, _pipeline, _approval_engine
     global _super_agent, _event_lease, _investigation_stack
+    global _disposition_sync, _action_execution, _adapter_registry
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -342,3 +402,6 @@ def reset_deps() -> None:
     _event_lease = None
     _investigation_stack = None
     _approval_engine = None
+    _disposition_sync = None
+    _action_execution = None
+    _adapter_registry = None
