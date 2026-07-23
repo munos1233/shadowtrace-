@@ -63,6 +63,13 @@ LINK_ROLE_PROVISIONAL = "provisional"
 PROMOTION_NONE = "none"
 PROMOTION_PROMOTED = "promoted"
 
+_SOCKET_VERDICT: dict[FinalVerdict, str] = {
+    FinalVerdict.NONE: "inconclusive",
+    FinalVerdict.POSSIBLE_FALSE_POSITIVE: "uncertain",
+    FinalVerdict.FALSE_POSITIVE: "false_positive",
+    FinalVerdict.CONFIRMED_THREAT: "true_positive",
+}
+
 
 def should_apply_source_update(
     *,
@@ -583,53 +590,106 @@ class EventService:
         # ``context`` remains in the public signature for compatibility, but trusted
         # gate projections are always rebuilt below from PostgreSQL.
         _ = context
-        changed = False
         async with self._session_factory() as session:
             async with session.begin():
-                row = await session.get(
-                    orm.SecurityEvent,
+                changed, result, summary = await self.apply_final_verdict_in_session(
+                    session,
                     event_id,
-                    with_for_update=True,
+                    verdict,
+                    operator=operator,
                 )
-                if row is None:
-                    raise KeyError(f"security_event not found: {event_id}")
-
-                ctx = await self._authoritative_verdict_context(session, event_id)
-
-                validate_verdict_status(verdict, EventStatus(row.status), ctx)
-
-                previous = row.final_verdict
-                if previous != verdict.value:
-                    changed = True
-                    row.final_verdict = verdict.value
-                    row.row_version = int(row.row_version or 1) + 1
-                    session.add(
-                        orm.EventAuditLog(
-                            event_id=event_id,
-                            from_status=row.status,
-                            to_status=row.status,
-                            operator=operator or "EventService",
-                            reason=f"final_verdict:{previous}->{verdict.value}",
-                        )
-                    )
-                    await session.flush()
-                    await session.refresh(row)
-                result = _security_event_from_row(row)
-                summary = event_summary_from_security_event(row)
 
         if changed:
-            await self._sync_event_summary_after_mutation(
+            await self.publish_final_verdict_mutation(
                 event_id,
-                committed_version=result.row_version,
+                verdict,
+                result=result,
                 summary=summary,
             )
-            if self._bus is not None:
-                await self._bus.publish_event(
-                    event_id,
-                    "final_verdict_updated",
-                    {"final_verdict": verdict.value, "operator": operator},
-                )
         return result
+
+    async def apply_final_verdict_in_session(
+        self,
+        session: AsyncSession,
+        event_id: str,
+        verdict: FinalVerdict,
+        *,
+        operator: str | None = None,
+    ) -> tuple[bool, SecurityEvent, EventSummary]:
+        """Apply a verdict inside the caller's transaction.
+
+        WorkflowRuntimeService uses this API so the verdict, confidence floor,
+        and trusted disposition-only intent commit atomically. Post-commit
+        context synchronization and EventBus publication remain separate.
+        """
+        row = await session.get(
+            orm.SecurityEvent,
+            event_id,
+            with_for_update=True,
+        )
+        if row is None:
+            raise KeyError(f"security_event not found: {event_id}")
+
+        ctx = await self._authoritative_verdict_context(session, event_id)
+        validate_verdict_status(verdict, EventStatus(row.status), ctx)
+
+        previous = row.final_verdict
+        changed = previous != verdict.value
+        if changed:
+            row.final_verdict = verdict.value
+            row.row_version = int(row.row_version or 1) + 1
+            session.add(
+                orm.EventAuditLog(
+                    event_id=event_id,
+                    from_status=row.status,
+                    to_status=row.status,
+                    operator=operator or "EventService",
+                    reason=f"final_verdict:{previous}->{verdict.value}",
+                )
+            )
+            await session.flush()
+            await session.refresh(row)
+
+        return (
+            changed,
+            _security_event_from_row(row),
+            event_summary_from_security_event(row),
+        )
+
+    async def publish_final_verdict_mutation(
+        self,
+        event_id: str,
+        verdict: FinalVerdict,
+        *,
+        result: SecurityEvent,
+        summary: EventSummary,
+    ) -> None:
+        """Publish mirrors for a verdict mutation after its transaction commits."""
+        await self.sync_event_summary_mutation(
+            event_id,
+            result=result,
+            summary=summary,
+        )
+        if self._bus is not None:
+            await self._bus.publish_event(
+                event_id,
+                "final_verdict_updated",
+                {"verdict": _SOCKET_VERDICT[verdict]},
+            )
+
+    async def sync_event_summary_mutation(
+        self,
+        event_id: str,
+        *,
+        result: SecurityEvent,
+        summary: EventSummary,
+    ) -> None:
+        """Synchronize EventContext after a committed event-row mutation."""
+        await self._sync_event_summary_after_mutation(
+            event_id,
+            committed_version=result.row_version,
+            summary=summary,
+        )
 
     async def update_risk_fields(
         self,
