@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any
+
+from fastapi import Depends
 
 if TYPE_CHECKING:
     from app.core.redis_client import RedisClient
@@ -46,3 +48,6 @@ def get_approval_engine() -> ApprovalEngine:
         state_machine=state_machine,
         context_store=context_store,
     )
+
+
+ApprovalEngineDep = Annotated[Any, Depends(get_approval_engine)]
