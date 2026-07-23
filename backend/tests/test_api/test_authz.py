@@ -31,7 +31,18 @@ def _dev_auth(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    from app.api.v1.deps import get_approval_engine
+
+    class _StubApprovalEngine:
+        async def approve(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def reject(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    app.dependency_overrides[get_approval_engine] = lambda: _StubApprovalEngine()
+    yield TestClient(app)
+    app.dependency_overrides.pop(get_approval_engine, None)
 
 
 def _hdr(role: str) -> dict[str, str]:

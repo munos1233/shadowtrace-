@@ -567,3 +567,6 @@ class EventContextFieldVersion(Base):
     event_id: Mapped[str] = mapped_column(String, primary_key=True)
     field_name: Mapped[str] = mapped_column(String, primary_key=True)
     current_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+from app.db.orm.approval import ApprovalRecordORM  # noqa: E402,F401
