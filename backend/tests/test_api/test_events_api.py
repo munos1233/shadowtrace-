@@ -174,6 +174,28 @@ async def _seed_reporting_required_event(
                 )
             )
             await session.flush()
+            # Seed SourceConnector + SourceObject so FK constraints on
+            # DispositionOutbox.source_record_id are satisfied.
+            connector_id = f"conn-{sfx}"
+            source_record_id = f"src-{sfx}"
+            session.add(
+                orm.SourceConnector(
+                    connector_id=connector_id,
+                    source_product="mock_xdr",
+                    display_name=f"Mock Connector {sfx}",
+                )
+            )
+            session.add(
+                orm.SourceObject(
+                    source_record_id=source_record_id,
+                    source_product="mock_xdr",
+                    source_tenant_id="t1",
+                    connector_id=connector_id,
+                    source_kind="incident",
+                    source_object_id=f"INC-{sfx}",
+                )
+            )
+            await session.flush()
             session.add(
                 orm.EventAuditLog(
                     event_id=event_id,

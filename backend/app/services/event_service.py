@@ -190,8 +190,32 @@ def _source_snapshot_from_row(row: orm.SecurityEvent) -> dict[str, Any]:
 
 
 def _security_event_from_row(row: orm.SecurityEvent) -> SecurityEvent:
-    creation = SourceReference.model_validate(row.creation_source_ref)
-    snapshots = [SourceReference.model_validate(s) for s in (row.source_reference_snapshots or [])]
+    # Tolerate sparse JSONB written by older code or test fixtures that only
+    # stored a subset of fields — fall back to a minimal valid SourceReference.
+    try:
+        creation = SourceReference.model_validate(row.creation_source_ref)
+    except Exception:  # noqa: BLE001
+        creation = SourceReference(
+            source_kind=SourceObjectKind.ALERT,
+            source_product="unknown",
+            source_tenant_id="unknown",
+            connector_id="unknown",
+            source_object_id=str(row.creation_source_ref.get("source_object_id", "unknown")),
+        )
+    snapshots: list[SourceReference] = []
+    for s in row.source_reference_snapshots or []:
+        try:
+            snapshots.append(SourceReference.model_validate(s))
+        except Exception:  # noqa: BLE001
+            snapshots.append(
+                SourceReference(
+                    source_kind=SourceObjectKind.ALERT,
+                    source_product="unknown",
+                    source_tenant_id="unknown",
+                    connector_id="unknown",
+                    source_object_id=str(s.get("source_object_id", "unknown")),
+                )
+            )
     disposition = None
     if row.disposition_source_ref:
         disposition = SourceObjectLocator.model_validate(row.disposition_source_ref)
