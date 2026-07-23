@@ -53,6 +53,11 @@ class KnowledgeStore:
         self._session_factory = session_factory
         self._embed = embed_service
 
+    @property
+    def semantic_search_enabled(self) -> bool:
+        """Whether callers should prefer pure vector search over hybrid keyword fallback."""
+        return self._embed.semantic_search_enabled
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -126,6 +131,16 @@ class KnowledgeStore:
                 )
                 for row in result.fetchall()
             ]
+
+    async def vector_search_query(
+        self,
+        kb_name: str,
+        query_text: str,
+        top_k: int = 10,
+    ) -> list[RetrievedChunk]:
+        """Embed *query_text* and run cosine-similarity search (ISSUE-522)."""
+        query_vec = await self._embed.embed_query(query_text)
+        return await self.vector_search(kb_name, query_vec, top_k=top_k)
 
     async def keyword_search(
         self, kb_name: str, query_text: str, top_k: int = 10

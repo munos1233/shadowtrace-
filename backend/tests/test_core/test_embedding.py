@@ -95,6 +95,28 @@ class TestEmbeddingService:
         await svc.close()
 
     @pytest.mark.asyncio
+    async def test_mock_mode_does_not_enable_semantic_search(self) -> None:
+        svc = EmbeddingService(Settings(embedding_mode="mock"))
+        assert svc.semantic_search_enabled is False
+        await svc.close()
+
+    @pytest.mark.asyncio
+    async def test_remote_mode_enables_semantic_search(self) -> None:
+        svc = EmbeddingService(
+            Settings(embedding_mode="remote", embedding_api_base_url="http://stub")
+        )
+        assert svc.semantic_search_enabled is True
+        await svc.close()
+
+    @pytest.mark.asyncio
+    async def test_local_mode_enables_semantic_search(self) -> None:
+        svc = EmbeddingService(
+            Settings(embedding_mode="local", embedding_api_base_url="http://stub")
+        )
+        assert svc.semantic_search_enabled is True
+        await svc.close()
+
+    @pytest.mark.asyncio
     async def test_local_mode_dispatches_to_remote_handler(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

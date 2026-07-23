@@ -15,8 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
+from app.core.embedding.mock_embedder import MockEmbedder
 from app.core.embedding.service import EmbeddingService
-from app.services.attack_kb_service import KB_NAME, AttackKBService
+from app.services.attack_kb_service import (
+    CHINESE_SOC_QUERY_BENCHMARKS,
+    KB_NAME,
+    AttackKBService,
+    _format_content,
+)
 from app.services.knowledge_store import KnowledgeStore
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -172,7 +178,6 @@ class TestSearchTechniques:
         # Retrieve the exact stored content for T1078 to guarantee mock-embedder match
         t1078 = await service.get_technique("T1078")
         assert t1078 is not None
-        from app.services.attack_kb_service import _format_content
 
         query_text = _format_content(t1078)
         results = await service.search_techniques(query_text, top_k=3)
@@ -195,6 +200,129 @@ class TestSearchTechniques:
         assert any("Exfiltration" in (r.metadata.get("tactics") or []) for r in results)
         assert any(r.retrieval_method in {"keyword", "hybrid"} for r in results)
 
+    @pytest.mark.asyncio
+    async def test_exfiltration_metadata_includes_bilingual_fields(
+        self,
+        service: AttackKBService,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _clean(session_factory)
+        await service.load_from_file(DATA_FILE)
+
+        t1567 = await service.get_technique("T1567")
+        assert t1567 is not None
+        assert "数据外泄" in (t1567.get("aliases") or [])
+        assert "exfiltration" in " ".join(t1567.get("keywords") or []).lower()
+
+
+class TestSemanticSearchRemoteMode:
+    @pytest_asyncio.fixture
+    def semantic_embed_service(self) -> EmbeddingService:
+        return EmbeddingService(
+            Settings(embedding_mode="remote", embedding_api_base_url="http://stub")
+        )
+
+    @pytest_asyncio.fixture
+    def semantic_store(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        semantic_embed_service: EmbeddingService,
+    ) -> KnowledgeStore:
+        return KnowledgeStore(session_factory, semantic_embed_service)
+
+    @pytest_asyncio.fixture
+    def semantic_service(
+        self,
+        semantic_store: KnowledgeStore,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> AttackKBService:
+        return AttackKBService(semantic_store, session_factory)
+
+    @pytest.mark.asyncio
+    async def test_remote_mode_uses_vector_only_without_alias_map(
+        self,
+        semantic_service: AttackKBService,
+        semantic_embed_service: EmbeddingService,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ISSUE-522: remote/local embeddings search via vector-only path."""
+        assert semantic_embed_service.semantic_search_enabled is True
+        await _clean(session_factory)
+        mock = MockEmbedder()
+
+        async def stub_remote(texts: list[str]) -> list[list[float]]:
+            return await mock.embed(texts)
+
+        monkeypatch.setattr(semantic_embed_service, "_embed_remote", stub_remote)
+
+        await semantic_service.load_from_file(DATA_FILE)
+
+        t1567 = await semantic_service.get_technique("T1567")
+        assert t1567 is not None
+        anchor_content = _format_content(t1567)
+
+        async def stub_query(text: str) -> list[float]:
+            if text.strip() == "数据外泄":
+                return (await mock.embed([anchor_content]))[0]
+            return (await mock.embed([text]))[0]
+
+        monkeypatch.setattr(semantic_embed_service, "embed_query", stub_query)
+
+        results = await semantic_service.search_techniques("数据外泄", top_k=5)
+        assert results
+        assert all(r.retrieval_method == "vector" for r in results)
+        assert results[0].metadata.get("technique_id") == "T1567"
+        assert "Exfiltration" in (results[0].metadata.get("tactics") or [])
+        assert results[0].score > 0.9
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("query_text", "expected_technique_id", "expected_tactic"),
+        CHINESE_SOC_QUERY_BENCHMARKS,
+    )
+    async def test_chinese_soc_query_benchmarks(
+        self,
+        semantic_service: AttackKBService,
+        semantic_embed_service: EmbeddingService,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        query_text: str,
+        expected_technique_id: str,
+        expected_tactic: str,
+    ) -> None:
+        """Routing regression: vector-only path ranks the aligned exfiltration technique."""
+        await _clean(session_factory)
+        mock = MockEmbedder()
+
+        async def stub_remote(texts: list[str]) -> list[list[float]]:
+            return await mock.embed(texts)
+
+        monkeypatch.setattr(semantic_embed_service, "_embed_remote", stub_remote)
+        await semantic_service.load_from_file(DATA_FILE)
+
+        anchor = await semantic_service.get_technique(expected_technique_id)
+        assert anchor is not None
+        anchor_content = _format_content(anchor)
+
+        async def stub_query(text: str) -> list[float]:
+            if text.strip() == query_text:
+                return (await mock.embed([anchor_content]))[0]
+            return (await mock.embed([text]))[0]
+
+        monkeypatch.setattr(semantic_embed_service, "embed_query", stub_query)
+
+        results = await semantic_service.search_techniques(query_text, top_k=8)
+        hit_ids = {row.metadata.get("technique_id") for row in results}
+        assert expected_technique_id in hit_ids
+        top = results[0]
+        assert top.metadata.get("technique_id") == expected_technique_id
+        assert expected_tactic in (top.metadata.get("tactics") or [])
+        assert top.score > 0.9
+        assert all(row.retrieval_method == "vector" for row in results)
+
+
+class TestSearchTechniquesContinued:
     @pytest.mark.asyncio
     async def test_respects_top_k(
         self,

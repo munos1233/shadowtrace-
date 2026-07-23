@@ -1,4 +1,4 @@
-"""AttackKBService: ATT&CK technique knowledge base operations (ISSUE-042)."""
+"""AttackKBService: ATT&CK technique knowledge base operations (ISSUE-042 / #522)."""
 
 from __future__ import annotations
 
@@ -15,12 +15,21 @@ from app.services.knowledge_store import KnowledgeStore
 
 KB_NAME = "attack_kb"
 
-# P0 mock-stage aliases: MockEmbedder cannot cross-match Chinese queries to
-# English technique text. Keyword leg uses expanded terms until remote
-# embeddings land (GitHub issue #522).
+# P0 mock-stage aliases: MockEmbedder cannot cross-match Chinese queries to English
+# technique text. The keyword leg uses expanded terms until remote/local embeddings
+# are enabled (GitHub issue #522). When ``embedding_mode`` is remote|local,
+# ``search_techniques`` uses vector-only search and ignores this map.
 _KEYWORD_QUERY_ALIASES: dict[str, str] = {
     "数据外泄": "exfiltration",
 }
+
+# Regression anchors for Chinese SOC analyst queries (issue #522 benchmarks).
+# Each row is (query_text, expected_technique_id, expected_tactic).
+CHINESE_SOC_QUERY_BENCHMARKS: tuple[tuple[str, str, str], ...] = (
+    ("数据外泄", "T1567", "Exfiltration"),
+    ("数据外泄", "T1048", "Exfiltration"),
+    ("数据外泄", "T1041", "Exfiltration"),
+)
 
 
 def _derive_chunk_id(technique_id: str, attack_version: str) -> str:
@@ -31,13 +40,20 @@ def _derive_chunk_id(technique_id: str, attack_version: str) -> str:
 
 def _format_content(t: dict[str, Any]) -> str:
     tactics = ", ".join(t["tactics"])
-    return (
-        f"Technique: {t['technique_name']}\n"
-        f"ID: {t['technique_id']}\n"
-        f"Tactics: {tactics}\n"
-        f"Description: {t['description']}\n"
-        f"Detection: {t['detection']}"
-    )
+    keywords = t.get("keywords") or []
+    aliases = t.get("aliases") or []
+    lines = [
+        f"Technique: {t['technique_name']}",
+        f"ID: {t['technique_id']}",
+        f"Tactics: {tactics}",
+        f"Description: {t['description']}",
+        f"Detection: {t['detection']}",
+    ]
+    if keywords:
+        lines.append(f"Keywords: {', '.join(str(item) for item in keywords)}")
+    if aliases:
+        lines.append(f"Aliases: {', '.join(str(item) for item in aliases)}")
+    return "\n".join(lines)
 
 
 class AttackKBService:
@@ -77,6 +93,10 @@ class AttackKBService:
                 "detection": t["detection"],
                 "attack_version": attack_version,
             }
+            if t.get("keywords"):
+                metadata["keywords"] = list(t["keywords"])
+            if t.get("aliases"):
+                metadata["aliases"] = list(t["aliases"])
             chunks.append(
                 KnowledgeChunk(
                     chunk_id=chunk_id,
@@ -108,7 +128,15 @@ class AttackKBService:
             return dict(row.metadata) if row else None
 
     async def search_techniques(self, query_text: str, top_k: int = 5) -> list[RetrievedChunk]:
-        """Hybrid vector + keyword search across ATT&CK technique descriptions."""
+        """Search ATT&CK techniques.
+
+        * ``embedding_mode=remote|local`` (semantic enabled): pure vector search.
+        * ``embedding_mode=mock`` (P0 default): hybrid vector + keyword search with
+          the minimal ``_KEYWORD_QUERY_ALIASES`` map for Chinese analyst queries.
+        """
+        if self._store.semantic_search_enabled:
+            return await self._store.vector_search_query(KB_NAME, query_text, top_k=top_k)
+
         stripped = query_text.strip()
         keyword_query = _KEYWORD_QUERY_ALIASES.get(stripped, stripped)
         return await self._store.hybrid_search(

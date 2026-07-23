@@ -27,6 +27,8 @@
       "technique_id": "T1567",
       "technique_name": "Exfiltration Over Web Service",
       "tactics": ["Exfiltration"],
+      "keywords": ["exfiltration", "data exfiltration", "web exfiltration"],
+      "aliases": ["数据外泄", "数据外传", "外泄数据"],
       "description": "Adversaries may exfiltrate data to a cloud storage service, web service, or file sharing platform rather than over their primary C2 channel. Popular targets include Dropbox, Google Drive, Mega, Pastebin, Discord, and Telegram. This blends in with legitimate web traffic and can bypass egress filtering.",
       "detection": "Monitor network connections to known cloud storage and file sharing domains. Look for large outbound data transfers to newly-registered or rarely-contacted domains. Inspect TLS SNI and HTTP Host headers for cloud storage API endpoints. Analyze netflow for disproportionate upload-to-download ratios."
     },
@@ -41,6 +43,8 @@
       "technique_id": "T1048",
       "technique_name": "Exfiltration Over Alternative Protocol",
       "tactics": ["Exfiltration"],
+      "keywords": ["exfiltration", "alternative protocol exfiltration"],
+      "aliases": ["数据外泄", "非标准协议外泄"],
       "description": "Adversaries may exfiltrate data using a protocol different from the primary C2 channel. This could include FTP, SMTP, DNS tunneling, or ICMP tunneling. Using a separate channel can reduce the correlation between C2 traffic and data theft.",
       "detection": "Monitor for unexpected protocol usage: DNS queries with large payloads (TXT records > 256 bytes), ICMP packets with large or structured payloads, FTP connections from non-file-server hosts. Baseline per-protocol volume and alert on deviations."
     },
@@ -48,6 +52,8 @@
       "technique_id": "T1041",
       "technique_name": "Exfiltration Over C2 Channel",
       "tactics": ["Exfiltration"],
+      "keywords": ["exfiltration", "c2 exfiltration"],
+      "aliases": ["数据外泄", "C2通道外泄"],
       "description": "Adversaries may exfiltrate data over the same command and control channel used for communications. This avoids the need to open additional connections that might be detected. Data may be embedded within C2 protocol fields such as HTTP POST bodies or DNS response data.",
       "detection": "Monitor C2 channel traffic patterns for changes in upload volume or message frequency. Inspect protocol payload sizes for anomalies (e.g., HTTP POST bodies suddenly growing from bytes to megabytes). Correlate C2 traffic timing with file access events on endpoints."
     },
@@ -321,6 +327,8 @@
       "technique_id": "T1537",
       "technique_name": "Transfer Data to Cloud Account",
       "tactics": ["Exfiltration"],
+      "keywords": ["exfiltration", "cloud exfiltration"],
+      "aliases": ["数据外泄", "云端外泄"],
       "description": "Adversaries may exfiltrate data to a cloud storage service under their control. This includes syncing staging directories to cloud-synced folders, uploading to cloud storage via API or CLI tools, or emailing data to webmail services. Legitimate cloud service traffic blends in with normal corporate cloud usage.",
       "detection": "Monitor cloud service API usage: unusual upload volumes, new OAuth token grants, access from non-corporate IP ranges. Track cloud storage CLI tool usage (aws s3 cp, azcopy, gsutil cp). Analyze DNS queries for cloud storage domains paired with large upload volumes."
     },

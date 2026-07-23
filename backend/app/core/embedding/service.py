@@ -25,6 +25,15 @@ class EmbeddingService:
         self._base_url = settings.embedding_api_base_url.rstrip("/")
         self._api_key = settings.embedding_api_key
 
+    @property
+    def embedding_mode(self) -> str:
+        return self._mode
+
+    @property
+    def semantic_search_enabled(self) -> bool:
+        """True when real embeddings can support cross-lingual vector recall (ISSUE-522)."""
+        return self._mode in {"remote", "local"}
+
     async def _get_http(self) -> httpx.AsyncClient:
         if self._http is None:
             headers: dict[str, str] = {}

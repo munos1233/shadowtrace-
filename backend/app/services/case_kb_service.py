@@ -23,7 +23,7 @@ from app.services.knowledge_store import KnowledgeStore
 FP_KB_NAME = "fp_case_kb"
 HISTORY_KB_NAME = "history_case_kb"
 
-# Mock-stage keyword expansions until remote embeddings land (GitHub issue #522).
+# Mock-stage keyword expansions for fp_case_kb (attack_kb semantic path: issue #522).
 _FP_KEYWORD_ALIASES: dict[str, str] = {
     "ops-change-bot": "ops-change-bot PC-OPS-JUMP-01 bulk login change window jump host",
 }
