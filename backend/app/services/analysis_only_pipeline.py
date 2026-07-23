@@ -67,6 +67,7 @@ class AnalysisOnlyPipeline:
         risk_agent: RiskAgent,
         report_agent: ReportAgent,
         context_store: Any | None = None,
+        degraded_flags: Any | None = None,
     ) -> None:
         self._event_service = event_service
         self._state_machine = state_machine
@@ -75,6 +76,7 @@ class AnalysisOnlyPipeline:
         self._risk = risk_agent
         self._report = report_agent
         self._context_store = context_store
+        self._degraded_flags = degraded_flags
 
     async def run(self, event_id: str) -> dict[str, Any]:
         """Execute the analysis-only pipeline for *event_id*.
@@ -265,7 +267,13 @@ class AnalysisOnlyPipeline:
     # ------------------------------------------------------------------ #
 
     async def _persist_analysis_only_complete(self, event_id: str) -> None:
-        """Persist analysis_only_complete=true to EventContextStore."""
+        """Persist analysis_only_complete=true to EventContextStore.
+
+        On Redis failure, sets the ``redis_context_unavailable`` degraded flag
+        so downstream systems (ISSUE-039 integration tests, ISSUE-054 SuperAgent
+        takeover) can detect the degraded state rather than silently missing the
+        signal.
+        """
         if self._context_store is not None:
             try:
                 await self._context_store.set(event_id, "analysis_only_complete", True)
@@ -275,6 +283,23 @@ class AnalysisOnlyPipeline:
                     event_id,
                     exc_info=True,
                 )
+                # Set degraded flag so downstream systems know the signal is
+                # unreliable for this event.
+                if self._degraded_flags is not None:
+                    try:
+                        await self._degraded_flags.set_flag(
+                            event_id,
+                            "redis_context_unavailable",
+                            True,
+                            writer="AnalysisOnlyPipeline",
+                        )
+                    except Exception:
+                        logger.error(
+                            "Failed to set redis_context_unavailable degraded flag "
+                            "for event=%s",
+                            event_id,
+                            exc_info=True,
+                        )
 
     async def _short_circuit_close(
         self,

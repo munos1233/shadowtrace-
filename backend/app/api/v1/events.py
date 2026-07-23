@@ -67,7 +67,12 @@ _ASSOCIATED_SOURCE_RECORDS = {"src-associated-1"}
 
 
 def _try_get_session_factory() -> async_sessionmaker[AsyncSession] | None:
-    """Return the session factory, or None if DB is unavailable."""
+    """Return the session factory, or None if DB is unavailable.
+
+    Configuration errors (ValueError, TypeError — e.g. malformed database_url)
+    propagate immediately so the operator can detect them at startup rather than
+    silently running with empty results.
+    """
     try:
         from app.api.v1.deps import _get_session_factory
 
@@ -79,6 +84,10 @@ def _try_get_session_factory() -> async_sessionmaker[AsyncSession] | None:
             "returning empty results"
         )
         return None
+    except (ValueError, TypeError):
+        # Configuration errors must propagate — a malformed database_url or
+        # similar config issue must not be silently swallowed (ISSUE-038 #8).
+        raise
     except Exception:
         logger.warning(
             "Database session factory unavailable (runtime error) — "
@@ -106,41 +115,77 @@ async def _generate_quick_close_report(
     operator: str,
     event_service: "EventService",
 ) -> None:
-    """Generate a minimal placeholder report so the CLOSED gate can pass.
+    """Generate a standard 15-section quick-close report so the CLOSED gate can pass.
+
+    Uses ReportSectionBuilder to produce all 15 standard sections.  Evidence,
+    disposition, and verification sections use placeholder text; overview and
+    recommendations explain the quick-close / low-risk reason.
 
     The validate_closed_gate check in StateMachineService requires a report
-    row to exist before allowing CLOSED.  This creates a lightweight quick-close
-    report with placeholder sections.
+    row to exist before allowing CLOSED.
     """
     from datetime import UTC, datetime
 
+    from app.agents.report_section_builder import ReportSectionBuilder
+    from app.models.agent_io import (
+        CollectionStatus,
+        EvidenceOutput,
+        RiskAssessment,
+        ScoringMode,
+    )
     from app.models.ids import report_id_for_event
-    from app.models.report import InvestigationReport, ReportSection
+    from app.models.report import InvestigationReport
 
     # Skip if report already exists.
     existing = await event_service.get_report(event_id=event_id)
     if existing is not None:
         return
 
-    now = datetime.now(UTC)
-    sections: list[ReportSection] = [
-        ReportSection(
-            key="overview",
-            title="Overview",
-            content=f"Quick-close report for event {event_id}: {event_title}.",
-        ),
-        ReportSection(
-            key="recommendations",
-            title="Recommendations",
-            content="Event closed via quick-close path. No further investigation required.",
-        ),
-    ]
+    # Build placeholder evidence / risk matching _short_circuit_close semantics.
+    placeholder_evidence = EvidenceOutput(
+        evidence_list=[],
+        conflicts=[],
+        gaps=[],
+        success_sources=[],
+        failed_sources=[],
+        overall_confidence=0.0,
+        collection_status=CollectionStatus.COMPLETED,
+    )
+    placeholder_risk = RiskAssessment(
+        risk_score=risk_score,
+        severity=severity,
+        confidence=0.9,
+        risk_factors=[],
+        possible_false_positive=(final_verdict == FinalVerdict.FALSE_POSITIVE),
+        scoring_mode=ScoringMode.RULE_ONLY,
+    )
 
+    builder = ReportSectionBuilder()
+    sections = builder.build(
+        event_id=event_id,
+        evidence_output=placeholder_evidence,
+        risk_assessment=placeholder_risk,
+        triage_result=None,
+        response_plan=None,
+        verification_result=None,
+        rag_output=None,
+        final_verdict=final_verdict,
+    )
+
+    title = f"Quick Close Report — {event_title}"
+    summary = (
+        f"Auto-generated quick-close report for {event_id}. "
+        f"severity={severity.value}; risk_score={risk_score}; verdict={final_verdict.value}. "
+        f"Evidence, disposition, and verification sections use placeholder content — "
+        f"this event was closed via quick-close path without full investigation."
+    )
+
+    now = datetime.now(UTC)
     report = InvestigationReport(
         report_id=report_id_for_event(event_id),
         event_id=event_id,
-        title=f"Quick Close Report — {event_title}",
-        summary=f"Auto-generated quick-close report for {event_id}.",
+        title=title,
+        summary=summary,
         sections=sections,
         final_verdict=final_verdict,
         risk_score=risk_score,
@@ -217,7 +262,7 @@ async def _build_writeback_info(
         # Derive overall writeback status.
         wb_status: WritebackStatus | None = None
         if pending > 0:
-            # Check for failures / conflicts across outbox records.
+            # Check for failures / conflicts / unknown across outbox records.
             failed = await session.scalar(
                 select(func.count(orm.DispositionOutbox.outbox_id)).where(
                     orm.DispositionOutbox.event_id == event_id,
@@ -232,10 +277,22 @@ async def _build_writeback_info(
                     orm.DispositionOutbox.latest_writeback_status == WritebackStatus.CONFLICT.value,
                 )
             )
+            unknown = await session.scalar(
+                select(func.count(orm.DispositionOutbox.outbox_id)).where(
+                    orm.DispositionOutbox.event_id == event_id,
+                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                    orm.DispositionOutbox.latest_writeback_status == WritebackStatus.UNKNOWN.value,
+                )
+            )
             if int(failed or 0) > 0:
                 wb_status = WritebackStatus.FAILED
             elif int(conflict or 0) > 0:
                 wb_status = WritebackStatus.CONFLICT
+            elif int(unknown or 0) > 0:
+                # UNKNOWN = submitted but unconfirmable — must not be downgraded
+                # to PENDING, which implies "still waiting" and may invite unsafe
+                # retries from downstream code (ISSUE-038 Should-Fix #4).
+                wb_status = WritebackStatus.UNKNOWN
             else:
                 wb_status = WritebackStatus.PENDING
 
@@ -555,6 +612,40 @@ async def close_event(
         )
     elif current_status == EventStatus.FAILED:
         # FAILED → REPORTING → CLOSED.
+        # ISSUE-038: writeback gate pre-check (same as REPORTING branch) before
+        # any state transitions to avoid leaving the event stuck in REPORTING.
+        if event.disposition_policy == DispositionPolicy.REQUIRED:
+            from app.api.v1.deps import _get_session_factory
+
+            readiness, wb_status, _pending = await _build_writeback_info(
+                event_id, event.disposition_policy, _get_session_factory()
+            )
+            if readiness == WritebackReadiness.NOT_CONFIGURED:
+                raise WritebackUnsupportedError(
+                    "required disposition_policy but no disposition Action configured",
+                    details={"event_id": event_id},
+                )
+            if readiness not in (WritebackReadiness.READY, WritebackReadiness.NOT_REQUIRED):
+                raise WritebackUnsupportedError(
+                    f"writeback readiness is {readiness.value}",
+                    details={"event_id": event_id, "readiness": readiness.value},
+                )
+            if wb_status in (WritebackStatus.PENDING, WritebackStatus.UNKNOWN):
+                raise WritebackPendingError(
+                    f"writeback is {wb_status.value}",
+                    details={"event_id": event_id, "writeback_status": wb_status.value},
+                )
+            if wb_status == WritebackStatus.FAILED:
+                raise WritebackFailedError(
+                    "writeback failed",
+                    details={"event_id": event_id},
+                )
+            if wb_status == WritebackStatus.CONFLICT:
+                raise WritebackConflictError(
+                    "writeback conflict",
+                    details={"event_id": event_id},
+                )
+
         # Generate a quick-close report so validate_closed_gate can pass.
         await _generate_quick_close_report(
             event_id=event_id,
@@ -615,7 +706,16 @@ async def _db_read(
     page_size: int = 20,
     extra_conditions: list[Any] | None = None,
 ) -> tuple[list[Any], int]:
-    """Execute a paginated read query, or return empty on DB failure."""
+    """Execute a paginated read query.
+
+    Returns empty results for transient DB errors (connection issues, pool
+    exhaustion).  Non-transient errors are re-raised so the API layer can
+    return HTTP 503 rather than silently reporting success with no data.
+    """
+    from sqlalchemy import exc as sa_exc
+
+    from app.core.errors import DependencyUnavailableError
+
     sf = _try_get_session_factory()
     if sf is None:
         return [], 0
@@ -623,7 +723,7 @@ async def _db_read(
     if extra_conditions:
         conditions.extend(extra_conditions)
     page = max(1, page)
-    page_size = min(max(1, page_size), 200)
+    page_size = min(max(1, page_size), 500)
     try:
         async with sf() as session:
             count = await session.scalar(select(func.count()).select_from(table).where(*conditions))
@@ -645,14 +745,30 @@ async def _db_read(
             event_id,
         )
         return [], 0
-    except Exception:
+    except (ConnectionRefusedError, TimeoutError, sa_exc.OperationalError):
         logger.warning(
-            "DB read failed for table=%s event=%s",
+            "DB read degraded (transient error) for table=%s event=%s",
             getattr(table, "__tablename__", table),
             event_id,
             exc_info=True,
         )
         return [], 0
+    except Exception as exc:
+        logger.error(
+            "DB read failed (non-transient) for table=%s event=%s: %s",
+            getattr(table, "__tablename__", table),
+            event_id,
+            exc,
+            exc_info=True,
+        )
+        raise DependencyUnavailableError(
+            "database query failed",
+            error_code="dependency_unavailable",
+            details={
+                "table": getattr(table, "__tablename__", str(table)),
+                "event_id": event_id,
+            },
+        ) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -688,6 +804,8 @@ async def get_report(
 async def get_traces(
     event_id: str,
     principal: CurrentPrincipal,
+    page: int = 1,
+    page_size: int = 20,
     event_service: EventService = Depends(get_event_service),
 ) -> s.TracesResponse:
     event = await event_service.get_event(event_id)
@@ -698,6 +816,8 @@ async def get_traces(
         event_id,
         orm.AgentTrace,
         orm.AgentTrace.started_at.asc(),
+        page=page,
+        page_size=page_size,
     )
 
     items: list[s.TraceItem] = []
@@ -712,7 +832,7 @@ async def get_traces(
             )
         )
 
-    return s.TracesResponse(total=total, items=items)
+    return s.TracesResponse(total=total, page=page, page_size=page_size, items=items)
 
 
 # --------------------------------------------------------------------------- #
@@ -724,6 +844,8 @@ async def get_traces(
 async def get_audit_logs(
     event_id: str,
     principal: CurrentPrincipal,
+    page: int = 1,
+    page_size: int = 20,
     event_service: EventService = Depends(get_event_service),
 ) -> s.AuditLogsResponse:
     event = await event_service.get_event(event_id)
@@ -734,6 +856,8 @@ async def get_audit_logs(
         event_id,
         orm.EventAuditLog,
         orm.EventAuditLog.id.asc(),
+        page=page,
+        page_size=page_size,
     )
 
     items: list[s.AuditLogItem] = []
@@ -749,7 +873,7 @@ async def get_audit_logs(
             )
         )
 
-    return s.AuditLogsResponse(total=total, items=items)
+    return s.AuditLogsResponse(total=total, page=page, page_size=page_size, items=items)
 
 
 # --------------------------------------------------------------------------- #

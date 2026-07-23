@@ -160,6 +160,7 @@ async def get_pipeline() -> Any:
             risk_agent=risk,
             report_agent=report,
             context_store=_get_context_store(),
+            degraded_flags=_get_degraded_flags(),
         )
     return _pipeline
 

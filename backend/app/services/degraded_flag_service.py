@@ -29,6 +29,7 @@ DEGRADED_FLAG_TRUSTED_CALLERS: frozenset[str] = frozenset(
         "EventService",
         "StateMachineService",
         "DegradedFlagService",
+        "AnalysisOnlyPipeline",
     }
 )
 
