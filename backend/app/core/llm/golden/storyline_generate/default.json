@@ -1,0 +1,93 @@
+{
+  "content": {
+    "narrative_summary": "用户 zhangsan 在主机 PC-FIN-023 上使用 rar.exe 压缩财务文件 financial_data.zip，随后通过 cloud-storage.example.com 将数据外传至外部 IP 203.0.113.88，构成完整的数据外泄攻击链。",
+    "phases": [
+      {
+        "phase_order": 1,
+        "phase_name": "initial_access",
+        "tactic": "Valid Accounts",
+        "narrative": "账号 zhangsan 从内网 IP 10.20.30.23 登录主机 PC-FIN-023，获得初始访问权限。",
+        "entries": [
+          {
+            "timestamp": "2024-06-15T09:00:00Z",
+            "description": "账号 zhangsan 从 10.20.30.23 登录 PC-FIN-023",
+            "evidence_id": "",
+            "technique_id": "T1078",
+            "severity_hint": "low"
+          }
+        ]
+      },
+      {
+        "phase_order": 2,
+        "phase_name": "collection",
+        "tactic": "Data from Local System",
+        "narrative": "在主机 PC-FIN-023 上检测到对财务文件 financial_data.zip 的访问操作。",
+        "entries": [
+          {
+            "timestamp": "2024-06-15T09:02:00Z",
+            "description": "账号 zhangsan 访问文件 financial_data.zip",
+            "evidence_id": "",
+            "technique_id": "T1005",
+            "severity_hint": "medium"
+          }
+        ]
+      },
+      {
+        "phase_order": 3,
+        "phase_name": "staging",
+        "tactic": "Archive Collected Data",
+        "narrative": "主机 PC-FIN-023 上 rar.exe 进程执行，疑似对收集的数据进行压缩打包。",
+        "entries": [
+          {
+            "timestamp": "2024-06-15T09:01:00Z",
+            "description": "主机 PC-FIN-023 上 rar.exe 进程启动",
+            "evidence_id": "",
+            "technique_id": "T1560",
+            "severity_hint": "medium"
+          }
+        ]
+      },
+      {
+        "phase_order": 4,
+        "phase_name": "exfiltration",
+        "tactic": "Exfiltration Over C2 Channel",
+        "narrative": "主机 PC-FIN-023 向外部 IP 203.0.113.88 发起连接，DNS 解析了 cloud-storage.example.com，数据疑似通过该通道外传。",
+        "entries": [
+          {
+            "timestamp": "2024-06-15T09:03:00Z",
+            "description": "PC-FIN-023 连接外部 IP 203.0.113.88",
+            "evidence_id": "",
+            "technique_id": "T1041",
+            "severity_hint": "high"
+          },
+          {
+            "timestamp": "2024-06-15T09:04:00Z",
+            "description": "DNS 解析 cloud-storage.example.com 到 203.0.113.88",
+            "evidence_id": "",
+            "technique_id": "T1071",
+            "severity_hint": "high"
+          }
+        ]
+      },
+      {
+        "phase_order": 5,
+        "phase_name": "post_action",
+        "tactic": null,
+        "narrative": "数据外传完成后，暂未检测到进一步异常活动。",
+        "entries": [
+          {
+            "timestamp": "2024-06-15T09:04:00Z",
+            "description": "外传操作完成，无后续异常",
+            "evidence_id": "",
+            "technique_id": null,
+            "severity_hint": "low"
+          }
+        ]
+      }
+    ]
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 350,
+  "completion_tokens": 450,
+  "total_tokens": 800
+}
