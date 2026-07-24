@@ -1,11 +1,13 @@
-"""Event endpoints (placeholder implementations returning static examples)."""
+"""Event endpoints (ISSUE-004 / ISSUE-054)."""
 
 from __future__ import annotations
 
+import asyncio as _asyncio
+import logging
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
 from app.api.v1 import schemas as s
 from app.api.v1.errors import (
@@ -22,6 +24,7 @@ from app.core.auth import (
     Principal,
     require_roles,
 )
+from app.core.config import Settings, get_settings
 from app.models.disposition import SourceObjectLocator
 from app.models.enums import (
     ActionStatus,
@@ -106,6 +109,7 @@ async def investigate_event(
     event_id: str,
     principal: Annotated[Principal, require_roles(ROLE_ANALYST)],
     body: s.InvestigateRequest | None = None,
+    settings: Settings = Depends(get_settings),
 ) -> s.InvestigateResponse:
     event = _require_event(event_id)
     if event["status"] == EventStatus.CLOSED:
@@ -113,9 +117,213 @@ async def investigate_event(
             "cannot investigate a CLOSED event",
             details={"event_id": event_id, "status": EventStatus.CLOSED.value},
         )
+
+    orchestration_mode = (settings.orchestration_mode or "graph").strip().lower()
+
+    if orchestration_mode == "analysis_only":
+        # Guard: fail-closed if live side-effect switches are on.
+        from app.services.analysis_only_pipeline import assert_analysis_only_mode
+
+        assert_analysis_only_mode(settings)
+        # Placeholder: AnalysisOnlyPipeline path continues through ISSUE-038 wiring.
+        return s.InvestigateResponse(
+            event_id=event_id,
+            task_id="task-analysis-only",
+            status=EventStatus.TRIAGING,
+        )
+
+    # Default: SuperAgent graph orchestration.
+    super_agent = _get_or_create_super_agent(settings)
+    await super_agent.investigate(event_id)
+
+    # Per spec ISSUE-054, ``investigate()`` returns ``None`` — read the
+    # final status from the event store which was updated by SuperAgent
+    # state transitions.
+    event = _require_event(event_id)
     return s.InvestigateResponse(
-        event_id=event_id, task_id="task-0a1b2c3d", status=EventStatus.TRIAGING
+        event_id=event_id,
+        task_id=f"task-{event_id}",
+        status=event["status"],
     )
+
+
+# --------------------------------------------------------------------------- #
+# Dev adapters (ISSUE-054 — replaced by full DI in production)
+# --------------------------------------------------------------------------- #
+
+
+class _DevEventService:
+    """Minimal event-service adapter wrapping the in-memory ``_EVENTS`` store.
+
+    Allows ``SuperAgent._transition`` to update event status so the
+    investigate endpoint can read the final status after graph completion.
+
+    Includes a basic state-machine guard to catch illegal transitions in
+    dev/test — the real ``StateMachineService`` provides full validation
+    in production.
+    """
+
+    # Subset of valid transitions mirroring the production state machine.
+    # Any non-terminal state may transition to FAILED.
+    _VALID_TRANSITIONS: dict[EventStatus, set[EventStatus]] = {
+        EventStatus.NEW: {EventStatus.TRIAGING},
+        EventStatus.TRIAGING: {EventStatus.COLLECTING_EVIDENCE, EventStatus.CLOSED},
+        EventStatus.COLLECTING_EVIDENCE: {EventStatus.ANALYZING},
+        EventStatus.ANALYZING: {EventStatus.SCORING},
+        EventStatus.SCORING: {EventStatus.REPORTING},
+        EventStatus.REPORTING: {EventStatus.CLOSED},
+    }
+
+    async def transition_status(
+        self,
+        event_id: str,
+        target: EventStatus,
+        *,
+        operator: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        event = _EVENTS.get(event_id)
+        if event is None:
+            return
+        current = event.get("status")
+        if isinstance(current, EventStatus) and target != EventStatus.FAILED:
+            allowed = self._VALID_TRANSITIONS.get(current, set())
+            if target not in allowed:
+                # Mirror production StateMachineService: illegal transitions
+                # MUST raise so callers can react (retry, fail, or alert).
+                raise InvalidStateTransitionError(
+                    f"invalid transition {current.value} → {target.value}",
+                    details={
+                        "event_id": event_id,
+                        "current": current.value,
+                        "target": target.value,
+                    },
+                )
+        event["status"] = target
+
+    async def get_event(self, event_id: str) -> dict[str, object] | None:
+        return _EVENTS.get(event_id)
+
+
+class _DevWorkingMemory:
+    """Minimal in-memory WorkingMemory adapter for dev/test.
+
+    Supports the subset of ``WorkingMemory`` / ``BoundWorkingMemory`` used
+    by ``StorylineService``: ``for_writer`` and ``write``.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[str, str], Any] = {}
+
+    def for_writer(self, writer: str) -> _DevWorkingMemory:
+        return self
+
+    async def write(self, event_id: str, key: str, value: Any) -> None:
+        self._store[(event_id, key)] = value
+
+    async def read(self, event_id: str, key: str) -> Any:
+        return self._store.get((event_id, key))
+
+
+# --------------------------------------------------------------------------- #
+# SuperAgent factory (ISSUE-054 — refined in follow-up Issues)
+# --------------------------------------------------------------------------- #
+
+_super_agent_instance: object | None = None
+_super_agent_lock = _asyncio.Lock()
+
+
+async def _get_or_create_super_agent(settings: Settings) -> object:
+    """Return a lazily-initialized SuperAgent singleton for the graph path.
+
+    In production this is replaced by proper FastAPI DI; the singleton is
+    acceptable for P0 mock-dev because agent instances are stateless.
+    """
+    global _super_agent_instance
+    if _super_agent_instance is not None:
+        return _super_agent_instance
+
+    async with _super_agent_lock:
+        if _super_agent_instance is not None:
+            return _super_agent_instance
+
+    from app.agents.evidence_agent import EvidenceAgent
+    from app.agents.graph_agent import GraphAgent
+    from app.agents.planner_agent import PlannerAgent
+    from app.agents.rag_agent import RAGAgent
+    from app.agents.report_agent import ReportAgent
+    from app.agents.risk_agent import RiskAgent
+    from app.agents.super_agent import SuperAgent
+    from app.agents.triage_agent import TriageAgent
+    from app.core.llm.mock_client import InMemoryLLMCallAuditRecorder, MockLLMClient
+    from app.orchestration.lease import EventLease
+    from app.orchestration.react_engine import ReadOnlyReActExecutor  # noqa: F811
+    from app.services.storyline_service import StorylineService
+
+    llm = MockLLMClient(
+        golden_root=None,
+        audit_recorder=InMemoryLLMCallAuditRecorder(),
+    )
+
+    # Dev adapters so SuperAgent transitions and StorylineService WM
+    # writes actually take effect in the in-memory store.
+    event_service = _DevEventService()
+    dev_wm = _DevWorkingMemory()
+
+    triage = TriageAgent(llm_client=llm)
+    evidence = EvidenceAgent(llm_client=llm)
+    planner = PlannerAgent(llm_client=llm)
+    rag = RAGAgent(llm_client=llm)
+    risk = RiskAgent(llm_client=llm)
+    report = ReportAgent(llm_client=llm)
+    graph = GraphAgent(llm_client=llm)
+    storyline = StorylineService(llm_client=llm, working_memory=dev_wm)
+
+    lease: EventLease | None = None
+    try:
+        from app.core.redis_client import RedisClient
+
+        redis = RedisClient(url=settings.redis_url)
+        if redis is not None:
+            lease = EventLease(redis)
+    except Exception:
+        _logger = logging.getLogger(__name__)
+        _logger.warning(
+            "SuperAgent factory: Redis unavailable — running without lease "
+            "protection. Concurrent investigation triggers will NOT be "
+            "prevented (降级策略: 数据库行锁路径尚未实现)."
+        )
+
+    react_enabled = settings.react_enabled
+    react_executor = None
+    if react_enabled:
+        try:
+            react_executor = ReadOnlyReActExecutor()
+        except Exception as exc:
+            from app.core.errors import ConfigurationError
+
+            raise ConfigurationError(
+                message="REACT_ENABLED=true but ReadOnlyReActExecutor (ISSUE-053) "
+                "is not registered or failed to initialize",
+                error_code="configuration_error",
+                details={"react_enabled": True, "init_error": str(exc)},
+            ) from exc
+
+    _super_agent_instance = SuperAgent(
+        triage_agent=triage,
+        evidence_agent=evidence,
+        planner_agent=planner,
+        rag_agent=rag,
+        risk_agent=risk,
+        report_agent=report,
+        graph_agent=graph,
+        storyline_service=storyline,
+        lease=lease,
+        event_service=event_service,
+        react_enabled=react_enabled,
+        react_executor=react_executor,
+    )
+    return _super_agent_instance
 
 
 @router.post("/events/{event_id}/close", response_model=s.EventCloseResponse)

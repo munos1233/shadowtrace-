@@ -22,6 +22,7 @@ from app.core.errors import (
     EventNotFoundError,
     InvalidStateTransitionError,
     InvalidVerdictStatusCombinationError,
+    InvestigationInProgressError,
     ResourceNotFoundError,
     ShadowTraceError,
     WritebackConflictError,
@@ -44,6 +45,7 @@ __all__ = [
     "WritebackConflictError",
     "WritebackUnsupportedError",
     "DispositionPermissionDenied",
+    "InvestigationInProgressError",
     "ResourceNotFoundError",
     "register_exception_handlers",
 ]
