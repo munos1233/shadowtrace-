@@ -87,6 +87,12 @@ jobs:
           python -m pytest --cov=app --cov-report=term
           --cov-report=xml:coverage.xml
 
+      - name: ISSUE-055 orchestration coverage gate
+        run: >
+          python -m pytest tests/integration/test_orchestration.py -m orchestration -v
+          --cov=app.orchestration --cov=app.agents.super_agent
+          --cov-report=term-missing --cov-fail-under=75
+
       - name: Repeat critical timing tests under coverage
         run: |
           for attempt in 1 2 3; do
