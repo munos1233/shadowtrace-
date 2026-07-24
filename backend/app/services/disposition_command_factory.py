@@ -7,6 +7,7 @@ from app.models.action import Action
 from app.models.disposition import (
     DispositionCommand,
     RecordExecutionResultParams,
+    SetEventDispositionParams,
     SourceObjectLocator,
     SubmitEntityActionParams,
     TargetDispositionResult,
@@ -14,6 +15,7 @@ from app.models.disposition import (
 from app.models.enums import (
     DispositionIntentKind,
     ExecutionOwner,
+    SourceDisposition,
     TargetExecutionStatus,
 )
 from app.models.execution import ActionExecutionJob
@@ -58,6 +60,32 @@ class DispositionCommandFactory:
             ],
             operator_id=operator_id,
             idempotency_key=action.idempotency_key or f"{action.action_id}:entity",
+            source_concurrency_token=source_concurrency_token,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+        )
+
+    def build_event_status_update(
+        self,
+        action: Action,
+        *,
+        source_locator: SourceObjectLocator,
+        source_concurrency_token: str | None,
+        operator_id: str,
+        disposition_id: str,
+        closure_cycle: int,
+        target_disposition: SourceDisposition,
+    ) -> DispositionCommand:
+        return DispositionCommand(
+            disposition_id=disposition_id,
+            action_id=action.action_id,
+            closure_cycle=closure_cycle,
+            intent_kind=DispositionIntentKind.EVENT_STATUS_UPDATE,
+            source_locator=source_locator,
+            operation_code="set_event_disposition",
+            operation_params=SetEventDispositionParams(target_disposition=target_disposition),
+            target_results=[],
+            operator_id=operator_id,
+            idempotency_key=action.idempotency_key or f"{action.action_id}:terminal",
             source_concurrency_token=source_concurrency_token,
             execution_owner=ExecutionOwner.XDR_MANAGED,
         )
