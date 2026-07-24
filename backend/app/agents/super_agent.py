@@ -24,7 +24,7 @@ import asyncio
 import logging
 from typing import Any, Protocol, runtime_checkable
 
-from app.agents.base import BaseAgent
+from app.agents.base import AgentOutput, BaseAgent
 from app.agents.planner_agent import PlannerAgent
 from app.core.errors import InvestigationInProgressError, ShadowTraceError
 from app.models.agent_io import (
@@ -168,7 +168,7 @@ class _StateGraph:
 # --------------------------------------------------------------------------- #
 
 
-class SuperAgent(BaseAgent[SuperAgentInput, None]):
+class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
     """Orchestration agent that drives the full investigation lifecycle.
 
     Parameters
@@ -205,7 +205,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
         risk_agent: _AgentProtocol | None = None,
         report_agent: _AgentProtocol | None = None,
         graph_agent: _AgentProtocol | None = None,
-        storyline_service: _AgentProtocol | None = None,
+        storyline_service: Any | None = None,  # StorylineService (has .generate not .execute)
         react_executor: Any | None = None,
         event_service: Any | None = None,
         context_store: Any | None = None,
@@ -349,9 +349,10 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
     # _run — BaseAgent template integration
     # ------------------------------------------------------------------ #
 
-    async def _run(self, input: SuperAgentInput) -> None:
+    async def _run(self, input: SuperAgentInput) -> AgentOutput:
         """Delegates to ``investigate`` so BaseAgent.execute() applies."""
         await self.investigate(input.event_id)
+        return AgentOutput(agent_name="super_agent", success=True)
 
     # ------------------------------------------------------------------ #
     # Graph construction
@@ -681,7 +682,10 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
             triage = TriageResult.model_validate(triage_data)
             evidence = EvidenceOutput.model_validate(evidence_data)
             rag_out: RAGOutput | None = await rag_node(
-                ec, self.rag_agent, triage_result=triage, evidence_output=evidence
+                ec,
+                self.rag_agent,
+                triage_result=triage,
+                evidence_output=evidence,  # type: ignore[arg-type]
             )
             if rag_out is not None:
                 ec.rag_output = rag_out.model_dump(mode="json")

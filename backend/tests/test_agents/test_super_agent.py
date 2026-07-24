@@ -360,7 +360,7 @@ class TestSuperAgentGoldenPath:
         assert events[_EVENT_ID]["status"] == EventStatus.REPORTING
 
     async def test_investigate_via_base_agent_execute(self) -> None:
-        """``SuperAgent.execute(SuperAgentInput)`` returns None per spec."""
+        """``SuperAgent.execute(SuperAgentInput)`` returns AgentOutput."""
         events: dict[str, dict[str, object]] = {
             _EVENT_ID: {"status": EventStatus.NEW},
         }
@@ -369,7 +369,8 @@ class TestSuperAgentGoldenPath:
         input = SuperAgentInput(event_id=_EVENT_ID)
         result = await agent.execute(input)
 
-        assert result is None
+        assert result.agent_name == "super_agent"
+        assert result.success is True
         assert events[_EVENT_ID]["status"] == EventStatus.REPORTING
 
     async def test_graph_survives_rag_failure(self) -> None:

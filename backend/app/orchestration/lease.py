@@ -56,10 +56,9 @@ class EventLease:
     """
 
     def __init__(self, redis_client: RedisClient | None) -> None:
+        self._redis: Any = None
         if redis_client is not None:
             self._redis = redis_client.get_client()
-        else:
-            self._redis = None
         self._release_script: Any = None  # cached registered Lua script
 
     # ------------------------------------------------------------------ #
