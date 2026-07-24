@@ -30,7 +30,7 @@ from app.models.agent_io import (
     SuperAgentInput,
     TriageResult,
 )
-from app.models.enums import EventStatus, EventType, Severity
+from app.models.enums import DispositionPolicy, EventStatus, EventType, Severity
 from app.models.evidence import Evidence
 from app.models.report import InvestigationReport
 from app.orchestration.lease import generate_owner_id
@@ -123,9 +123,11 @@ class _MockEventService:
         event_id: str,
         target: EventStatus,
         *,
+        context: object | None = None,
         operator: str | None = None,
         reason: str | None = None,
     ) -> None:
+        del context, operator, reason
         entry = self.events.get(event_id)
         if entry is not None:
             entry["status"] = target
@@ -329,7 +331,7 @@ def _build_super_agent(
         triage_agent=_StubTriageAgent(triage or _make_triage()),
         evidence_agent=_StubEvidenceAgent(evidence or _make_evidence(event_id)),
         planner_agent=_StubPlannerAgent(plan or _make_plan(event_id)),  # type: ignore[arg-type]
-        rag_agent=rag if rag is not None else _StubRAGAgent(),
+        rag_agent=rag if rag is not None else _StubRAGAgent(),  # type: ignore[arg-type]
         risk_agent=_StubRiskAgent(risk or _make_risk(event_id)),
         report_agent=_StubReportAgent(report or _make_report(event_id)),
         lease=lease,  # type: ignore[arg-type]
@@ -400,7 +402,10 @@ class TestSuperAgentGoldenPath:
     async def test_graph_fast_close_when_no_investigation_needed(self) -> None:
         """When triage returns need_investigation=False, the graph fast-closes."""
         events: dict[str, dict[str, object]] = {
-            _EVENT_ID: {"status": EventStatus.NEW},
+            _EVENT_ID: {
+                "status": EventStatus.NEW,
+                "disposition_policy": DispositionPolicy.NOT_REQUIRED,
+            },
         }
         event_service = _MockEventService(events)
         triage = TriageResult(
@@ -517,16 +522,16 @@ class TestReactEnabled:
         await agent.investigate(_EVENT_ID)
         assert events[_EVENT_ID]["status"] == EventStatus.REPORTING
 
-    async def test_react_enabled_without_executor_does_not_block(self) -> None:
-        """REACT_ENABLED=true without an executor is a config warning, not crash."""
-        events: dict[str, dict[str, object]] = {
-            _EVENT_ID: {"status": EventStatus.NEW},
-        }
-        event_service = _MockEventService(events)
-        agent = _build_super_agent(react_enabled=True, event_service=event_service)
-        # react_executor is None but the graph should still complete.
-        await agent.investigate(_EVENT_ID)
-        assert events[_EVENT_ID]["status"] == EventStatus.REPORTING
+    async def test_react_enabled_without_executor_raises_at_startup(self) -> None:
+        """REACT_ENABLED=true without executor must fail closed at startup."""
+        from app.core.config import Settings
+        from app.core.errors import ConfigurationError
+        from app.orchestration.orchestration_config import assert_graph_orchestration_config
+
+        settings = Settings(REACT_ENABLED=True)
+        with pytest.raises(ConfigurationError) as exc:
+            assert_graph_orchestration_config(settings)
+        assert exc.value.error_code == "configuration_error"
 
 
 class TestOrchestrationModeGate:
@@ -561,6 +566,26 @@ class TestOrchestrationModeGate:
         )
         # Should not raise.
         assert_analysis_only_mode(settings)
+
+    async def test_graph_mode_ok_without_react(self) -> None:
+        """graph mode with REACT_ENABLED=false passes startup gate."""
+        from app.core.config import Settings
+        from app.orchestration.orchestration_config import assert_orchestration_mode
+
+        settings = Settings(
+            ORCHESTRATION_MODE="graph",
+            REACT_ENABLED=False,
+        )
+        assert_orchestration_mode(settings)
+
+    async def test_unsupported_orchestration_mode_raises(self) -> None:
+        from app.core.config import Settings
+        from app.core.errors import ConfigurationError
+        from app.orchestration.orchestration_config import assert_orchestration_mode
+
+        settings = Settings(ORCHESTRATION_MODE="celery")
+        with pytest.raises(ConfigurationError):
+            assert_orchestration_mode(settings)
 
 
 class TestEventLeaseInterface:

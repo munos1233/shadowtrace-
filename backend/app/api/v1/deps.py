@@ -34,6 +34,9 @@ _event_service: Any = None  # EventService
 _state_machine: Any = None  # StateMachineService
 _event_bus: Any = None  # EventBus
 _pipeline: Any = None  # AnalysisOnlyPipeline
+_super_agent: Any = None  # SuperAgent
+_event_lease: Any = None  # EventLease
+_investigation_stack: dict[str, Any] | None = None
 _approval_engine: Any = None  # ApprovalEngine
 
 
@@ -150,97 +153,182 @@ async def _get_wm() -> Any:
     )
 
 
+async def _build_investigation_agents() -> dict[str, Any]:
+    """Wire shared P0 agents and services for pipeline / SuperAgent."""
+    from app.agents.evidence_agent import EvidenceAgent
+    from app.agents.rag_agent import RAGAgent
+    from app.agents.report_agent import ReportAgent
+    from app.agents.risk_agent import RiskAgent
+    from app.agents.triage_agent import TriageAgent
+    from app.core.guardrails import OutputGuard
+    from app.core.llm.factory import get_llm_client
+    from app.services.agent_trace_service import AgentTraceService
+    from app.services.budget_service import BudgetService
+    from app.tools.executor import get_tool_executor
+
+    settings = get_settings()
+    event_service = await get_event_service()
+    state_machine = await get_state_machine()
+    wm = await _get_wm()
+    session_factory = _get_session_factory()
+    budget_service = BudgetService(redis=_get_redis(), settings=settings)
+    output_guard = OutputGuard()
+    trace_service = AgentTraceService(session_factory)
+    llm_client = get_llm_client(settings=settings, budget_service=budget_service)
+    tool_executor = get_tool_executor()
+    tool_executor.budget_service = budget_service
+
+    triage = TriageAgent(
+        llm_client=llm_client,
+        working_memory=wm.for_writer("TriageAgent"),
+        budget_service=budget_service,
+        output_guard=output_guard,
+        trace_service=trace_service,
+    )
+    evidence = EvidenceAgent(
+        llm_client=llm_client,
+        tool_executor=tool_executor,
+        working_memory=wm.for_writer("EvidenceAgent"),
+        budget_service=budget_service,
+        output_guard=output_guard,
+        trace_service=trace_service,
+        event_service=event_service,
+        session_factory=session_factory,
+    )
+    rag = RAGAgent(
+        working_memory=wm.for_writer("RAGAgent"),
+        pipeline=None,
+        budget_service=budget_service,
+        output_guard=output_guard,
+        trace_service=trace_service,
+    )
+    risk = RiskAgent(
+        llm_client=llm_client,
+        working_memory=wm.for_writer("RiskAgent"),
+        budget_service=budget_service,
+        output_guard=output_guard,
+        trace_service=trace_service,
+        event_service=event_service,
+        scenario_id="insider_data_exfiltration",
+    )
+    report = ReportAgent(
+        llm_client=llm_client,
+        working_memory=wm.for_writer("ReportAgent"),
+        budget_service=budget_service,
+        output_guard=output_guard,
+        trace_service=trace_service,
+        event_service=event_service,
+        event_bus=_get_event_bus(),
+        scenario_id="insider_data_exfiltration",
+    )
+
+    return {
+        "settings": settings,
+        "event_service": event_service,
+        "state_machine": state_machine,
+        "wm": wm,
+        "session_factory": session_factory,
+        "trace_service": trace_service,
+        "triage": triage,
+        "evidence": evidence,
+        "rag": rag,
+        "risk": risk,
+        "report": report,
+        "context_store": _get_context_store(),
+        "degraded_flags": _get_degraded_flags(),
+        "budget_service": budget_service,
+        "output_guard": output_guard,
+        "llm_client": llm_client,
+        "tool_executor": tool_executor,
+    }
+
+
+async def _get_investigation_stack() -> dict[str, Any]:
+    """Return shared agent wiring for pipeline and SuperAgent."""
+    global _investigation_stack
+    if _investigation_stack is None:
+        _investigation_stack = await _build_investigation_agents()
+    return _investigation_stack
+
+
 async def get_pipeline() -> Any:
     """Return AnalysisOnlyPipeline (lazy import)."""
     global _pipeline
     if _pipeline is None:
-        from app.agents.evidence_agent import EvidenceAgent
-        from app.agents.rag_agent import RAGAgent
-        from app.agents.report_agent import ReportAgent
-        from app.agents.risk_agent import RiskAgent
-        from app.agents.triage_agent import TriageAgent
-        from app.core.guardrails import OutputGuard
-        from app.core.llm.factory import get_llm_client
-        from app.services.agent_trace_service import AgentTraceService
         from app.services.analysis_only_pipeline import AnalysisOnlyPipeline
-        from app.services.budget_service import BudgetService
-        from app.tools.executor import get_tool_executor
 
-        settings = get_settings()
-        event_service = await get_event_service()
-        state_machine = await get_state_machine()
-        wm = await _get_wm()
-        session_factory = _get_session_factory()
-        budget_service = BudgetService(redis=_get_redis(), settings=settings)
-        output_guard = OutputGuard()
-        trace_service = AgentTraceService(session_factory)
-        llm_client = get_llm_client(settings=settings, budget_service=budget_service)
-        tool_executor = get_tool_executor()
-        tool_executor.budget_service = budget_service
-
-        triage = TriageAgent(
-            llm_client=llm_client,
-            working_memory=wm.for_writer("TriageAgent"),
-            budget_service=budget_service,
-            output_guard=output_guard,
-            trace_service=trace_service,
-        )
-        evidence = EvidenceAgent(
-            llm_client=llm_client,
-            tool_executor=tool_executor,
-            working_memory=wm.for_writer("EvidenceAgent"),
-            budget_service=budget_service,
-            output_guard=output_guard,
-            trace_service=trace_service,
-            event_service=event_service,
-            session_factory=session_factory,
-        )
-        rag = RAGAgent(
-            working_memory=wm.for_writer("RAGAgent"),
-            pipeline=None,
-            budget_service=budget_service,
-            output_guard=output_guard,
-            trace_service=trace_service,
-        )
-        risk = RiskAgent(
-            llm_client=llm_client,
-            working_memory=wm.for_writer("RiskAgent"),
-            budget_service=budget_service,
-            output_guard=output_guard,
-            trace_service=trace_service,
-            event_service=event_service,
-            scenario_id="insider_data_exfiltration",
-        )
-        report = ReportAgent(
-            llm_client=llm_client,
-            working_memory=wm.for_writer("ReportAgent"),
-            budget_service=budget_service,
-            output_guard=output_guard,
-            trace_service=trace_service,
-            event_service=event_service,
-            event_bus=_get_event_bus(),
-            scenario_id="insider_data_exfiltration",
-        )
-
+        stack = await _get_investigation_stack()
         _pipeline = AnalysisOnlyPipeline(
-            event_service=event_service,
-            state_machine=state_machine,
-            triage_agent=triage,
-            evidence_agent=evidence,
-            rag_agent=rag,
-            risk_agent=risk,
-            report_agent=report,
-            context_store=_get_context_store(),
-            degraded_flags=_get_degraded_flags(),
-            settings=settings,
+            event_service=stack["event_service"],
+            state_machine=stack["state_machine"],
+            triage_agent=stack["triage"],
+            evidence_agent=stack["evidence"],
+            rag_agent=stack["rag"],
+            risk_agent=stack["risk"],
+            report_agent=stack["report"],
+            context_store=stack["context_store"],
+            degraded_flags=stack["degraded_flags"],
+            settings=stack["settings"],
         )
     return _pipeline
+
+
+def get_event_lease() -> Any:
+    """Return the shared EventLease singleton (ISSUE-054)."""
+    global _event_lease
+    if _event_lease is None:
+        from app.orchestration.lease import EventLease
+
+        _event_lease = EventLease(_get_redis())
+    return _event_lease
+
+
+async def get_super_agent() -> Any:
+    """Return SuperAgent for graph-mode orchestration (ISSUE-054)."""
+    global _super_agent
+    if _super_agent is None:
+        from app.agents.planner_agent import PlannerAgent
+        from app.agents.super_agent import SuperAgent
+        from app.orchestration.convergence_guard import ConvergenceGuard
+
+        stack = await _get_investigation_stack()
+        settings = stack["settings"]
+        wm = stack["wm"]
+
+        planner = PlannerAgent(
+            llm_client=stack["llm_client"],
+            working_memory=wm.for_writer("PlannerAgent"),
+            budget_service=stack["budget_service"],
+            output_guard=stack["output_guard"],
+            trace_service=stack["trace_service"],
+        )
+        convergence_guard = ConvergenceGuard(
+            working_memory=wm.for_writer("ConvergenceGuard"),
+        )
+
+        _super_agent = SuperAgent(
+            triage_agent=stack["triage"],
+            evidence_agent=stack["evidence"],
+            planner_agent=planner,
+            rag_agent=stack["rag"],
+            risk_agent=stack["risk"],
+            report_agent=stack["report"],
+            event_service=stack["event_service"],
+            context_store=stack["context_store"],
+            lease=get_event_lease(),
+            convergence_guard=convergence_guard,
+            event_bus=_get_event_bus(),
+            trace_service=stack["trace_service"],
+            react_enabled=settings.react_enabled,
+        )
+    return _super_agent
 
 
 def reset_deps() -> None:
     """Reset all lazy singletons (for tests)."""
     global _session_factory, _redis_client, _context_store, _degraded_flags
     global _audit_log, _event_service, _state_machine, _event_bus, _pipeline, _approval_engine
+    global _super_agent, _event_lease, _investigation_stack
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -250,4 +338,7 @@ def reset_deps() -> None:
     _state_machine = None
     _event_bus = None
     _pipeline = None
+    _super_agent = None
+    _event_lease = None
+    _investigation_stack = None
     _approval_engine = None

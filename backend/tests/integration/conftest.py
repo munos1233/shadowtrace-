@@ -430,6 +430,133 @@ def build_analysis_pipeline(
 
 
 @pytest.fixture
+def build_super_agent(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_service: EventService,
+    context_store: EventContextStore,
+    degraded_flags: DegradedFlagService,
+    working_memory: WorkingMemory,
+    mock_llm_client: MockLLMClient,
+    budget_service: BudgetService,
+    output_guard: OutputGuard,
+    agent_trace_service: AgentTraceService,
+    e2e_settings: Settings,
+    e2e_tool_executor: Any,
+) -> Callable[..., tuple[Any, EvidenceProjection]]:
+    """Factory for ISSUE-054 graph-mode SuperAgent (no distributed lease in tests)."""
+    from app.agents.planner_agent import PlannerAgent
+    from app.agents.super_agent import SuperAgent
+    from app.orchestration.convergence_guard import ConvergenceGuard
+
+    def _build(
+        *,
+        llm_client: Any | None = None,
+        fail_tools: set[str] | None = None,
+        scenario_id: str | None = "insider_data_exfiltration",
+        evidence_mode: str = "sequential",
+    ) -> tuple[Any, EvidenceProjection]:
+        effective_llm = mock_llm_client if llm_client is None else llm_client
+        effective_executor = e2e_tool_executor
+        if fail_tools:
+            effective_executor = FlakyToolExecutor(e2e_tool_executor, fail_tools)
+
+        triage = TriageAgent(
+            llm_client=effective_llm,
+            working_memory=working_memory.for_writer("TriageAgent"),
+            budget_service=budget_service,
+            output_guard=output_guard,
+            trace_service=agent_trace_service,
+        )
+        evidence = EvidenceAgent(
+            llm_client=effective_llm,
+            tool_executor=effective_executor,
+            working_memory=working_memory.for_writer("EvidenceAgent"),
+            budget_service=budget_service,
+            output_guard=output_guard,
+            trace_service=agent_trace_service,
+            event_service=event_service,
+            session_factory=session_factory,
+            evidence_mode=evidence_mode,
+        )
+        planner = PlannerAgent(
+            llm_client=effective_llm,
+            working_memory=working_memory.for_writer("PlannerAgent"),
+            budget_service=budget_service,
+            output_guard=output_guard,
+            trace_service=agent_trace_service,
+        )
+        rag = RAGAgent(
+            working_memory=working_memory.for_writer("RAGAgent"),
+            pipeline=None,
+            budget_service=budget_service,
+            output_guard=output_guard,
+            trace_service=agent_trace_service,
+        )
+        risk = RiskAgent(
+            llm_client=effective_llm,
+            working_memory=working_memory.for_writer("RiskAgent"),
+            budget_service=budget_service,
+            output_guard=output_guard,
+            trace_service=agent_trace_service,
+            event_service=event_service,
+            scenario_id=scenario_id,
+        )
+        report = ReportAgent(
+            llm_client=effective_llm,
+            working_memory=working_memory.for_writer("ReportAgent"),
+            budget_service=budget_service,
+            output_guard=output_guard,
+            trace_service=agent_trace_service,
+            event_service=event_service,
+            scenario_id=scenario_id,
+        )
+        convergence_guard = ConvergenceGuard(
+            working_memory=working_memory.for_writer("ConvergenceGuard"),
+        )
+        agent = SuperAgent(
+            triage_agent=triage,
+            evidence_agent=evidence,
+            planner_agent=planner,
+            rag_agent=rag,
+            risk_agent=risk,
+            report_agent=report,
+            event_service=event_service,
+            context_store=context_store,
+            convergence_guard=convergence_guard,
+            trace_service=agent_trace_service,
+            react_enabled=False,
+        )
+        projection = EvidenceProjection(session_factory)
+        return agent, projection
+
+    return _build
+
+
+@pytest.fixture
+def run_graph_investigation(
+    build_super_agent: Callable[..., tuple[Any, EvidenceProjection]],
+) -> Callable[..., None]:
+    """Run SuperAgent graph orchestration with evidence projection bound."""
+
+    async def _run(
+        event_id: str,
+        *,
+        llm_client: Any | None = None,
+        fail_tools: set[str] | None = None,
+        scenario_id: str | None = "insider_data_exfiltration",
+    ) -> None:
+        agent, projection = build_super_agent(
+            llm_client=llm_client,
+            fail_tools=fail_tools,
+            scenario_id=scenario_id,
+        )
+        with bind_evidence_projection(projection):
+            await agent.investigate(event_id)
+
+    return _run
+
+
+@pytest.fixture
 def run_analysis_pipeline(
     build_analysis_pipeline: Callable[..., tuple[AnalysisOnlyPipeline, EvidenceProjection]],
 ) -> Callable[..., Any]:
