@@ -1,0 +1,16 @@
+{
+  "content": {
+    "calibrated_score": 0.88,
+    "verdict": "pass",
+    "reasons": [
+      "all required fields present",
+      "evidence references are well grounded",
+      "severity aligns with risk_score"
+    ],
+    "disagreement_note": ""
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 120,
+  "completion_tokens": 80,
+  "total_tokens": 200
+}
