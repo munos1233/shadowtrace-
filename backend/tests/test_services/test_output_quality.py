@@ -636,15 +636,8 @@ class TestQualityScoresWriteBack:
             "report": _high_quality_report(),
         }
         scores = await evaluator.evaluate_all(context)
+        assert len(scores) == 4
 
-        # Simulate what the orchestration layer does: persist scores
-        quality_scores_payload: dict[str, dict[str, Any]] = {}
-        for agent_name, score in scores.items():
-            quality_scores_payload[agent_name] = score.model_dump(mode="json")
-
-        await wm.write("evt-030", "quality_scores", quality_scores_payload)
-
-        # Verify
         stored = await wm.read("evt-030", "quality_scores")
         assert stored is not None
         assert set(stored.keys()) >= {"triage", "evidence", "risk", "report"}

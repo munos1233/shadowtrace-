@@ -97,8 +97,10 @@ class OutputQualityEvaluator:
     async def evaluate_all(self, event_context: dict[str, Any]) -> dict[str, OutputQualityScore]:
         """Evaluate all four target agent outputs from the event context.
 
-        Returns a dict mapping agent_name → OutputQualityScore.  The caller
-        should persist ``quality_scores`` in WorkingMemory.
+        Returns a dict mapping agent_name → OutputQualityScore.  When
+        ``working_memory`` was provided at construction time and ``event_id`` is
+        present in *event_context*, results are also persisted to
+        ``quality_scores``.
         """
         results: dict[str, OutputQualityScore] = {}
         for agent_name in _EVALUATED_AGENTS:
@@ -130,7 +132,31 @@ class OutputQualityEvaluator:
                     reasons=[f"eval_error_defaulted: {exc}"],
                     evaluated_by="rule",
                 )
+        await self._persist_quality_scores(event_context, results)
         return results
+
+    async def _persist_quality_scores(
+        self,
+        event_context: dict[str, Any],
+        results: dict[str, OutputQualityScore],
+    ) -> None:
+        """Write agent_name → score dict to WorkingMemory when bound (ISSUE-065 §4)."""
+        if self._bound_wm is None or not results:
+            return
+        event_id = event_context.get("event_id")
+        if not event_id:
+            return
+        payload = {
+            agent_name: score.model_dump(mode="json") for agent_name, score in results.items()
+        }
+        try:
+            await self._bound_wm.write(str(event_id), "quality_scores", payload)
+        except Exception:
+            logger.warning(
+                "Failed to persist quality_scores for event=%s",
+                event_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------ #
     # evaluate — single agent
