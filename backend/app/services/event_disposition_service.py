@@ -288,20 +288,21 @@ class EventDispositionService:
                     )
                 readiness = WritebackReadiness(action.writeback_readiness)
                 if readiness is not WritebackReadiness.READY:
-                    skipped = (
-                        "capability_blocked"
-                        if readiness
-                        in {
-                            WritebackReadiness.CAPABILITY_UNSUPPORTED,
-                            WritebackReadiness.CAPABILITY_UNKNOWN,
-                            WritebackReadiness.NOT_CONFIGURED,
-                        }
-                        else "effect_not_ready"
-                    )
+                    if readiness in {
+                        WritebackReadiness.CAPABILITY_UNSUPPORTED,
+                        WritebackReadiness.CAPABILITY_UNKNOWN,
+                        WritebackReadiness.NOT_CONFIGURED,
+                    }:
+                        return DispositionActivationResult(
+                            action_id=action.action_id,
+                            activated=False,
+                            skipped_reason="capability_blocked",
+                            derived_disposition=resolve.disposition,
+                        )
                     return DispositionActivationResult(
                         action_id=action.action_id,
                         activated=False,
-                        skipped_reason=skipped,
+                        skipped_reason="effect_not_ready",
                         derived_disposition=resolve.disposition,
                     )
 
@@ -509,7 +510,7 @@ async def _find_active_terminal_outbox(
     action_id: str,
     closure_cycle: int,
 ) -> orm.DispositionOutbox | None:
-    return await session.scalar(
+    outbox: orm.DispositionOutbox | None = await session.scalar(
         select(orm.DispositionOutbox)
         .where(
             orm.DispositionOutbox.action_id == action_id,
@@ -520,6 +521,7 @@ async def _find_active_terminal_outbox(
         )
         .limit(1)
     )
+    return outbox
 
 
 def ensure_terminal_idempotency_key(action: Action, *, plan_revision: int) -> str:

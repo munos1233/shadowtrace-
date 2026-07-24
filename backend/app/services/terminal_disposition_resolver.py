@@ -56,25 +56,26 @@ class TerminalDispositionResolver:
         if disposition_only:
             if final_verdict is not FinalVerdict.FALSE_POSITIVE:
                 return TerminalDispositionResolveResult(need_manual_resolution=True)
-            target = SourceDisposition.IGNORED
-            if target not in approved_set:
+            ignored = SourceDisposition.IGNORED
+            if ignored not in approved_set:
                 return TerminalDispositionResolveResult(
                     skipped_reason="terminal_not_in_approved_set",
                 )
-            return TerminalDispositionResolveResult(disposition=target)
+            return TerminalDispositionResolveResult(disposition=ignored)
 
+        resolved: SourceDisposition | None
         if final_verdict is FinalVerdict.FALSE_POSITIVE:
-            target = SourceDisposition.IGNORED
+            resolved = SourceDisposition.IGNORED
         elif final_verdict is FinalVerdict.CONFIRMED_THREAT:
-            target = self._threat_terminal(verification=verification, approved_set=approved_set)
-            if target is None:
+            resolved = self._threat_terminal(verification=verification, approved_set=approved_set)
+            if resolved is None:
                 return TerminalDispositionResolveResult(need_manual_resolution=True)
         else:
             return TerminalDispositionResolveResult(need_manual_resolution=True)
 
-        if target not in approved_set:
+        if resolved not in approved_set:
             return TerminalDispositionResolveResult(skipped_reason="terminal_not_in_approved_set")
-        return TerminalDispositionResolveResult(disposition=target)
+        return TerminalDispositionResolveResult(disposition=resolved)
 
     @staticmethod
     def _threat_terminal(
