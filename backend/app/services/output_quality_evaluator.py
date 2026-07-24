@@ -156,8 +156,7 @@ def _consistency(output: dict[str, Any], agent_name: str) -> float:
             entities = output.get("entities", {})
             iocs = output.get("ioc_list", [])
             has_entity = any(
-                len(v) > 0
-                for v in (entities.values() if isinstance(entities, dict) else [])
+                len(v) > 0 for v in (entities.values() if isinstance(entities, dict) else [])
             )
             has_ioc = _safe_len(iocs) > 0
             return 1.0 if (has_entity or has_ioc) else 0.3
@@ -339,9 +338,7 @@ class OutputQualityEvaluator:
         for agent_name in EVALUATED_AGENTS:
             output_key = AGENT_OUTPUT_KEYS.get(agent_name)
             if output_key is None:
-                logger.debug(
-                    "No output key mapping for agent=%s, skipping", agent_name
-                )
+                logger.debug("No output key mapping for agent=%s, skipping", agent_name)
                 continue
             output = outputs.get(output_key)
             if output is None:
