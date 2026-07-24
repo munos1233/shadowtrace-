@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1 import schemas as s
+from app.api.v1.deps import get_approval_engine, get_event_service, get_state_machine
 from app.core.config import get_settings
+from app.core.errors import EventNotFoundError
 from app.main import app
+from app.models.enums import DispositionPolicy, EventStatus, FinalVerdict
 
 _DEV_TOKENS = json.dumps(
     {
@@ -31,7 +36,59 @@ def _dev_auth(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def client() -> TestClient:
-    from app.api.v1.deps import get_approval_engine
+    class _MockEventService:
+        @staticmethod
+        def _example_event() -> Any:
+            evt = s.example_security_event(s.EXAMPLE_EVENT_ID)
+            evt.disposition_policy = DispositionPolicy.NOT_REQUIRED
+            return evt
+
+        async def get_event(self, event_id: str) -> Any:
+            if event_id == s.EXAMPLE_EVENT_ID:
+                return self._example_event()
+            return None
+
+        async def list_events(self, **kwargs: Any) -> Any:
+            @dataclass
+            class _Result:
+                items: list[Any]
+                total: int
+                page: int
+                page_size: int
+
+            return _Result(items=[], total=0, page=1, page_size=20)
+
+        async def close_event(self, event_id: str, **kwargs: Any) -> Any:
+            if event_id != s.EXAMPLE_EVENT_ID:
+                raise EventNotFoundError(
+                    "event not found",
+                    details={"event_id": event_id},
+                )
+            evt = self._example_event()
+            evt.status = EventStatus.CLOSED
+            evt.external_unsynced = bool(kwargs.get("force_local_close"))
+            return evt
+
+        async def set_final_verdict(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def transition_status(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    class _MockStateMachine:
+        async def transition(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def force_close(
+            self,
+            event_id: str,
+            *,
+            principal: str,
+            reason: str,
+        ) -> Any:
+            from types import SimpleNamespace
+
+            return SimpleNamespace(final_verdict=FinalVerdict.NONE)
 
     class _StubApprovalEngine:
         async def approve(self, *args: object, **kwargs: object) -> None:
@@ -43,12 +100,22 @@ def client() -> TestClient:
         async def scan_timeouts(self) -> list[str]:
             return []
 
+    async def _mock_event_service() -> _MockEventService:
+        return _MockEventService()
+
+    async def _mock_state_machine() -> _MockStateMachine:
+        return _MockStateMachine()
+
     async def _stub_engine() -> _StubApprovalEngine:
         return _StubApprovalEngine()
 
     app.dependency_overrides[get_approval_engine] = _stub_engine
+    app.dependency_overrides[get_event_service] = _mock_event_service
+    app.dependency_overrides[get_state_machine] = _mock_state_machine
     yield TestClient(app)
     app.dependency_overrides.pop(get_approval_engine, None)
+    app.dependency_overrides.pop(get_event_service, None)
+    app.dependency_overrides.pop(get_state_machine, None)
 
 
 def _hdr(role: str) -> dict[str, str]:
