@@ -122,8 +122,7 @@ class EventLease:
         decoded = current.decode("utf-8") if isinstance(current, bytes) else current
         if decoded != owner_id:
             logger.warning(
-                "EventLease.renew: owner mismatch for event=%s "
-                "(expected=%s, actual=%s)",
+                "EventLease.renew: owner mismatch for event=%s (expected=%s, actual=%s)",
                 event_id,
                 owner_id,
                 decoded,

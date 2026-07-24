@@ -493,8 +493,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
         # When triage determines no investigation is needed, skip all plan steps.
         if state.get("_investigation_skipped"):
             logger.info(
-                "SuperAgent: investigation skipped for event=%s "
-                "(need_investigation=false)",
+                "SuperAgent: investigation skipped for event=%s (need_investigation=false)",
                 event_id,
             )
             state["event_context"] = ec
@@ -591,9 +590,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
     # Plan-step dispatch
     # ------------------------------------------------------------------ #
 
-    async def _execute_single_step(
-        self, ec: EventContext, step: PlanStep
-    ) -> None:
+    async def _execute_single_step(self, ec: EventContext, step: PlanStep) -> None:
         """Dispatch a single PlanStep to the assigned agent.
 
         ConvergenceGuard integration (ISSUE-052): each agent step records a
@@ -635,9 +632,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
 
         await self._check_convergence_stop(event_id, agent_name)
 
-    async def _run_evidence_step(
-        self, ec: EventContext, step: PlanStep
-    ) -> None:
+    async def _run_evidence_step(self, ec: EventContext, step: PlanStep) -> None:
         event_id = _event_id_from_context(ec)
         # Transition to COLLECTING_EVIDENCE only once (first evidence step in plan).
         current_status = _current_status_from_context(ec)
@@ -730,16 +725,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
                 collection_status="degraded",  # type: ignore[arg-type]
             )
         )
-        rag = (
-            RAGOutput.model_validate(rag_data)
-            if rag_data is not None
-            else None
-        )
-        graph = (
-            GraphOutput.model_validate(graph_data)
-            if graph_data is not None
-            else None
-        )
+        rag = RAGOutput.model_validate(rag_data) if rag_data is not None else None
+        graph = GraphOutput.model_validate(graph_data) if graph_data is not None else None
 
         risk_input = RiskAgentInput(
             event_id=event_id,
@@ -753,9 +740,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
             raise TypeError("RiskAgent must return RiskAssessment")
         ec.risk_assessment = risk_assessment.model_dump(mode="json")
 
-    async def _run_graph_step(
-        self, ec: EventContext, step: PlanStep
-    ) -> None:
+    async def _run_graph_step(self, ec: EventContext, step: PlanStep) -> None:
         """Optional GraphAgent step (P1 capability switch)."""
         if self.graph_agent is None:
             return
@@ -803,9 +788,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
             return  # already generated (by post-hook or prior plan step)
         event_id = _event_id_from_context(ec)
         try:
-            storyline = await self.storyline_service.generate(
-                ec.model_dump(mode="json")
-            )
+            storyline = await self.storyline_service.generate(ec.model_dump(mode="json"))
             if storyline is not None:
                 # Persist to in-memory EventContext so downstream consumers
                 # (persist, frontend polling) see the latest storyline.
@@ -821,9 +804,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
                 exc_info=True,
             )
 
-    async def _run_react_step(
-        self, ec: EventContext, step: PlanStep
-    ) -> None:
+    async def _run_react_step(self, ec: EventContext, step: PlanStep) -> None:
         """Optional ReAct iteration step (P1 capability switch, ISSUE-053).
 
         Only active when ``react_enabled`` is ``True`` AND a
@@ -910,9 +891,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
                     "oscillation": "guardrail_failed",
                     "duplicate_tool_calls": "guardrail_failed",
                 }
-                error_code = _REASON_ERROR_CODE.get(
-                    decision.reason.value, "budget_exceeded"
-                )
+                error_code = _REASON_ERROR_CODE.get(decision.reason.value, "budget_exceeded")
 
                 raise ShadowTraceError(
                     message=f"ConvergenceGuard stop: {decision.reason.value}",
@@ -958,11 +937,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, None]):
             )
             # Refresh the in-memory status so subsequent _current_status_from_context
             # checks see the latest state.
-            if (
-                self.event_service is not None
-                and ec is not None
-                and ec.event is not None
-            ):
+            if self.event_service is not None and ec is not None and ec.event is not None:
                 try:
                     event = await self.event_service.get_event(event_id)
                     if event is not None and hasattr(event, "status"):
