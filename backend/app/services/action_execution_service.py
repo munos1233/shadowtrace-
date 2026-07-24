@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,6 +23,7 @@ from app.models.enums import (
     EventStatus,
     ExecutionJobStatus,
     ExecutionOwner,
+    ExecutionSubstate,
     WritebackReadiness,
     WritebackStatus,
 )
@@ -161,6 +163,7 @@ class ActionExecutionService:
         context_store: EventContextStore,
         command_factory: DispositionCommandFactory | None = None,
         event_bus: EventBus | None = None,
+        workflow_runtime: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._sync = disposition_sync
@@ -169,6 +172,7 @@ class ActionExecutionService:
         self._context_store = context_store
         self._factory = command_factory or DispositionCommandFactory()
         self._bus = event_bus
+        self._workflow_runtime = workflow_runtime
         self._job_store = DbExecutionJobStore(session_factory)
         if self._executor.job_store is None:
             self._executor.job_store = self._job_store
@@ -209,7 +213,14 @@ class ActionExecutionService:
             return await self._build_summary(event_id, revision)
 
         for action in immediate:
-            await self.execute_action(action.action_id, operator=operator)
+            try:
+                await self.execute_action(action.action_id, operator=operator)
+            except Exception:
+                logger.exception(
+                    "execute_plan action failed event=%s action=%s",
+                    event_id,
+                    action.action_id,
+                )
         await self._sync.process_ready_outboxes(limit=len(immediate) + 1)
         return await self._build_summary(event_id, revision)
 
@@ -217,15 +228,25 @@ class ActionExecutionService:
         self, action_id: str, *, operator: str = _EXECUTION_OPERATOR
     ) -> Action:
         claimed = await self._claim_action(action_id)
-        if claimed.execution_owner is ExecutionOwner.XDR_MANAGED:
-            await self._execute_xdr_managed(claimed, operator=operator)
-        elif claimed.execution_owner is ExecutionOwner.DIRECT_TOOL:
-            await self._execute_direct_tool(claimed, operator=operator)
-        else:
-            raise ValidationError(
-                "action missing execution_owner",
-                details={"action_id": action_id},
-            )
+        await self._sync_execution_substate(
+            claimed.event_id,
+            ExecutionSubstate.WAITING_EXECUTION,
+        )
+        try:
+            if claimed.execution_owner is ExecutionOwner.XDR_MANAGED:
+                await self._execute_xdr_managed(claimed, operator=operator)
+            elif claimed.execution_owner is ExecutionOwner.DIRECT_TOOL:
+                await self._execute_direct_tool(claimed, operator=operator)
+            else:
+                raise ValidationError(
+                    "action missing execution_owner",
+                    details={"action_id": action_id},
+                )
+        except Exception:
+            await self._fail_executing_action(action_id)
+            raise
+        finally:
+            await self._sync_execution_substate(claimed.event_id, ExecutionSubstate.NONE)
         async with self._session_factory() as session:
             row = await session.get(orm.Action, action_id)
             assert row is not None
@@ -565,6 +586,42 @@ class ActionExecutionService:
         async with self._session_factory() as session:
             row = await session.get(orm.SourceObject, source_record_id)
         return row.current_concurrency_token if row is not None else None
+
+    async def _sync_execution_substate(
+        self,
+        event_id: str,
+        substate: ExecutionSubstate,
+    ) -> None:
+        if self._workflow_runtime is None:
+            return
+        async with self._session_factory() as session:
+            row = await session.get(orm.SecurityEvent, event_id)
+            if row is None:
+                return
+            event_status = EventStatus(row.status)
+        await self._workflow_runtime.set_execution_substate(
+            event_id,
+            substate,
+            event_status=event_status,
+        )
+
+    async def _fail_executing_action(self, action_id: str) -> None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(orm.Action, action_id, with_for_update=True)
+                if row is None:
+                    return
+                current = ActionStatus(row.status)
+                if current is not ActionStatus.EXECUTING:
+                    return
+                validate_action_status_transition(
+                    ActionCategory(row.action_category),
+                    current,
+                    ActionStatus.FAILED,
+                )
+                row.status = ActionStatus.FAILED.value
+                row.executed_at = datetime.now(UTC)
+                row.updated_at = datetime.now(UTC)
 
     async def _build_summary(self, event_id: str, plan_revision: int) -> ExecutionSummary:
         async with self._session_factory() as session:

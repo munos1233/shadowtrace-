@@ -306,9 +306,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             failures = self._transition_failures.pop(event_id, [])
             if failures:
                 raise ShadowTraceError(
-                    message=(
-                        f"SuperAgent state transitions failed for event={event_id}"
-                    ),
+                    message=(f"SuperAgent state transitions failed for event={event_id}"),
                     error_code="internal_error",
                     details={"failures": failures},
                 )

@@ -470,7 +470,13 @@ class DispositionSyncService:
         sequence = int(seq_row or 0) + 1
         if receipt is not None:
             parsed = receipt.model_copy(
-                update={"sequence": sequence, "writeback_id": outbox.writeback_id}
+                update={
+                    "sequence": sequence,
+                    "writeback_id": outbox.writeback_id,
+                    "disposition_id": outbox.disposition_id,
+                    "action_id": outbox.action_id,
+                    "source_record_id": outbox.source_record_id,
+                }
             )
         else:
             assert status is not None
@@ -575,6 +581,30 @@ class DispositionSyncService:
         if summary_payload is not None:
             await self._context_store.set(event_id, "writeback_summary", summary_payload)
 
+    async def _mark_delivery_waiting_retry(self, outbox_id: str) -> None:
+        """Release a leased outbox back to the retry queue after a failed delivery attempt."""
+        async with self._session_factory() as session:
+            async with session.begin():
+                outbox = await session.scalar(
+                    select(orm.DispositionOutbox)
+                    .where(orm.DispositionOutbox.outbox_id == outbox_id)
+                    .with_for_update()
+                )
+                if outbox is None:
+                    return
+                current = OutboxDeliveryStatus(outbox.delivery_status)
+                if current is not OutboxDeliveryStatus.LEASED:
+                    return
+                validate_outbox_delivery_transition(
+                    current,
+                    OutboxDeliveryStatus.WAITING_RETRY,
+                )
+                outbox.delivery_status = OutboxDeliveryStatus.WAITING_RETRY.value
+                outbox.locked_by = None
+                outbox.locked_at = None
+                outbox.lease_expires_at = None
+                outbox.updated_at = datetime.now(UTC)
+
     async def _maybe_resume(self, event_id: str) -> None:
         async with self._session_factory() as session:
             substate_raw = await session.scalar(
@@ -606,8 +636,10 @@ class OutboxWorker:
                 await self._service._deliver_outbox(outbox_id)
             except GuardrailViolationError:
                 logger.warning("outbox delivery blocked by guard outbox=%s", outbox_id)
+                await self._service._mark_delivery_waiting_retry(outbox_id)
             except Exception:
                 logger.exception("outbox delivery failed outbox=%s", outbox_id)
+                await self._service._mark_delivery_waiting_retry(outbox_id)
         return len(claimed)
 
     async def _claim_batch(self, *, limit: int) -> list[str]:

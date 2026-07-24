@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1 import schemas as s
-from app.api.v1.deps import get_approval_engine, get_event_service, get_state_machine
+from app.api.v1.deps import get_approval_engine
 from app.core.config import get_settings
-from app.core.errors import EventNotFoundError
 from app.main import app
-from app.models.enums import DispositionPolicy, EventStatus, FinalVerdict
 
 _DEV_TOKENS = json.dumps(
     {

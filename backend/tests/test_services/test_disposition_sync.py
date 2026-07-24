@@ -702,10 +702,7 @@ async def test_expired_lease_outbox_reclaimed(
     async with session_factory() as session:
         row = await session.get(orm.DispositionOutbox, outbox_id)
         assert row is not None
-        assert row.delivery_status in {
-            OutboxDeliveryStatus.DELIVERED.value,
-            OutboxDeliveryStatus.LEASED.value,
-        }
+        assert row.delivery_status == OutboxDeliveryStatus.DELIVERED.value
 
 
 def factory_build_min_command(

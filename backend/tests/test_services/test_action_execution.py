@@ -650,3 +650,59 @@ async def test_concurrent_claim_single_winner(
     failures = [r for r in results if isinstance(r, BaseException)]
     assert len(successes) == 1
     assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_partial_failure_others_succeed(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+    execution_service: ActionExecutionService,
+    cleanup: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oid = SCENARIO_INCIDENT_ID
+    await _seed_connector_and_source(
+        session_factory, object_id=oid, mock_xdr_client=mock_xdr_client
+    )
+    event_id = await _create_event(session_factory, store, object_id=oid)
+    action_ok = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+            disposition_source_ref=_locator(object_id=oid),
+        ),
+    )
+    action_fail = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+            disposition_source_ref=_locator(object_id=oid),
+        ),
+    )
+    original = execution_service._execute_xdr_managed
+    calls: list[str] = []
+
+    async def _flaky_execute(action: Action, *, operator: str) -> None:
+        calls.append(action.action_id)
+        if action.action_id == action_fail.action_id:
+            raise ValidationError(
+                "injected execution failure",
+                details={"action_id": action.action_id},
+            )
+        await original(action, operator=operator)
+
+    monkeypatch.setattr(execution_service, "_execute_xdr_managed", _flaky_execute)
+    summary = await execution_service.execute_plan(event_id)
+    assert len(calls) == 2
+    assert summary.action_counts.get(ActionStatus.FAILED.value, 0) == 1
+    assert summary.action_counts.get(ActionStatus.SUCCESS.value, 0) == 1
+    async with session_factory() as session:
+        ok_row = await session.get(orm.Action, action_ok.action_id)
+        fail_row = await session.get(orm.Action, action_fail.action_id)
+        assert ok_row is not None and ok_row.status == ActionStatus.SUCCESS.value
+        assert fail_row is not None and fail_row.status == ActionStatus.FAILED.value

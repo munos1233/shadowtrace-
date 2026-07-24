@@ -41,6 +41,7 @@ _approval_engine: Any = None  # ApprovalEngine
 _disposition_sync: Any = None  # DispositionSyncService
 _action_execution: Any = None  # ActionExecutionService
 _adapter_registry: Any = None  # DispositionAdapterRegistry
+_workflow_runtime: Any = None  # WorkflowRuntimeService
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -164,6 +165,31 @@ def _get_adapter_registry() -> Any:
     return _adapter_registry
 
 
+async def _get_workflow_runtime() -> Any:
+    global _workflow_runtime
+    if _workflow_runtime is None:
+        from app.orchestration.workflow_runtime import WorkflowRuntimeService
+
+        _workflow_runtime = WorkflowRuntimeService(
+            _get_session_factory(),
+            event_service=await get_event_service(),
+        )
+    return _workflow_runtime
+
+
+async def _resume_investigation(event_id: str) -> None:
+    """Resume graph orchestration after terminal writeback (ISSUE-059 P0 hook)."""
+    settings = get_settings()
+    mode = (settings.orchestration_mode or "graph").strip().lower()
+    if mode != "graph":
+        return
+    try:
+        agent = await get_super_agent()
+        await agent.investigate(event_id)
+    except Exception:
+        logger.exception("resume_investigation failed event=%s", event_id)
+
+
 async def get_disposition_sync() -> Any:
     global _disposition_sync
     if _disposition_sync is None:
@@ -176,6 +202,7 @@ async def get_disposition_sync() -> Any:
             adapter_registry=_get_adapter_registry(),
             outbound_guard=OutboundDispositionGuard(),
             event_bus=_get_event_bus(),
+            resume_investigation=_resume_investigation,
         )
     return _disposition_sync
 
@@ -193,6 +220,7 @@ async def get_action_execution() -> Any:
             state_machine=stack["state_machine"],
             context_store=_get_context_store(),
             event_bus=_get_event_bus(),
+            workflow_runtime=await _get_workflow_runtime(),
         )
     return _action_execution
 
@@ -388,7 +416,7 @@ def reset_deps() -> None:
     global _session_factory, _redis_client, _context_store, _degraded_flags
     global _audit_log, _event_service, _state_machine, _event_bus, _pipeline, _approval_engine
     global _super_agent, _event_lease, _investigation_stack
-    global _disposition_sync, _action_execution, _adapter_registry
+    global _disposition_sync, _action_execution, _adapter_registry, _workflow_runtime
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -405,3 +433,4 @@ def reset_deps() -> None:
     _disposition_sync = None
     _action_execution = None
     _adapter_registry = None
+    _workflow_runtime = None

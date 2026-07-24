@@ -29,7 +29,11 @@ async def fetch_mock_concurrency_token(
     )
     response.raise_for_status()
     body = response.json()
-    token = body.get("concurrency_token")
+    mock_meta = body.get("_mock")
+    if isinstance(mock_meta, dict):
+        token = mock_meta.get("concurrency_token")
+    else:
+        token = body.get("concurrency_token")
     if not isinstance(token, str) or not token:
         raise AssertionError(f"mock object {object_id} missing concurrency_token")
     return token
