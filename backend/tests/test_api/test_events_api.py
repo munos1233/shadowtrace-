@@ -1366,3 +1366,74 @@ async def test_analysis_only_complete_persisted_in_context(
     assert stored_value is True, (
         f"Expected analysis_only_complete=True in context, got {stored_value!r}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-054 Should-Fix #3: API-layer analysis_only + live side effects gate
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_api_investigate_rejects_analysis_only_with_live_side_effects(
+    client: TestClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /events/{id}/investigate must return 500 when
+    ORCHESTRATION_MODE=analysis_only + ALLOW_LIVE_SIDE_EFFECTS=true.
+
+    This is the API-layer gate that prevents the analysis_only pipeline from
+    producing real XDR side effects when misconfigured.  The SuperAgent-level
+    gate is a separate defense-in-depth check.
+    """
+    # Force analysis_only mode with live side effects enabled.
+    monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
+    monkeypatch.setenv("ALLOW_LIVE_SIDE_EFFECTS", "true")
+    monkeypatch.setenv("ALLOW_XDR_WRITEBACK", "false")
+    reset_deps()
+
+    event_id = await _create_test_event(event_service)
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 500, (
+        f"Expected 500, got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert body["error_code"] == "configuration_error", (
+        f"Expected configuration_error, got {body}"
+    )
+    assert "live side effects" in body["message"].lower(), (
+        f"Message must mention live side effects, got: {body['message']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_api_investigate_rejects_analysis_only_with_xdr_writeback(
+    client: TestClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /events/{id}/investigate must return 500 when
+    ORCHESTRATION_MODE=analysis_only + ALLOW_XDR_WRITEBACK=true."""
+    monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
+    monkeypatch.setenv("ALLOW_LIVE_SIDE_EFFECTS", "false")
+    monkeypatch.setenv("ALLOW_XDR_WRITEBACK", "true")
+    reset_deps()
+
+    event_id = await _create_test_event(event_service)
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 500, (
+        f"Expected 500, got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert body["error_code"] == "configuration_error"
+    assert "xdr writeback" in body["message"].lower(), (
+        f"Message must mention XDR writeback, got: {body['message']}"
+    )

@@ -130,6 +130,17 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         # investigation as escalated so callers can detect split-brain risk.
         self._lease_lost: bool = False
 
+        # asyncio.Event set by _renew_loop when the lease is irrecoverably lost.
+        # investigate() races this event against the graph task so that lease
+        # loss can cancel the graph rather than letting it run to completion in
+        # a split-brain window (ISSUE-054 Should-Fix #2).
+        #
+        # NOTE: This is a best-effort cooperative signal.  An in-flight LLM call
+        # or long-running node cannot be interrupted mid-execution, so there is
+        # still a window where two workers may overlap.  Full cancellation
+        # requires ISSUE-056 (Celery worker recovery / hard preemption).
+        self._lease_lost_event: asyncio.Event = asyncio.Event()
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
@@ -186,6 +197,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         The spec will be updated to reflect this change.
         """
         self._status = SuperAgentStatus.IDLE
+        self._lease_lost = False  # Reset between investigations (ISSUE-054 Blocker #1)
+        self._lease_lost_event.clear()  # Reset lease-lost signal (ISSUE-054 Should-Fix #2)
 
         # ── Gate: analysis_only mode rejects graph orchestration ──
         if self._settings.orchestration_mode == "analysis_only":
@@ -243,12 +256,59 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
                 self._renew_loop(event_id, lease), name=f"lease-renew-{event_id}"
             )
 
-            # ── 6. Invoke graph ──────────────────────────────────
+            # ── 6. Invoke graph (race against lease loss) ──────────
             self._status = SuperAgentStatus.EXECUTING
             from app.orchestration.workflow_graph import invoke_investigation_graph
 
             config = {"configurable": {"thread_id": event_id}}
-            final_state = await invoke_investigation_graph(graph, initial_state, config)
+            graph_task = asyncio.create_task(
+                invoke_investigation_graph(graph, initial_state, config),
+                name=f"graph-{event_id}",
+            )
+            lease_watch_task = asyncio.create_task(
+                self._lease_lost_event.wait(),
+                name=f"lease-watch-{event_id}",
+            )
+
+            done, pending = await asyncio.wait(
+                [graph_task, lease_watch_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # ── Lease lost before graph completed → cancel graph ──
+            if lease_watch_task in done:
+                graph_task.cancel()
+                # Cancel lease_watch_task if it's still pending (it shouldn't be
+                # since it's in `done`, but be defensive).
+                if not lease_watch_task.done():
+                    lease_watch_task.cancel()
+                try:
+                    await graph_task
+                except asyncio.CancelledError:
+                    logger.warning(
+                        "Graph task cancelled for event=%s after lease loss — "
+                        "split-brain window was open (ISSUE-056)",
+                        event_id,
+                    )
+                raise ShadowTraceError(
+                    f"Investigation aborted for event {event_id}: "
+                    "distributed lease was lost after consecutive renewal failures",
+                    error_code="lease_lost",
+                    details={
+                        "event_id": event_id,
+                        "escalated": True,
+                        "external_unsynced": True,
+                    },
+                )
+
+            # Graph completed; clean up the lease watch task.
+            lease_watch_task.cancel()
+            try:
+                await lease_watch_task
+            except asyncio.CancelledError:
+                pass
+
+            final_state = graph_task.result()
 
             # ── 7. Build result ──────────────────────────────────
             self._status = SuperAgentStatus.FINISHED
@@ -331,20 +391,12 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
                 except asyncio.CancelledError:
                     pass
             # ── Refresh source snapshot (ISSUE-054 §4) ────────────
-            try:
-                await self._event_service.refresh_snapshot(event_id)
-            except AttributeError:
-                # TODO(ISSUE-029): refresh_snapshot API not yet implemented.
-                logger.debug(
-                    "source_snapshot refresh skipped for event=%s — "
-                    "refresh_snapshot not available (pending ISSUE-029)",
-                    event_id,
-                )
-            except Exception:
-                logger.exception(
-                    "source_snapshot refresh failed for event=%s",
-                    event_id,
-                )
+            await self._try_snapshot_op(
+                event_id,
+                "refresh_snapshot",
+                self._event_service.refresh_snapshot,
+                level=logging.DEBUG,
+            )
             await lease.release(event_id)
             logger.debug("SuperAgent cleanup complete event=%s", event_id)
 
@@ -361,6 +413,47 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
+
+    async def _try_snapshot_op(
+        self,
+        event_id: str,
+        op_name: str,
+        op: Any,
+        *,
+        level: int = logging.WARNING,
+    ) -> Any:
+        """Shared helper for ISSUE-029 snapshot operations.
+
+        Both ``refresh_snapshot`` and ``freeze_source_snapshot`` follow the
+        same pattern: call the method, swallow ``AttributeError`` only when
+        the method itself is absent (ISSUE-029 not yet landed), propagate all
+        other exceptions.  This helper eliminates the duplicated try/except
+        blocks (ISSUE-054 Nit #3).
+
+        Returns the result of ``op(event_id)`` on success, or ``None`` when
+        the method is absent or the call raises.
+        """
+        try:
+            return await op(event_id)
+        except AttributeError as exc:
+            if op_name not in str(exc):
+                raise
+            logger.log(
+                level,
+                "source_snapshot %s skipped for event=%s — "
+                "%s not available (pending ISSUE-029)",
+                op_name,
+                event_id,
+                op_name,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "source_snapshot %s failed for event=%s",
+                op_name,
+                event_id,
+            )
+            return None
 
     async def _get_lease(self) -> EventLease:
         """Return or lazily create the EventLease from Redis."""
@@ -397,11 +490,15 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         from app.orchestration.workflow_graph import build_investigation_graph
 
         agents: dict[str, Any] = {
+            # ── P0 agents (ISSUE-054) ────────────────────────────
             "triage_agent": self._triage_agent,
             "planner_agent": self._planner_agent,
             "evidence_agent": self._evidence_agent,
             "risk_agent": self._risk_agent,
             "report_agent": self._report_agent,
+            # ── Future agents (out of scope for ISSUE-054) ───────
+            # GraphAgent, ResponseAgent, VerifyAgent, MemoryAgent
+            # will be wired in when their respective issues land.
         }
         if self._rag_agent is not None:
             agents["rag_agent"] = self._rag_agent
@@ -440,6 +537,30 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
                 reason="super_agent:investigation_start",
             )
 
+        # Re-read the event to get the authoritative post-transition status.
+        # The state machine may have been bypassed (e.g. ISSUE-056 worker
+        # recovery, concurrent transition), so hardcoding TRIAGING is unsafe.
+        # Use the actual DB status — fail early if the event is not in a valid
+        # graph-entry state.
+        event = await self._event_service.get_event(event_id)
+        if event is None:
+            raise ShadowTraceError(
+                f"event {event_id} disappeared after status transition",
+                error_code="event_not_found",
+                details={"event_id": event_id},
+            )
+        actual_status = event.status
+        if actual_status not in (EventStatus.NEW, EventStatus.TRIAGING):
+            raise ShadowTraceError(
+                f"Event {event_id} is in {actual_status.value} — "
+                f"graph investigation requires NEW or TRIAGING",
+                error_code="invalid_state_transition",
+                details={
+                    "event_id": event_id,
+                    "actual_status": actual_status.value,
+                },
+            )
+
         readiness = WritebackReadiness.NOT_REQUIRED
         try:
             readiness = await self._workflow_runtime.get_event_status_update_readiness(event_id)
@@ -476,7 +597,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
 
         state: InvestigationState = {
             "event_id": event_id,
-            "event_status": EventStatus.TRIAGING.value,
+            "event_status": actual_status.value,
             "disposition_policy": _to_policy_str(getattr(event, "disposition_policy", None)),
             "severity": _to_severity_str(getattr(event, "severity", None)),
             "final_verdict": None,
@@ -509,25 +630,13 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         # ── Freeze source snapshot for this investigation ──────────
         # ISSUE-054 §4 requires the source_snapshot to be frozen before graph
         # execution so all downstream agents see a consistent event image.
-        try:
-            frozen = await self._event_service.freeze_source_snapshot(event_id)
-            if frozen is not None:
-                state["source_snapshot"] = frozen
-        except AttributeError:
-            # TODO(ISSUE-029): freeze_source_snapshot API not yet implemented.
-            # Once ISSUE-029 lands, remove this except clause — the snapshot
-            # MUST be frozen for data consistency.
-            logger.warning(
-                "source_snapshot freeze skipped for event=%s — "
-                "freeze_source_snapshot not available (pending ISSUE-029)",
-                event_id,
-            )
-        except Exception:
-            logger.exception(
-                "source_snapshot freeze failed for event=%s — "
-                "continuing with None snapshot",
-                event_id,
-            )
+        frozen = await self._try_snapshot_op(
+            event_id,
+            "freeze_source_snapshot",
+            self._event_service.freeze_source_snapshot,
+        )
+        if frozen is not None:
+            state["source_snapshot"] = frozen
 
         return state
 
@@ -671,7 +780,15 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
                     # surfaces the degraded state to callers.  The lease release
                     # in finally will be a no-op (owner won't match), which is
                     # safe.
+                    #
+                    # P1 ISSUE-056 (Celery worker recovery): the graph task may
+                    # still be running at this point.  _lease_lost_event signals
+                    # investigate() to cancel the graph task cooperatively, but
+                    # an in-flight LLM call or long-running node cannot be
+                    # interrupted mid-execution.  Until ISSUE-056 delivers hard
+                    # preemption, a brief split-brain window remains.
                     self._lease_lost = True
+                    self._lease_lost_event.set()
                     return
             else:
                 renewal_failures = 0

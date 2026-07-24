@@ -132,6 +132,8 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "adapter_validation_error": ErrorCategory.USER_INPUT,
     # Startup / runtime configuration (ISSUE-093 §5)
     "configuration_error": ErrorCategory.SYSTEM,
+    # Orchestration / lease (ISSUE-054)
+    "lease_lost": ErrorCategory.SYSTEM,
 }
 
 
