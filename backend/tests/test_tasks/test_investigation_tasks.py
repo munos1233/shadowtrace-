@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -140,7 +139,10 @@ class TestRunInvestigationTask:
         from app.tasks.investigation_tasks import run_investigation
 
         with (
-            patch("app.tasks.investigation_tasks._investigate", new_callable=AsyncMock) as mock_inner,
+            patch(
+                "app.tasks.investigation_tasks._investigate",
+                new_callable=AsyncMock,
+            ) as mock_inner,
         ):
             mock_inner.return_value = {"event_id": "evt-test004", "status": "completed"}
 
