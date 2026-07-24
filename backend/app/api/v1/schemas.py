@@ -160,6 +160,12 @@ class InvestigateResponse(BaseModel):
     status: EventStatus
 
 
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    state: str
+    event_id: str
+
+
 class EventCloseResponse(BaseModel):
     event_id: str
     status: EventStatus

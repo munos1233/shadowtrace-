@@ -618,6 +618,38 @@ async def investigate_event(
     # Enqueue orchestration as a background task (mode-dependent).
     settings = get_settings()
     mode = (settings.orchestration_mode or "graph").strip().lower()
+    task_mode = (settings.task_mode or "background").strip().lower()
+
+    if task_mode == "celery":
+        # Celery path: dispatch to worker, return task id immediately.
+        if mode == "analysis_only":
+            raise InvalidStateTransitionError(
+                "TASK_MODE=celery requires ORCHESTRATION_MODE=graph; "
+                "use TASK_MODE=background for analysis_only",
+                current=event.status,
+                target=EventStatus.TRIAGING,
+                details={"event_id": event_id, "orchestration_mode": mode},
+            )
+        from app.tasks.investigation_tasks import run_investigation
+
+        try:
+            celery_task = run_investigation.delay(event_id)
+        except Exception as exc:  # noqa: BLE001 — celery may raise many types
+            logger.error(
+                "Failed to dispatch Celery task for event=%s: %s",
+                event_id,
+                exc,
+            )
+            raise DependencyUnavailableError(
+                message="Celery broker unavailable; cannot dispatch investigation task",
+                error_code="celery_broker_unavailable",
+                details={"event_id": event_id},
+            ) from exc
+        return s.InvestigateResponse(
+            event_id=event_id,
+            task_id=str(celery_task.id),
+            status=event.status,
+        )
 
     if mode == "analysis_only":
 
@@ -713,6 +745,71 @@ async def investigate_event(
         event_id=event_id,
         task_id=event_id,
         status=event.status,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# GET /tasks/{task_id} — query task status (ISSUE-056)
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/tasks/{task_id}",
+    response_model=s.TaskStatusResponse,
+)
+async def get_task_status(
+    task_id: str,
+    principal: Annotated[Principal, require_roles(ROLE_ANALYST)],
+    event_service: EventService = Depends(get_event_service),
+) -> s.TaskStatusResponse:
+    """Return Celery task state or a background-mode status.
+
+    In ``TASK_MODE=celery`` the *task_id* is a Celery UUID and state is
+    the native Celery state string (PENDING / STARTED / SUCCESS / FAILURE
+    / RETRY).  In ``TASK_MODE=background`` the *task_id* equals the
+    ``event_id`` and we return the event's current status as the state.
+    """
+    settings = get_settings()
+    task_mode = (settings.task_mode or "background").strip().lower()
+
+    if task_mode == "celery":
+        try:
+            from celery.result import AsyncResult
+
+            from app.core.celery_app import celery_app
+
+            result = AsyncResult(task_id, app=celery_app)
+            event_id = (
+                result.result.get("event_id", "")
+                if result.result and isinstance(result.result, dict)
+                else ""
+            )
+            return s.TaskStatusResponse(
+                task_id=task_id,
+                state=result.state,
+                event_id=event_id or task_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to query Celery backend for task=%s", task_id, exc_info=True
+            )
+            return s.TaskStatusResponse(
+                task_id=task_id,
+                state="UNAVAILABLE",
+                event_id=task_id,
+            )
+
+    # Background mode: task_id == event_id, report event status as state.
+    event = await event_service.get_event(task_id)
+    if event is None:
+        raise EventNotFoundError(
+            f"event {task_id} not found",
+            details={"task_id": task_id},
+        )
+    return s.TaskStatusResponse(
+        task_id=task_id,
+        state=event.status.value,
+        event_id=task_id,
     )
 
 

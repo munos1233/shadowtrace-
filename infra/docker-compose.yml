@@ -72,5 +72,31 @@ services:
       retries: 10
       start_period: 5s
 
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      SOURCE_MODE: mock_xdr
+      DISPOSITION_MODE: mock_xdr
+      TOOL_MODE: mock
+      LLM_MODE: mock
+      SIMULATION_ENABLED: "true"
+      ALLOW_LIVE_SIDE_EFFECTS: "false"
+      ALLOW_XDR_WRITEBACK: "false"
+      TASK_MODE: celery
+    command: celery -A app.core.celery_app worker -Q investigation -c 2 --loglevel=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   shadowtrace_pgdata:

@@ -7,7 +7,7 @@ so that worker crashes do not silently drop tasks.
 
 from __future__ import annotations
 
-import re
+from urllib.parse import urlparse, urlunparse
 
 from celery import Celery
 
@@ -19,18 +19,33 @@ _settings = get_settings()
 def _derive_result_backend(broker_url: str) -> str:
     """Return ``broker_url`` with the Redis DB number incremented by 1.
 
-    Handles URLs with or without an explicit DB path segment::
+    Assumes a Redis broker URL whose path is solely a DB number
+    (e.g. ``/1``).  Non-Redis backends with nested vhost paths are
+    not supported by this helper.
 
-        redis://host:6379/1  →  redis://host:6379/2
-        redis://host:6379    →  redis://host:6379/2   (DB 0 → DB 2)
+    Uses stdlib ``urlparse`` to safely handle URLs with or without an
+    explicit DB path segment, query strings, or fragments::
+
+        redis://host:6379/1                  →  redis://host:6379/2
+        redis://host:6379/1?timeout=5        →  redis://host:6379/2?timeout=5
+        redis://host:6379                    →  redis://host:6379/1
+        redis://host:6379?timeout=5          →  redis://host:6379/1?timeout=5
 
     """
-    return re.sub(
-        r"(/(\d+))?$",
-        lambda m: f"/{int(m.group(2)) + 1}" if m.group(2) else "/2",
-        broker_url,
-        count=1,
-    )
+    parsed = urlparse(broker_url)
+    path = parsed.path.rstrip("/")
+    if path and path != "/":
+        # Path contains a DB number, e.g. "/1"
+        parts = path.rsplit("/", 1)
+        try:
+            db_num = int(parts[-1])
+        except (ValueError, IndexError):
+            db_num = 0
+    else:
+        # No explicit DB number — Redis default DB 0.
+        db_num = 0
+    new_path = f"/{db_num + 1}"
+    return urlunparse(parsed._replace(path=new_path))
 
 
 celery_app = Celery(
@@ -55,6 +70,6 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-celery_app.autodiscover_tasks(["app.tasks.investigation_tasks"])
+celery_app.autodiscover_tasks(["app.tasks"])
 
 __all__ = ["celery_app"]
