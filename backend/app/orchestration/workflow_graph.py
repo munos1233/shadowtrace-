@@ -792,6 +792,7 @@ def build_investigation_graph(
             ROUTE_REPORT: NODE_REPORT,
             ROUTE_REPLAN: NODE_REPLAN,
             ROUTE_MANUAL: NODE_MANUAL_HOLD,
+            # P0 placeholder: writeback recovery shares manual_hold until ISSUE-062.
             ROUTE_WRITEBACK: NODE_MANUAL_HOLD,
             ROUTE_HALT: NODE_HALT,
         },

@@ -328,6 +328,7 @@ def test_remaining_route_truth_tables() -> None:
 
 @pytest.mark.asyncio
 async def test_graph_compiles_and_golden_path_order() -> None:
+    """not_required full investigation path runs P0 sequence and closes."""
     machine = FakeStateMachine()
     services = _services(machine)
     graph = build_investigation_graph(_agents(), services)
@@ -392,6 +393,26 @@ async def test_required_threat_never_enters_disposition_only() -> None:
     assert NODE_HALT in final["node_trace"]
     assert final["event_status"] == EventStatus.VERIFYING.value
     assert runtime.begun == []
+
+
+@pytest.mark.asyncio
+async def test_required_golden_path_order_halts_at_verify() -> None:
+    """P0 main-chain order through verify, then HALT before report/close."""
+    final = await build_investigation_graph(
+        _agents(),
+        _services(runtime=FakeRuntime(WritebackReadiness.READY)),
+    ).ainvoke(
+        _base_state(
+            disposition_policy=DispositionPolicy.REQUIRED.value,
+            event_status_update_readiness=WritebackReadiness.READY.value,
+        ),
+        {"configurable": {"thread_id": "evt-required-golden"}},
+    )
+    expected_trace = (*P0_NODE_SEQUENCE[:8], NODE_HALT)
+    assert tuple(final["node_trace"]) == expected_trace
+    assert NODE_CLOSE not in final["node_trace"]
+    assert final["event_status"] == EventStatus.VERIFYING.value
+    assert final["halted"] is True
 
 
 @pytest.mark.asyncio
@@ -520,11 +541,11 @@ async def test_redis_unavailable_uses_nonrecoverable_memory_fallback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     redis = FakeRedisClient(available=False)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="app.orchestration.checkpointer"):
         saver = await RedisCheckpointer.create(redis)  # type: ignore[arg-type]
     assert saver.memory_fallback is True
     assert saver.recoverable is False
-    assert "process restart cannot recover" in caplog.text
+    assert any("process restart cannot recover" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

@@ -299,7 +299,7 @@ async def test_create_event_returns_201(
                 "source_object_id": "ALT-99901",
                 "source_status_raw": "open",
                 "source_disposition": "pending",
-                "schema_version": 1,
+                "schema_version": "1",
             },
         },
         headers=_hdr(),
@@ -331,7 +331,7 @@ async def test_create_event_rejects_unknown_fields(
                 "source_object_id": "ALT-99902",
                 "source_status_raw": "open",
                 "source_disposition": "pending",
-                "schema_version": 1,
+                "schema_version": "1",
             },
         },
         headers=_hdr(),
@@ -930,7 +930,7 @@ async def test_investigate_high_risk_http_polls_to_reporting(
         source_object_id="INC-HTTP-HIGH-001",
         source_status_raw="open",
         source_disposition=SourceDisposition.PENDING,
-        schema_version=1,
+        schema_version="1",
     )
     ingest = IngestableSource(
         reference=ref,
@@ -1241,7 +1241,7 @@ async def test_high_risk_event_stays_reporting(
         source_object_id="INC-HIGH-001",
         source_status_raw="open",
         source_disposition=SourceDisposition.PENDING,
-        schema_version=1,
+        schema_version="1",
     )
     ingest = IngestableSource(
         reference=ref,

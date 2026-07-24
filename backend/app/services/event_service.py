@@ -619,8 +619,11 @@ class EventService:
         """Apply a verdict inside the caller's transaction.
 
         WorkflowRuntimeService uses this API so the verdict, confidence floor,
-        and trusted disposition-only intent commit atomically. Post-commit
-        context synchronization and EventBus publication remain separate.
+        and trusted disposition-only intent commit atomically. After the caller
+        commits, you must still invoke one of:
+
+        - ``publish_final_verdict_mutation`` when ``changed`` is True
+        - ``sync_event_summary_mutation`` when only non-verdict fields changed
         """
         row = await session.get(
             orm.SecurityEvent,
