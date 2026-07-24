@@ -17,7 +17,7 @@ from app.core.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     name="shadowtrace.run_investigation",
     bind=True,
     acks_late=True,
