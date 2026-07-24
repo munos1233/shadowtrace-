@@ -900,6 +900,59 @@ class TestSuperAgentEdgeCases:
         assert captured_state["event_id"] == event_id
         assert captured_state["disposition_policy"] == "not_required"
 
+    @pytest.mark.asyncio
+    async def test_cancelled_error_transitions_event_to_failed(self) -> None:
+        """When asyncio.CancelledError is raised, the event DB status must be
+        transitioned to FAILED (not left in TRIAGING)."""
+        redis = _FakeRedis()
+        event_id = "evt-20240724-cancel01"
+        event = _FakeEvent(event_id)
+
+        event_service = AsyncMock()
+        event_service.get_event.return_value = event
+
+        state_machine = AsyncMock()
+
+        agent = _make_super_agent(
+            event_service=event_service,
+            state_machine=state_machine,
+            redis=redis,
+        )
+
+        with patch(
+            "app.orchestration.workflow_graph.invoke_investigation_graph",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError("task cancelled"),
+        ):
+            with patch(
+                "app.orchestration.workflow_graph.build_investigation_graph",
+                new_callable=MagicMock,
+            ) as mock_build:
+                mock_graph = MagicMock()
+                mock_graph.ainvoke = AsyncMock(
+                    side_effect=asyncio.CancelledError("task cancelled")
+                )
+                mock_build.return_value = mock_graph
+
+                with pytest.raises(asyncio.CancelledError):
+                    await agent.investigate(event_id)
+
+        # State machine must have been called with FAILED for CancelledError
+        failed_calls = [
+            c
+            for c in state_machine.transition.call_args_list
+            if c.args[0] == event_id
+            and c.args[1] == EventStatus.FAILED
+            and c.kwargs.get("operator") == "SuperAgent"
+        ]
+        assert len(failed_calls) >= 1, (
+            "Expected a FAILED transition call for CancelledError, "
+            f"got {state_machine.transition.call_args_list}"
+        )
+        assert "super_agent:cancelled" in str(
+            failed_calls[0].kwargs.get("reason", "")
+        )
+
 
 # --------------------------------------------------------------------------- #
 # 9. Recommended tests from ISSUE-054 review
@@ -1180,6 +1233,55 @@ class TestRenewalLoopAbort:
 
         # The loop should return (not hang forever) after 3 failures
         # If we got here without timeout, the abort logic works
+
+    @pytest.mark.asyncio
+    async def test_renew_loop_abort_sets_escalated_flag(self) -> None:
+        """When _renew_loop aborts after consecutive failures, the escalated
+        flag must be set on the InvestigationResult so callers can detect
+        the degraded/split-brain scenario."""
+        redis = _FakeRedis()
+        event_id = "evt-20240724-abort02"
+        event = _FakeEvent(event_id)
+
+        event_service = AsyncMock()
+        event_service.get_event.return_value = event
+
+        agent = _make_super_agent(event_service=event_service, redis=redis)
+
+        # Simulate lease lost before _build_result (as _renew_loop would do)
+        agent._lease_lost = True
+
+        state: dict[str, Any] = {
+            "event_id": event_id,
+            "event_status": "reporting",
+            "disposition_policy": "required",
+            "severity": "high",
+            "final_verdict": "confirmed_threat",
+            "confidence": 0.9,
+            "disposition_only_intent": False,
+            "execution_substate": "none",
+            "degraded_flags": [],
+            "node_trace": [],
+            "halted": False,
+            "error": None,
+            "report_generated": True,
+            "escalated": False,
+            "external_unsynced": False,
+            "event_status_update_readiness": "ready",
+        }
+
+        result = await agent._build_result(event_id, state)
+
+        # The escalated flag must be True even though the graph state
+        # says False — the lease loss overrides it.
+        assert result.escalated is True, (
+            "InvestigationResult.escalated must be True when lease was lost, "
+            "so callers can detect split-brain risk"
+        )
+        assert result.external_unsynced is True, (
+            "InvestigationResult.external_unsynced must be True when lease was "
+            "lost, because another worker may have taken over"
+        )
 
 
 class TestRedisUnavailable:

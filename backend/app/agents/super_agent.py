@@ -125,6 +125,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         self._lease: EventLease | None = None
         self._status: SuperAgentStatus = SuperAgentStatus.IDLE
 
+        # Set to True by _renew_loop when the lease is lost after consecutive
+        # renewal failures.  _build_result reads this flag to mark the
+        # investigation as escalated so callers can detect split-brain risk.
+        self._lease_lost: bool = False
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
@@ -260,6 +265,18 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         except asyncio.CancelledError:
             logger.warning("SuperAgent cancelled for event=%s", event_id)
             self._status = SuperAgentStatus.FAILED
+            try:
+                await self._state_machine.transition(
+                    event_id,
+                    EventStatus.FAILED,
+                    operator=SuperAgent._OPERATOR,
+                    reason="super_agent:cancelled",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to mark event=%s as FAILED after cancellation",
+                    event_id,
+                )
             raise
 
         except ShadowTraceError as exc:
@@ -584,8 +601,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
             event_id=event_id,
             final_status=final_status,
             final_verdict=final_verdict,
-            escalated=state.get("escalated", False),
-            external_unsynced=state.get("external_unsynced", False),
+            escalated=state.get("escalated", False) or self._lease_lost,
+            external_unsynced=state.get("external_unsynced", False) or self._lease_lost,
             report_id=report_id,
             writeback_required=writeback_required,
             writeback_readiness=writeback_readiness,
@@ -618,10 +635,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
                         event_id,
                         renewal_failures,
                     )
-                    # Setting halted=True signals graph nodes to stop at their
-                    # next entry-point check, preventing further work.
-                    # The lease release in finally will be a no-op (owner won't
-                    # match), which is safe.
+                    # Mark the investigation as escalated so _build_result
+                    # surfaces the degraded state to callers.  The lease release
+                    # in finally will be a no-op (owner won't match), which is
+                    # safe.
+                    self._lease_lost = True
                     return
             else:
                 renewal_failures = 0
