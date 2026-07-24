@@ -12,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -57,8 +58,8 @@ from app.models.enums import (
 )
 from app.models.source import SourceReference
 from app.services.context_service import EventContextStore, event_summary_from_security_event
-from app.services.event_disposition_service import EventDispositionService
 from app.services.disposition_sync_service import DispositionSyncService
+from app.services.event_disposition_service import EventDispositionService
 from tests.test_services._mock_xdr_test_helpers import (
     SCENARIO_INCIDENT_ID,
     fetch_mock_concurrency_token,
@@ -326,7 +327,7 @@ async def _create_event(
     disposition_only: bool = False,
 ) -> str:
     sfx = _sfx()
-    event_id = f"evt-disp-{_sfx()}"
+    event_id = f"evt-disp-{sfx}"
     ref = _ref(object_id=object_id)
     locator = _locator(object_id=object_id)
     async with session_factory() as session:
