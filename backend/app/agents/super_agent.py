@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from app.agents.base import AgentOutput, BaseAgent
 from app.agents.planner_agent import PlannerAgent
 from app.agents.rag_agent import RAGAgent
-from app.core.errors import InvestigationInProgressError, ShadowTraceError
+from app.core.errors import InvestigationInProgressError, ShadowTraceError, is_retryable
 from app.models.agent_io import (
     CollectionStatus,
     EvidenceAgentInput,
@@ -58,7 +59,7 @@ from app.models.enums import (
 from app.models.ids import report_id_for_event
 from app.models.report import InvestigationReport
 from app.models.security_event import EventSummary
-from app.models.workflow import TransitionContext
+from app.models.workflow import MAX_AGENT_RETRIES, TransitionContext
 from app.orchestration.lease import EventLease, generate_owner_id
 from app.orchestration.workflow_graph import planner_node, rag_node
 from app.services.working_memory import BoundWorkingMemory
@@ -66,6 +67,7 @@ from app.services.working_memory import BoundWorkingMemory
 logger = logging.getLogger(__name__)
 
 _SUPER_AGENT_OPERATOR = "SuperAgent"
+_AgentResult = TypeVar("_AgentResult")
 
 # Plan steps handled outside execute_plan_steps (ISSUE-054 / ISSUE-062 boundary).
 _DEFERRED_PLAN_AGENTS = frozenset({"report_agent", "response_agent"})
@@ -407,7 +409,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
 
         triage_input = await self._build_triage_input(event_id, ec)
 
-        triage_result: TriageResult = await self.triage_agent.execute(triage_input)  # type: ignore[union-attr]
+        triage_result: TriageResult = await self._execute_with_agent_retries(
+            event_id,
+            "triage_agent",
+            lambda: self.triage_agent.execute(triage_input),  # type: ignore[union-attr]
+        )
         if not isinstance(triage_result, TriageResult):
             raise TypeError("TriageAgent must return TriageResult")
 
@@ -481,7 +487,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             evidence_output=placeholder_evidence,
             risk_assessment=placeholder_risk,
         )
-        report: InvestigationReport | None = await self.report_agent.execute(report_input)  # type: ignore[union-attr]
+        report: InvestigationReport | None = await self._execute_with_agent_retries(
+            event_id,
+            "report_agent",
+            lambda: self.report_agent.execute(report_input),  # type: ignore[union-attr]
+        )
         if report is not None:
             if not isinstance(report, InvestigationReport):
                 raise TypeError("ReportAgent must return InvestigationReport or None")
@@ -622,7 +632,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             risk_assessment=risk_assessment,
         )
 
-        report: InvestigationReport | None = await self.report_agent.execute(report_input)  # type: ignore[union-attr]
+        report: InvestigationReport | None = await self._execute_with_agent_retries(
+            event_id,
+            "report_agent",
+            lambda: self.report_agent.execute(report_input),  # type: ignore[union-attr]
+        )
         if report is not None:
             if not isinstance(report, InvestigationReport):
                 raise TypeError("ReportAgent must return InvestigationReport or None")
@@ -659,6 +673,33 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
     # ------------------------------------------------------------------ #
     # Plan-step dispatch
     # ------------------------------------------------------------------ #
+
+    async def _execute_with_agent_retries(
+        self,
+        event_id: str,
+        agent_name: str,
+        factory: Callable[[], Awaitable[_AgentResult]],
+    ) -> _AgentResult:
+        """Retry transient agent failures up to ``MAX_AGENT_RETRIES`` times."""
+        last_error: Exception | None = None
+        max_attempts = MAX_AGENT_RETRIES + 1
+        for attempt in range(max_attempts):
+            try:
+                return await factory()
+            except Exception as exc:
+                last_error = exc
+                if not is_retryable(exc) or attempt >= MAX_AGENT_RETRIES:
+                    raise
+                logger.warning(
+                    "SuperAgent: %s attempt %d/%d failed for event=%s; retrying",
+                    agent_name,
+                    attempt + 1,
+                    max_attempts,
+                    event_id,
+                    exc_info=True,
+                )
+        assert last_error is not None
+        raise last_error
 
     async def _execute_single_step(self, ec: EventContext, step: PlanStep) -> None:
         """Dispatch a single PlanStep to the assigned agent.
@@ -728,7 +769,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             plan_step_goal=step.step_goal,
             required_tools=step.required_tools,
         )
-        evidence_output = await self.evidence_agent.execute(evidence_input)  # type: ignore[union-attr]
+        evidence_output = await self._execute_with_agent_retries(
+            event_id,
+            "evidence_agent",
+            lambda: self.evidence_agent.execute(evidence_input),  # type: ignore[union-attr]
+        )
         if not isinstance(evidence_output, EvidenceOutput):
             raise TypeError("EvidenceAgent must return EvidenceOutput")
         ec.evidence_output = evidence_output.model_dump(mode="json")
@@ -823,7 +868,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             rag_output=rag,
             graph_output=graph,
         )
-        risk_assessment: RiskAssessment = await self.risk_agent.execute(risk_input)  # type: ignore[union-attr]
+        risk_assessment: RiskAssessment = await self._execute_with_agent_retries(
+            event_id,
+            "risk_agent",
+            lambda: self.risk_agent.execute(risk_input),  # type: ignore[union-attr]
+        )
         if not isinstance(risk_assessment, RiskAssessment):
             raise TypeError("RiskAgent must return RiskAssessment")
         ec.risk_assessment = risk_assessment.model_dump(mode="json")

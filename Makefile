@@ -24,7 +24,7 @@ CI_BUILD_PROJECT_PREFIX ?= $(COMPOSE_PROJECT_NAME)-ci-build
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down test lint fmt migrate migrate-down load-kb integration-test test-tools ci-lint ci-test ci-build
+.PHONY: up down test lint fmt migrate migrate-down load-kb integration-test orchestration-test test-tools ci-lint ci-test ci-build
 
 up:
 	$(COMPOSE) up -d --build
@@ -96,6 +96,35 @@ integration-test:
 	cd "$(CURDIR)/backend"; \
 	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
 		$(PYTHON) -m pytest tests/integration -m integration -v
+
+# --- ISSUE-055 orchestration integration quality gate -------------------- #
+orchestration-test:
+	@set -eu; \
+	project="$(INTEGRATION_PROJECT_NAME)"; \
+	compose() { \
+		COMPOSE_PROJECT_NAME="$$project" \
+		POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+		BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+		docker compose --project-name "$$project" \
+			-f "$(COMPOSE_FILE)" "$$@"; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ "$$status" -ne 0 ]; then \
+			compose ps -a || true; \
+			compose logs --no-color postgres redis || true; \
+		fi; \
+		compose down --volumes --remove-orphans || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	compose up -d --wait --wait-timeout 120 postgres redis; \
+	cd "$(CURDIR)/backend"; \
+	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
+		$(PYTHON) -m pytest tests/integration/test_orchestration.py -m orchestration -v \
+		--cov=app.orchestration --cov=app.agents.super_agent \
+		--cov-report=term-missing --cov-fail-under=75
 
 # --- ISSUE-009 local / CI parity gates ------------------------------------ #
 ci-lint:

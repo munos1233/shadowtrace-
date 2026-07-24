@@ -48,6 +48,7 @@ markers = [
   "tool_system: Registry/Executor/Mock tool-system integration chains (ISSUE-025)",
   "rag: RAG + risk scoring integration (ISSUE-047)",
   "e2e_basic: analysis-only golden-path integration (ISSUE-039)",
+  "orchestration: multi-agent orchestration integration (ISSUE-055)",
 ]
 
 [tool.coverage.run]
@@ -71,6 +72,8 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 "app/mock_xdr/api.py" = ["B008"]
 "app/api/v1/events.py" = ["B008"]
+"tests/conftest.py" = ["E402"]
+"tests/integration/conftest.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

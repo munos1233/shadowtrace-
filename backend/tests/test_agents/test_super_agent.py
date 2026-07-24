@@ -17,7 +17,11 @@ from typing import Any
 import pytest
 
 from app.agents.super_agent import SuperAgent
-from app.core.errors import InvestigationInProgressError
+from app.core.errors import (
+    DependencyUnavailableError,
+    GuardrailViolationError,
+    InvestigationInProgressError,
+)
 from app.models.agent_io import (
     CollectionStatus,
     EvidenceOutput,
@@ -626,3 +630,35 @@ class TestGraphWithoutLease:
         agent = _build_super_agent(lease=None, event_service=event_service)
         await agent.investigate(_EVENT_ID)
         assert events[_EVENT_ID]["status"] == EventStatus.REPORTING
+
+
+class TestAgentRetryPolicy:
+    """ISSUE-055: SuperAgent agent retries honour ``is_retryable``."""
+
+    async def test_transient_agent_failure_is_retried(self) -> None:
+        agent = _build_super_agent()
+        calls = {"n": 0}
+
+        async def factory() -> EvidenceOutput:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise DependencyUnavailableError("transient evidence failure")
+            return _make_evidence()
+
+        result = await agent._execute_with_agent_retries(_EVENT_ID, "evidence_agent", factory)
+
+        assert calls["n"] == 2
+        assert isinstance(result, EvidenceOutput)
+
+    async def test_guardrail_failure_is_not_retried(self) -> None:
+        agent = _build_super_agent()
+        calls = {"n": 0}
+
+        async def factory() -> EvidenceOutput:
+            calls["n"] += 1
+            raise GuardrailViolationError("blocked")
+
+        with pytest.raises(GuardrailViolationError):
+            await agent._execute_with_agent_retries(_EVENT_ID, "evidence_agent", factory)
+
+        assert calls["n"] == 1

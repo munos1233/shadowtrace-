@@ -4,6 +4,12 @@ ISSUE-025 tool-system fixtures are defined in
 ``tests.test_tools.tool_system_fixtures`` and registered once here so both
 ``tests/test_tools/`` and ``tests/integration/test_tool_system.py`` can use
 them without double-loading ``tests/test_tools/conftest.py`` as a plugin.
+
+ISSUE-055 orchestration fixtures follow the same pattern via
+``tests.test_orchestration.orchestration_fixtures``.
 """
 
-pytest_plugins = ["tests.test_tools.tool_system_fixtures"]
+pytest_plugins = [
+    "tests.test_tools.tool_system_fixtures",
+    "tests.test_orchestration.orchestration_fixtures",
+]
