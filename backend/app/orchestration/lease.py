@@ -1,9 +1,9 @@
 """EventLease — Redis-based distributed lease to prevent duplicate orchestration (ISSUE-054).
 
 Acquire uses ``SET NX EX`` for atomicity; release uses a Lua script to check
-owner identity before deleting. When Redis is unavailable the lease layer
-returns ``None`` so callers can fall back to refusing duplicate triggers
-(降级策略: 拒绝对同一事件重复触发).
+owner identity before deleting. When Redis is unavailable ``acquire`` raises
+``DependencyUnavailableError`` (HTTP 503); duplicate triggers return ``False``
+(HTTP 409).
 
 Lease key: ``shadowtrace:lease:event:{event_id}``
 Owner id:    ``worker-{8 hex chars}``
@@ -16,6 +16,7 @@ import logging
 import secrets
 from typing import Any
 
+from app.core.errors import DependencyUnavailableError
 from app.core.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,9 @@ def generate_owner_id() -> str:
 class EventLease:
     """Distributed lease backed by Redis.
 
-    When Redis is unavailable (``_client`` is ``None``), all methods are
-    no-ops that return falsy values.  Callers must interpret ``False`` /
-    ``None`` as "cannot proceed with guarantee" and refuse the orchestration.
+    When Redis is unavailable, ``acquire`` raises
+    :class:`~app.core.errors.DependencyUnavailableError` (HTTP 503).  Other
+    methods return falsy values when Redis is down.
     """
 
     def __init__(self, redis_client: RedisClient | None) -> None:
@@ -74,14 +75,20 @@ class EventLease:
         """Atomically acquire the lease.  Returns ``True`` on success.
 
         Uses ``SET key owner_id NX EX ttl_s`` so only the first caller for
-        a given *event_id* wins.
+        a given *event_id* wins.  Returns ``False`` when another owner holds
+        the lease.  Raises :class:`~app.core.errors.DependencyUnavailableError`
+        when Redis is unavailable.
         """
         if self._redis is None:
             logger.warning(
                 "EventLease.acquire: Redis unavailable, refusing lease for event=%s",
                 event_id,
             )
-            return False
+            raise DependencyUnavailableError(
+                message="event lease store unavailable",
+                error_code="dependency_unavailable",
+                details={"event_id": event_id, "dependency": "redis"},
+            )
         key = _lease_key(event_id)
         acquired = await self._redis.set(key, owner_id, nx=True, ex=ttl_s)
         if acquired:

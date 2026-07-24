@@ -26,8 +26,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from app.agents.base import AgentOutput, BaseAgent
 from app.agents.planner_agent import PlannerAgent
+from app.agents.rag_agent import RAGAgent
 from app.core.errors import InvestigationInProgressError, ShadowTraceError
 from app.models.agent_io import (
+    CollectionStatus,
     EvidenceAgentInput,
     EvidenceOutput,
     ExecutionPlan,
@@ -37,6 +39,7 @@ from app.models.agent_io import (
     ReportAgentInput,
     RiskAgentInput,
     RiskAssessment,
+    ScoringMode,
     SuperAgentInput,
     TriageAgentInput,
     TriageResult,
@@ -55,6 +58,7 @@ from app.models.enums import (
 from app.models.ids import report_id_for_event
 from app.models.report import InvestigationReport
 from app.models.security_event import EventSummary
+from app.models.workflow import TransitionContext
 from app.orchestration.lease import EventLease, generate_owner_id
 from app.orchestration.workflow_graph import planner_node, rag_node
 from app.services.working_memory import BoundWorkingMemory
@@ -62,6 +66,9 @@ from app.services.working_memory import BoundWorkingMemory
 logger = logging.getLogger(__name__)
 
 _SUPER_AGENT_OPERATOR = "SuperAgent"
+
+# Plan steps handled outside execute_plan_steps (ISSUE-054 / ISSUE-062 boundary).
+_DEFERRED_PLAN_AGENTS = frozenset({"report_agent", "response_agent"})
 
 # --------------------------------------------------------------------------- #
 # Agent protocol for type-safe dependency injection
@@ -201,7 +208,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         triage_agent: _AgentProtocol | None = None,
         evidence_agent: _AgentProtocol | None = None,
         planner_agent: PlannerAgent | None = None,
-        rag_agent: _AgentProtocol | None = None,
+        rag_agent: RAGAgent | None = None,
         risk_agent: _AgentProtocol | None = None,
         report_agent: _AgentProtocol | None = None,
         graph_agent: _AgentProtocol | None = None,
@@ -214,15 +221,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         convergence_guard: Any | None = None,
         event_bus: Any | None = None,
         react_enabled: bool = False,
+        trace_service: Any | None = None,
     ) -> None:
         super().__init__(
-            llm_client=None,
-            tool_executor=None,
             working_memory=working_memory,
-            budget_service=None,
-            output_guard=None,
-            trace_service=None,
-            audit_service=None,
+            trace_service=trace_service,
             event_bus=event_bus,
         )
         self.triage_agent = triage_agent
@@ -245,12 +248,18 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
     # Public entry point
     # ------------------------------------------------------------------ #
 
-    async def investigate(self, event_id: str) -> None:
+    async def investigate(
+        self,
+        event_id: str,
+        *,
+        owner_id: str | None = None,
+        lease_acquired: bool = False,
+    ) -> None:
         """Run the full investigation graph for *event_id*.
 
-        Acquires a distributed lease, freezes the source snapshot, executes
-        the LangGraph pipeline, persists the final context, and releases the
-        lease on completion.
+        Acquires a distributed lease (unless *lease_acquired* is True),
+        freezes the source snapshot, executes the LangGraph pipeline,
+        persists the final context, and releases the lease on completion.
         """
         if self.planner_agent is None:
             raise RuntimeError("SuperAgent requires a PlannerAgent")
@@ -259,8 +268,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         if self.risk_agent is None or self.report_agent is None:
             raise RuntimeError("SuperAgent requires RiskAgent and ReportAgent")
 
-        owner_id = generate_owner_id()
-        acquired = False
+        resolved_owner = owner_id or generate_owner_id()
+        acquired = lease_acquired
         renewal_task: asyncio.Task[None] | None = None
         event_context: EventContext | None = None
         guard_reset_needed = True  # cleared only when another worker owns the lease
@@ -268,14 +277,15 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         try:
             # 1. Acquire lease
             if self.lease is not None:
-                acquired = await self.lease.acquire(event_id, owner_id)
-                if not acquired:
-                    raise InvestigationInProgressError(
-                        message="investigation already in progress for this event",
-                        error_code="investigation_in_progress",
-                        details={"event_id": event_id},
-                    )
-                renewal_task = await self.lease.start_renewal(event_id, owner_id)
+                if not lease_acquired:
+                    acquired = await self.lease.acquire(event_id, resolved_owner)
+                    if not acquired:
+                        raise InvestigationInProgressError(
+                            message="investigation already in progress for this event",
+                            error_code="investigation_in_progress",
+                            details={"event_id": event_id},
+                        )
+                renewal_task = await self.lease.start_renewal(event_id, resolved_owner)
 
             # 2. Load / build initial state
             event_context = await self._load_event_context(event_id)
@@ -292,23 +302,22 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             }
             final_state = await graph.ainvoke(state)
 
-            # 5. Persist final EventContext state so downstream consumers
+            # 5. Fail closed when state-machine transitions did not persist.
+            failures = self._transition_failures.pop(event_id, [])
+            if failures:
+                raise ShadowTraceError(
+                    message=(
+                        f"SuperAgent state transitions failed for event={event_id}"
+                    ),
+                    error_code="internal_error",
+                    details={"failures": failures},
+                )
+
+            # 6. Persist final EventContext state so downstream consumers
             #    (API response, frontend, ReportAgent fallback) see latest data.
             ec: EventContext = final_state.get("event_context", event_context)
             await self._persist_event_context(ec)
-
-            # 6. Surface any state-transition failures that were silently
-            #    swallowed during graph execution (transient errors do not
-            #    halt the graph, but callers MUST know about them).
-            failures = self._transition_failures.pop(event_id, [])
-            if failures:
-                logger.warning(
-                    "SuperAgent: %d state-transition failure(s) during "
-                    "investigation of event=%s: %s",
-                    len(failures),
-                    event_id,
-                    failures,
-                )
+            await self._persist_analysis_only_complete(event_id)
 
         except InvestigationInProgressError:
             # Concurrent trigger — another worker already owns this event.
@@ -343,7 +352,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             if guard_reset_needed:
                 self._reset_convergence_guard(event_id)
             if acquired and self.lease is not None:
-                await self.lease.release(event_id, owner_id)
+                await self.lease.release(event_id, resolved_owner)
 
     # ------------------------------------------------------------------ #
     # _run — BaseAgent template integration
@@ -398,11 +407,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         state["super_agent_status"] = SuperAgentStatus.EXECUTING
         await self._record_agent_step(event_id, "triage_agent")
 
-        triage_input = TriageAgentInput(
-            event_id=event_id,
-            raw_event_summary=_build_raw_summary(ec),
-            hint_entities=EntitySet(),
-        )
+        triage_input = await self._build_triage_input(event_id, ec)
 
         triage_result: TriageResult = await self.triage_agent.execute(triage_input)  # type: ignore[union-attr]
         if not isinstance(triage_result, TriageResult):
@@ -439,19 +444,62 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         return state
 
     async def _close_node(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Fast-close path: transition to CLOSED when no investigation is needed.
-
-        Per ISSUE-048 routing: ``need_investigation=false`` AND
-        ``disposition_policy=not_required`` → close the event immediately.
-        """
+        """Fast-close path: report then CLOSED when no investigation is needed."""
         ec: EventContext = state["event_context"]
         event_id = _event_id_from_context(ec)
+
+        triage_data = ec.triage_result
+        triage = (
+            TriageResult.model_validate(triage_data)
+            if triage_data is not None
+            else TriageResult(
+                event_type="other",  # type: ignore[arg-type]
+                severity="low",  # type: ignore[arg-type]
+                need_investigation=False,
+                reasoning="triage unavailable",
+                degraded=True,
+            )
+        )
+
+        placeholder_evidence = EvidenceOutput(
+            evidence_list=[],
+            conflicts=[],
+            gaps=[],
+            success_sources=[],
+            failed_sources=[],
+            overall_confidence=0.0,
+            collection_status=CollectionStatus.COMPLETED,
+        )
+        placeholder_risk = RiskAssessment(
+            risk_score=0,
+            severity=triage.severity,
+            confidence=0.9,
+            risk_factors=[],
+            possible_false_positive=True,
+            scoring_mode=ScoringMode.RULE_ONLY,
+        )
+        report_input = ReportAgentInput(
+            event_id=event_id,
+            evidence_output=placeholder_evidence,
+            risk_assessment=placeholder_risk,
+        )
+        report: InvestigationReport | None = await self.report_agent.execute(report_input)  # type: ignore[union-attr]
+        if report is not None:
+            if not isinstance(report, InvestigationReport):
+                raise TypeError("ReportAgent must return InvestigationReport or None")
+            ec.report = report
+            if not report.report_id:
+                report.report_id = report_id_for_event(event_id)
 
         await self._transition(
             event_id,
             EventStatus.CLOSED,
-            reason="fast_close:need_investigation_false",
+            reason="super_agent:short_circuit_closed",
             ec=ec,
+            context=TransitionContext(
+                need_investigation=False,
+                recommendation="close_as_fp",
+            ),
         )
         state["super_agent_status"] = SuperAgentStatus.FINISHED
         state["event_context"] = ec
@@ -508,7 +556,14 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
 
         plan = ExecutionPlan.model_validate(plan_data)
 
+        evidence_executed = False
         for step in plan.steps:
+            if step.assigned_agent in _DEFERRED_PLAN_AGENTS:
+                continue
+            if step.assigned_agent == "evidence_agent":
+                if evidence_executed:
+                    continue
+                evidence_executed = True
             await self._execute_single_step(ec, step)
 
         state["event_context"] = ec
@@ -531,7 +586,9 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         ec: EventContext = state["event_context"]
         event_id = _event_id_from_context(ec)
 
-        await self._transition(event_id, EventStatus.REPORTING, ec=ec)
+        current_status = _current_status_from_context(ec)
+        if current_status not in (EventStatus.REPORTING, EventStatus.CLOSED, EventStatus.FAILED):
+            await self._transition(event_id, EventStatus.REPORTING, ec=ec)
         await self._record_agent_step(event_id, "report_agent")
 
         evidence_data = ec.evidence_output
@@ -582,6 +639,20 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         await self._run_storyline_step(ec)
 
         await self._check_convergence_stop(event_id, "report_agent")
+
+        policy = _disposition_policy_from_context(ec)
+        if ec.event is not None and policy == DispositionPolicy.NOT_REQUIRED:
+            triage_data = ec.triage_result
+            need_inv: bool | None = None
+            if triage_data is not None:
+                need_inv = TriageResult.model_validate(triage_data).need_investigation
+            await self._transition(
+                event_id,
+                EventStatus.CLOSED,
+                reason="super_agent:complete_not_required",
+                ec=ec,
+                context=TransitionContext(need_investigation=need_inv),
+            )
 
         state["event_context"] = ec
         state["super_agent_status"] = SuperAgentStatus.FINISHED
@@ -663,7 +734,15 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         if not isinstance(evidence_output, EvidenceOutput):
             raise TypeError("EvidenceAgent must return EvidenceOutput")
         ec.evidence_output = evidence_output.model_dump(mode="json")
-        await self._transition(event_id, EventStatus.ANALYZING, ec=ec)
+        current_status = _current_status_from_context(ec)
+        if current_status not in (
+            EventStatus.ANALYZING,
+            EventStatus.SCORING,
+            EventStatus.REPORTING,
+            EventStatus.CLOSED,
+            EventStatus.FAILED,
+        ):
+            await self._transition(event_id, EventStatus.ANALYZING, ec=ec)
 
     async def _run_rag_step(self, ec: EventContext) -> None:
         """RAG enhancement — failure is non-blocking (降级策略)."""
@@ -685,7 +764,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                 ec,
                 self.rag_agent,
                 triage_result=triage,
-                evidence_output=evidence,  # type: ignore[arg-type]
+                evidence_output=evidence,
             )
             if rag_out is not None:
                 ec.rag_output = rag_out.model_dump(mode="json")
@@ -698,7 +777,14 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
 
     async def _run_risk_step(self, ec: EventContext) -> None:
         event_id = _event_id_from_context(ec)
-        await self._transition(event_id, EventStatus.SCORING, ec=ec)
+        current_status = _current_status_from_context(ec)
+        if current_status not in (
+            EventStatus.SCORING,
+            EventStatus.REPORTING,
+            EventStatus.CLOSED,
+            EventStatus.FAILED,
+        ):
+            await self._transition(event_id, EventStatus.SCORING, ec=ec)
 
         triage_data = ec.triage_result
         evidence_data = ec.evidence_output
@@ -926,6 +1012,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         *,
         reason: str | None = None,
         ec: EventContext | None = None,
+        context: TransitionContext | None = None,
     ) -> None:
         if self.event_service is None:
             return
@@ -933,12 +1020,13 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         if transition is None:
             return
         try:
-            await transition(
-                event_id,
-                target,
-                operator=_SUPER_AGENT_OPERATOR,
-                reason=reason or f"super_agent:{target.value}",
-            )
+            transition_kwargs: dict[str, Any] = {
+                "operator": _SUPER_AGENT_OPERATOR,
+                "reason": reason or f"super_agent:{target.value}",
+            }
+            if context is not None:
+                transition_kwargs["context"] = context
+            await transition(event_id, target, **transition_kwargs)
             # Refresh the in-memory status so subsequent _current_status_from_context
             # checks see the latest state.
             if self.event_service is not None and ec is not None and ec.event is not None:
@@ -1009,12 +1097,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                 if get_event is not None:
                     event = await get_event(event_id)
                     if event is not None:
-                        from app.services.context_service import (
-                            event_summary_from_security_event,
-                        )
-
                         ec = EventContext()
-                        ec.event = event_summary_from_security_event(event)
+                        ec.event = _event_summary_from_record(event_id, event)
                         return ec
             except Exception:
                 logger.debug(
@@ -1032,9 +1116,9 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             severity=Severity.MEDIUM,
             risk_score=0,
             final_verdict=FinalVerdict.NONE,
-            writeback_required=False,
-            writeback_readiness=WritebackReadiness.NOT_REQUIRED,
-            disposition_policy=DispositionPolicy.NOT_REQUIRED,
+            writeback_required=True,
+            writeback_readiness=WritebackReadiness.CAPABILITY_UNKNOWN,
+            disposition_policy=DispositionPolicy.REQUIRED,
         )
         return ec
 
@@ -1068,10 +1152,93 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                 exc_info=True,
             )
 
+    async def _build_triage_input(self, event_id: str, ec: EventContext) -> TriageAgentInput:
+        """Build triage input aligned with ``AnalysisOnlyPipeline._run_triage``."""
+        raw_summary = _build_raw_summary(ec)
+        hint_entities = EntitySet()
+        if self.event_service is not None:
+            try:
+                event = await self.event_service.get_event(event_id)
+            except Exception:
+                event = None
+            if event is not None:
+                if isinstance(event, dict):
+                    title = str(event.get("title") or (ec.event.title if ec.event else event_id))
+                    description = str(event.get("description") or "")
+                    raw_summary = f"{title}. {description}".strip(". ")
+                else:
+                    description = str(getattr(event, "description", "") or "").strip()
+                    raw_summary = f"{event.title}. {description}".strip(". ")
+                    entities = getattr(event, "entities", None)
+                    if entities is not None:
+                        hint_entities = entities
+        return TriageAgentInput(
+            event_id=event_id,
+            raw_event_summary=raw_summary,
+            hint_entities=hint_entities,
+        )
+
+    async def _persist_analysis_only_complete(self, event_id: str) -> None:
+        if self.context_store is None:
+            return
+        try:
+            await self.context_store.set(event_id, "analysis_only_complete", True)
+        except Exception:
+            logger.warning(
+                "SuperAgent: failed to persist analysis_only_complete for event=%s",
+                event_id,
+                exc_info=True,
+            )
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def _coerce_disposition_policy(value: object) -> DispositionPolicy:
+    if isinstance(value, DispositionPolicy):
+        return value
+    if value is None:
+        return DispositionPolicy.REQUIRED
+    return DispositionPolicy(str(value))
+
+
+def _event_summary_from_record(event_id: str, event: Any) -> EventSummary:
+    """Build ``EventSummary`` from an ORM row or test dict."""
+    if isinstance(event, dict):
+        policy = _coerce_disposition_policy(event.get("disposition_policy"))
+        writeback_required = policy is DispositionPolicy.REQUIRED
+        status_raw = event.get("status", EventStatus.NEW)
+        status = status_raw if isinstance(status_raw, EventStatus) else EventStatus(str(status_raw))
+        type_raw = event.get("event_type", EventType.OTHER)
+        event_type = type_raw if isinstance(type_raw, EventType) else EventType(str(type_raw))
+        sev_raw = event.get("severity", Severity.MEDIUM)
+        severity = sev_raw if isinstance(sev_raw, Severity) else Severity(str(sev_raw))
+        verdict_raw = event.get("final_verdict", FinalVerdict.NONE)
+        final_verdict = (
+            verdict_raw if isinstance(verdict_raw, FinalVerdict) else FinalVerdict(str(verdict_raw))
+        )
+        return EventSummary(
+            event_id=event_id,
+            event_type=event_type,
+            title=str(event.get("title") or event_id),
+            status=status,
+            severity=severity,
+            risk_score=int(event.get("risk_score") or 0),
+            final_verdict=final_verdict,
+            writeback_required=writeback_required,
+            writeback_readiness=(
+                WritebackReadiness.NOT_REQUIRED
+                if not writeback_required
+                else WritebackReadiness.CAPABILITY_UNKNOWN
+            ),
+            disposition_policy=policy,
+        )
+
+    from app.services.context_service import event_summary_from_security_event
+
+    return event_summary_from_security_event(event)
 
 
 def _event_id_from_context(ec: EventContext) -> str:

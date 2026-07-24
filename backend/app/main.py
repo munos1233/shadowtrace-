@@ -13,6 +13,7 @@ from app.api.v1.health import shutdown_health_clients
 from app.core.config import get_settings
 from app.core.redis_client import RedisClient
 from app.core.socketio_manager import SocketIOManager
+from app.orchestration.orchestration_config import assert_orchestration_mode
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     # Fail-closed (ISSUE-093 §5): validate runtime settings BEFORE serving any
     # traffic. Settings construction raises ConfigurationError if app_env is
     # production and any mock/simulation mode is active.
-    get_settings()
+    settings = get_settings()
+    assert_orchestration_mode(settings)
 
     # Start the Redis→Socket.IO bridge background task.
     await _socketio_manager.start()

@@ -5,7 +5,9 @@ Tests the 11 core event endpoints with real database-backed services.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any
 
 import pytest
@@ -1156,6 +1158,107 @@ async def test_investigate_returns_202(
     data = resp.json()
     assert data["task_id"] == event_id
     assert data["event_id"] == event_id
+
+
+@pytest.mark.asyncio
+async def test_investigate_duplicate_returns_409(
+    client: TestClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Investigate while the event lease is held returns 409."""
+    from app.api.v1 import events as events_module
+
+    event_id = await _create_test_event(event_service, title="Investigate duplicate 409")
+
+    class _BlockedLease:
+        async def acquire(self, _event_id: str, _owner_id: str, ttl_s: int = 600) -> bool:
+            return False
+
+        async def release(self, _event_id: str, _owner_id: str) -> bool:
+            return True
+
+    monkeypatch.setattr(events_module, "get_event_lease", lambda: _BlockedLease())
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 409, resp.text
+    data = resp.json()
+    assert data["error_code"] == "investigation_in_progress"
+    assert data["details"]["event_id"] == event_id
+
+
+@pytest.mark.asyncio
+async def test_investigate_lease_unavailable_returns_503(
+    client: TestClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the lease store is down, investigate fails with 503 not 409."""
+    from app.api.v1 import events as events_module
+    from app.core.errors import DependencyUnavailableError
+
+    event_id = await _create_test_event(event_service, title="Investigate lease down")
+
+    class _UnavailableLease:
+        async def acquire(self, _event_id: str, _owner_id: str, ttl_s: int = 600) -> bool:
+            raise DependencyUnavailableError(
+                message="event lease store unavailable",
+                error_code="dependency_unavailable",
+                details={"dependency": "redis"},
+            )
+
+    monkeypatch.setattr(events_module, "get_event_lease", lambda: _UnavailableLease())
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 503, resp.text
+    data = resp.json()
+    assert data["error_code"] == "dependency_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_investigate_releases_lease_when_super_agent_wiring_fails(
+    client: TestClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Background wiring failure must not leave the HTTP-held lease stuck."""
+    from app.api.v1 import events as events_module
+
+    event_id = await _create_test_event(event_service, title="Investigate wiring fail")
+    released: list[tuple[str, str]] = []
+
+    class _TrackingLease:
+        async def acquire(self, eid: str, owner_id: str, ttl_s: int = 600) -> bool:
+            return True
+
+        async def release(self, eid: str, owner_id: str) -> bool:
+            released.append((eid, owner_id))
+            return True
+
+    async def _boom_super_agent() -> None:
+        raise RuntimeError("planner wiring failed")
+
+    monkeypatch.setattr(events_module, "get_event_lease", lambda: _TrackingLease())
+    monkeypatch.setattr(events_module, "get_super_agent", _boom_super_agent)
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 202, resp.text
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline and not released:
+        await asyncio.sleep(0.05)
+
+    assert released, "lease must be released when investigate never started"
+    assert released[0][0] == event_id
 
 
 # --------------------------------------------------------------------------- #

@@ -79,6 +79,16 @@ PIPELINE_AGENT_NAMES = frozenset(
     }
 )
 
+GRAPH_AGENT_NAMES = frozenset(
+    {
+        "triage_agent",
+        "evidence_agent",
+        "planner_agent",
+        "risk_agent",
+        "report_agent",
+    }
+)
+
 SHORT_CIRCUIT_AGENT_NAMES = frozenset({"triage_agent", "report_agent"})
 
 GOLDEN_PATH_MAX_SECONDS = 60.0
@@ -306,6 +316,186 @@ async def test_golden_path_analysis_only_state_sequence(
         event_id=event_id,
         expect_guard_clean=True,
         expected_agents=PIPELINE_AGENT_NAMES,
+    )
+
+
+@pytest.mark.usefixtures("clean_state")
+@pytest.mark.asyncio
+async def test_golden_path_graph_mode_state_sequence(
+    source_adapter: MockXDRSourceAdapter,
+    source_ingester: SourceIngester,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+    context_store: EventContextStore,
+    agent_trace_service: AgentTraceService,
+    build_super_agent,
+) -> None:
+    """ISSUE-054: graph-mode SuperAgent drives NEW→…→REPORTING like ISSUE-039."""
+    event_id = await _ingest_main_scenario(source_adapter, source_ingester, event_service)
+    event_before = await event_service.get_event(event_id)
+    assert event_before is not None
+    assert event_before.status is EventStatus.NEW
+
+    agent, projection = build_super_agent()
+    started = time.perf_counter()
+    with bind_evidence_projection(projection):
+        await agent.investigate(event_id)
+    elapsed = time.perf_counter() - started
+    assert elapsed < GOLDEN_PATH_MAX_SECONDS, (
+        f"graph golden path exceeded {GOLDEN_PATH_MAX_SECONDS}s"
+    )
+
+    event = await event_service.get_event(event_id)
+    assert event is not None
+    assert event.status is EventStatus.REPORTING
+    assert event.final_verdict is FinalVerdict.CONFIRMED_THREAT
+    assert event.risk_score >= 70
+
+    observed = await _audit_status_sequence(session_factory, event_id)
+    _assert_ordered_status_subsequence(observed, GOLDEN_STATUS_SEQUENCE)
+    assert EventStatus.CLOSED.value not in observed
+
+    triage_ctx = await context_store.get(event_id, "triage_result")
+    evidence_ctx = await context_store.get(event_id, "evidence_output")
+    risk_ctx = await context_store.get(event_id, "risk_assessment")
+    assert triage_ctx and evidence_ctx and risk_ctx
+
+    analysis_only_complete = await context_store.get(event_id, "analysis_only_complete")
+    assert analysis_only_complete is True
+
+    await _assert_report_persisted(session_factory, context_store, event_id)
+    await _assert_observability(
+        session_factory=session_factory,
+        context_store=context_store,
+        agent_trace_service=agent_trace_service,
+        event_id=event_id,
+        expect_guard_clean=True,
+        expected_agents=GRAPH_AGENT_NAMES,
+    )
+
+
+@pytest.mark.usefixtures("clean_state")
+@pytest.mark.asyncio
+async def test_low_risk_graph_mode_short_circuit_closed(
+    tmp_path: Path,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+    context_store: EventContextStore,
+    agent_trace_service: AgentTraceService,
+    run_graph_investigation,
+) -> None:
+    """ISSUE-054 scenario 2 (graph): file login failure → CLOSED with report."""
+    event_id = await _ingest_single_login_failure_file(tmp_path, event_service, session_factory)
+    await run_graph_investigation(event_id, scenario_id=None)
+
+    event = await event_service.get_event(event_id)
+    assert event is not None
+    assert event.status is EventStatus.CLOSED
+
+    triage_ctx = await context_store.get(event_id, "triage_result")
+    assert triage_ctx is not None
+    assert triage_ctx.get("need_investigation") is False
+
+    observed = await _audit_status_sequence(session_factory, event_id)
+    for status in SHORT_CIRCUIT_STATUS_SEQUENCE:
+        assert status.value in observed
+    assert EventStatus.COLLECTING_EVIDENCE.value not in observed
+
+    analysis_only_complete = await context_store.get(event_id, "analysis_only_complete")
+    assert analysis_only_complete is True
+
+    await _assert_report_persisted(session_factory, context_store, event_id)
+    await _assert_observability(
+        session_factory=session_factory,
+        context_store=context_store,
+        agent_trace_service=agent_trace_service,
+        event_id=event_id,
+        expect_guard_clean=True,
+        expected_agents=SHORT_CIRCUIT_AGENT_NAMES,
+    )
+
+
+@pytest.mark.usefixtures("clean_state")
+@pytest.mark.asyncio
+async def test_data_source_degradation_graph_mode_still_reports(
+    source_adapter: MockXDRSourceAdapter,
+    source_ingester: SourceIngester,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+    context_store: EventContextStore,
+    agent_trace_service: AgentTraceService,
+    run_graph_investigation,
+) -> None:
+    """ISSUE-054 scenario 3 (graph): partial evidence degradation still reports."""
+    event_id = await _ingest_main_scenario(source_adapter, source_ingester, event_service)
+    await run_graph_investigation(
+        event_id,
+        fail_tools=set(DEFAULT_PARTIAL_FAIL_TOOLS),
+    )
+
+    evidence_ctx = await context_store.get(event_id, "evidence_output")
+    assert evidence_ctx is not None
+    assert evidence_ctx.get("collection_status") == CollectionStatus.PARTIAL_DONE.value
+
+    event = await event_service.get_event(event_id)
+    assert event is not None
+    assert event.status is EventStatus.REPORTING
+
+    analysis_only_complete = await context_store.get(event_id, "analysis_only_complete")
+    assert analysis_only_complete is True
+
+    await _assert_report_persisted(session_factory, context_store, event_id)
+    await _assert_observability(
+        session_factory=session_factory,
+        context_store=context_store,
+        agent_trace_service=agent_trace_service,
+        event_id=event_id,
+        expect_guard_clean=True,
+        expected_agents=GRAPH_AGENT_NAMES,
+    )
+
+
+@pytest.mark.usefixtures("clean_state")
+@pytest.mark.asyncio
+async def test_llm_degradation_graph_mode_fallback_without_bypassing_gates(
+    source_adapter: MockXDRSourceAdapter,
+    source_ingester: SourceIngester,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+    context_store: EventContextStore,
+    agent_trace_service: AgentTraceService,
+    build_super_agent,
+) -> None:
+    """ISSUE-054 scenario 4 (graph): LLM failures fall back to rules/template."""
+    event_id = await _ingest_main_scenario(source_adapter, source_ingester, event_service)
+    agent, projection = build_super_agent(llm_client=FailingLLMClient())
+    with bind_evidence_projection(projection):
+        await agent.investigate(event_id)
+
+    triage_ctx = await context_store.get(event_id, "triage_result")
+    risk_ctx = await context_store.get(event_id, "risk_assessment")
+    report_ctx = await context_store.get(event_id, "report")
+    assert triage_ctx and triage_ctx.get("degraded") is True
+    assert risk_ctx and risk_ctx.get("scoring_mode") == ScoringMode.RULE_ONLY.value
+    assert report_ctx and report_ctx.get("generated_by") == GENERATED_BY_TEMPLATE
+
+    event = await event_service.get_event(event_id)
+    assert event is not None
+    assert event.status is EventStatus.REPORTING
+    assert event.disposition_policy is DispositionPolicy.REQUIRED
+    assert EventStatus.CLOSED.value not in await _audit_status_sequence(session_factory, event_id)
+
+    analysis_only_complete = await context_store.get(event_id, "analysis_only_complete")
+    assert analysis_only_complete is True
+
+    await _assert_report_persisted(session_factory, context_store, event_id)
+    await _assert_observability(
+        session_factory=session_factory,
+        context_store=context_store,
+        agent_trace_service=agent_trace_service,
+        event_id=event_id,
+        expect_guard_clean=True,
+        expected_agents=GRAPH_AGENT_NAMES,
     )
 
 

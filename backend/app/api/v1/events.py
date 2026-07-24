@@ -17,7 +17,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.v1 import schemas as s
-from app.api.v1.deps import _get_session_factory, get_event_service, get_pipeline, get_state_machine
+from app.api.v1.deps import (
+    _get_session_factory,
+    get_event_lease,
+    get_event_service,
+    get_pipeline,
+    get_state_machine,
+    get_super_agent,
+)
 from app.api.v1.errors import (
     DispositionPermissionDenied,
     EventNotFoundError,
@@ -36,7 +43,8 @@ from app.core.auth import (
     Principal,
     require_roles,
 )
-from app.core.errors import DependencyUnavailableError
+from app.core.config import get_settings
+from app.core.errors import DependencyUnavailableError, InvestigationInProgressError
 from app.db import models as orm
 from app.models.action import Action as ActionModel
 from app.models.disposition import SourceObjectLocator
@@ -607,35 +615,99 @@ async def investigate_event(
             details={"event_id": event_id},
         )
 
-    # Enqueue the pipeline as a background task.
-    async def _run_pipeline() -> None:
-        try:
-            from app.services.evidence_projection import (
-                EvidenceProjection,
-                bind_evidence_projection,
-            )
+    # Enqueue orchestration as a background task (mode-dependent).
+    settings = get_settings()
+    mode = (settings.orchestration_mode or "graph").strip().lower()
 
-            pipeline = await get_pipeline()
-            projection = EvidenceProjection(_get_session_factory())
-            with bind_evidence_projection(projection):
-                await pipeline.run(event_id)
-        except Exception as exc:
-            logger.error(
-                "Background pipeline failed for event=%s: %s",
-                event_id,
-                exc,
-            )
+    if mode == "analysis_only":
+
+        async def _run_pipeline() -> None:
             try:
-                await state_machine.transition(
-                    event_id,
-                    EventStatus.FAILED,
-                    operator="AnalysisOnlyPipeline",
-                    reason=f"pipeline_failed: {exc}",
+                from app.services.evidence_projection import (
+                    EvidenceProjection,
+                    bind_evidence_projection,
                 )
-            except Exception:
-                logger.exception("Failed to mark event as FAILED: %s", event_id)
 
-    background.add_task(_run_pipeline)
+                pipeline = await get_pipeline()
+                projection = EvidenceProjection(_get_session_factory())
+                with bind_evidence_projection(projection):
+                    await pipeline.run(event_id)
+            except Exception as exc:
+                logger.error(
+                    "Background pipeline failed for event=%s: %s",
+                    event_id,
+                    exc,
+                )
+                try:
+                    await state_machine.transition(
+                        event_id,
+                        EventStatus.FAILED,
+                        operator="AnalysisOnlyPipeline",
+                        reason=f"pipeline_failed: {exc}",
+                    )
+                except Exception:
+                    logger.exception("Failed to mark event as FAILED: %s", event_id)
+
+        background.add_task(_run_pipeline)
+    else:
+        lease = get_event_lease()
+        from app.orchestration.lease import generate_owner_id
+
+        owner_id = generate_owner_id()
+        try:
+            acquired = await lease.acquire(event_id, owner_id)
+        except DependencyUnavailableError:
+            raise
+        if not acquired:
+            raise InvestigationInProgressError(
+                message="investigation already in progress for this event",
+                error_code="investigation_in_progress",
+                details={"event_id": event_id},
+            )
+
+        async def _run_super_agent() -> None:
+            investigate_started = False
+            try:
+                from app.services.evidence_projection import (
+                    EvidenceProjection,
+                    bind_evidence_projection,
+                )
+
+                agent = await get_super_agent()
+                projection = EvidenceProjection(_get_session_factory())
+                with bind_evidence_projection(projection):
+                    investigate_started = True
+                    await agent.investigate(
+                        event_id,
+                        owner_id=owner_id,
+                        lease_acquired=True,
+                    )
+            except InvestigationInProgressError:
+                logger.warning(
+                    "SuperAgent lost lease for event=%s before start",
+                    event_id,
+                )
+                await lease.release(event_id, owner_id)
+            except Exception as exc:
+                logger.error(
+                    "Background SuperAgent failed for event=%s: %s",
+                    event_id,
+                    exc,
+                )
+                try:
+                    await state_machine.transition(
+                        event_id,
+                        EventStatus.FAILED,
+                        operator="SuperAgent",
+                        reason=f"super_agent_failed: {exc}",
+                    )
+                except Exception:
+                    logger.exception("Failed to mark event as FAILED: %s", event_id)
+            finally:
+                if not investigate_started:
+                    await lease.release(event_id, owner_id)
+
+        background.add_task(_run_super_agent)
 
     return s.InvestigateResponse(
         event_id=event_id,
