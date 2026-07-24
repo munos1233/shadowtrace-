@@ -395,42 +395,46 @@ async def _build_writeback_info(
         )
         pending = int(pending_count or 0)
 
-        # Derive overall writeback status.
+        # Derive overall writeback status from all active outbox rows (not only
+        # pending-countable rows — FAILED/CONFLICT are terminal and excluded
+        # from pending_count but must still block close).
         wb_status: WritebackStatus | None = None
-        if pending > 0:
-            # Check for failures / conflicts / unknown across outbox records.
-            failed = await session.scalar(
-                select(func.count(orm.DispositionOutbox.outbox_id)).where(
+        status_rows = (
+            await session.scalars(
+                select(orm.DispositionOutbox.latest_writeback_status).where(
                     orm.DispositionOutbox.event_id == event_id,
                     orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
-                    orm.DispositionOutbox.latest_writeback_status == WritebackStatus.FAILED.value,
                 )
             )
-            conflict = await session.scalar(
-                select(func.count(orm.DispositionOutbox.outbox_id)).where(
-                    orm.DispositionOutbox.event_id == event_id,
-                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
-                    orm.DispositionOutbox.latest_writeback_status == WritebackStatus.CONFLICT.value,
-                )
-            )
-            unknown = await session.scalar(
-                select(func.count(orm.DispositionOutbox.outbox_id)).where(
-                    orm.DispositionOutbox.event_id == event_id,
-                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
-                    orm.DispositionOutbox.latest_writeback_status == WritebackStatus.UNKNOWN.value,
-                )
-            )
-            if int(failed or 0) > 0:
+        ).all()
+        parsed_statuses: list[WritebackStatus] = []
+        for raw in status_rows:
+            if not raw:
+                continue
+            try:
+                parsed_statuses.append(WritebackStatus(str(raw)))
+            except ValueError:
+                continue
+
+        if parsed_statuses:
+            if any(s is WritebackStatus.FAILED for s in parsed_statuses):
                 wb_status = WritebackStatus.FAILED
-            elif int(conflict or 0) > 0:
+            elif any(s is WritebackStatus.CONFLICT for s in parsed_statuses):
                 wb_status = WritebackStatus.CONFLICT
-            elif int(unknown or 0) > 0:
-                # UNKNOWN = submitted but unconfirmable — must not be downgraded
-                # to PENDING, which implies "still waiting" and may invite unsafe
-                # retries from downstream code (ISSUE-038 Should-Fix #4).
+            elif any(s is WritebackStatus.UNKNOWN for s in parsed_statuses):
                 wb_status = WritebackStatus.UNKNOWN
-            else:
+            elif any(
+                s
+                in (
+                    WritebackStatus.PENDING,
+                    WritebackStatus.SENDING,
+                    WritebackStatus.ACCEPTED,
+                )
+                for s in parsed_statuses
+            ):
                 wb_status = WritebackStatus.PENDING
+            elif all(s is WritebackStatus.CONFIRMED for s in parsed_statuses):
+                wb_status = WritebackStatus.CONFIRMED
 
         return readiness, wb_status, pending
 

@@ -183,9 +183,80 @@ def _ref_dump(ref: SourceReference) -> dict[str, Any]:
     return ref.model_dump(mode="json")
 
 
+def _entities_from_normalized(normalized: dict[str, Any]) -> dict[str, Any]:
+    """Build EntitySet JSON from adapter-normalized metadata for evidence queries."""
+    if not normalized:
+        return {}
+    accounts: list[dict[str, Any]] = []
+    hosts: list[dict[str, Any]] = []
+    ips: list[dict[str, Any]] = []
+    domains: list[dict[str, Any]] = []
+
+    account = normalized.get("account")
+    if account:
+        accounts.append(
+            {
+                "entity_id": "acct-1",
+                "entity_type": "account",
+                "username": str(account),
+            }
+        )
+    hostname = normalized.get("hostname")
+    host_ip = normalized.get("ip")
+    if hostname or host_ip:
+        host: dict[str, Any] = {"entity_id": "host-1", "entity_type": "host"}
+        if hostname:
+            host["hostname"] = str(hostname)
+        if host_ip:
+            host["ip"] = str(host_ip)
+        hosts.append(host)
+
+    for key in ("src_ip", "ip"):
+        val = normalized.get(key)
+        if val:
+            ips.append(
+                {
+                    "entity_id": f"ip-{key}",
+                    "entity_type": "ip",
+                    "address": str(val),
+                    "scope": "internal",
+                }
+            )
+    dst_ip = normalized.get("dst_ip")
+    if dst_ip:
+        ips.append(
+            {
+                "entity_id": "ip-dst",
+                "entity_type": "ip",
+                "address": str(dst_ip),
+                "scope": "external",
+            }
+        )
+    domain = normalized.get("domain")
+    if domain:
+        domains.append(
+            {
+                "entity_id": "dom-1",
+                "entity_type": "domain",
+                "fqdn": str(domain),
+            }
+        )
+
+    if not any((accounts, hosts, ips, domains)):
+        return {}
+    return EntitySet.model_validate(
+        {
+            "accounts": accounts,
+            "hosts": hosts,
+            "ips": ips,
+            "domains": domains,
+        }
+    ).model_dump(mode="json")
+
+
 def _source_snapshot_from_row(row: orm.SecurityEvent) -> dict[str, Any]:
     """Return immutable source evidence only; never include mutable current_* state."""
-    return {
+    snapshot: dict[str, Any] = {
         "creation_source_ref": dict(row.creation_source_ref),
         "source_reference_snapshots": [
             dict(item) for item in (row.source_reference_snapshots or [])
@@ -194,6 +265,9 @@ def _source_snapshot_from_row(row: orm.SecurityEvent) -> dict[str, Any]:
             dict(row.raw_alert_snapshot) if row.raw_alert_snapshot is not None else None
         ),
     }
+    if row.event_type:
+        snapshot["alert_type"] = row.event_type
+    return snapshot
 
 
 def _security_event_from_row(row: orm.SecurityEvent) -> SecurityEvent:
@@ -1528,7 +1602,7 @@ class EventService:
             status=EventStatus.NEW.value,
             severity=severity.value,
             final_verdict=FinalVerdict.NONE.value,
-            entities={},
+            entities=_entities_from_normalized(source.normalized or {}),
             creation_source_ref=_ref_dump(ref),
             source_reference_snapshots=[_ref_dump(ref)],
             current_primary_source_record_id=source_record_id,
