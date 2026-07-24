@@ -683,9 +683,9 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             evidence = EvidenceOutput.model_validate(evidence_data)
             rag_out: RAGOutput | None = await rag_node(
                 ec,
-                self.rag_agent,
+                self.rag_agent,  # type: ignore[arg-type]
                 triage_result=triage,
-                evidence_output=evidence,  # type: ignore[arg-type]
+                evidence_output=evidence,
             )
             if rag_out is not None:
                 ec.rag_output = rag_out.model_dump(mode="json")
