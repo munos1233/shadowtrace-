@@ -650,22 +650,21 @@ async def _run_super_agent(
             event_id,
             exc,
         )
-        # ShadowTraceError subclasses (including investigation_in_progress)
-        # already carry structured error codes — let them propagate naturally
-        # through the background task logger.  Only force a FAILED transition
-        # when the SuperAgent itself didn't already mark it.
-        from app.core.errors import ShadowTraceError
-
-        if not isinstance(exc, ShadowTraceError):
-            try:
-                await state_machine.transition(
-                    event_id,
-                    EventStatus.FAILED,
-                    operator="SuperAgent",
-                    reason=f"super_agent:error:{type(exc).__name__}:{exc!s}"[:500],
-                )
-            except Exception:
-                logger.exception("Failed to mark event as FAILED: %s", event_id)
+        # ISSUE-054 Should-Fix #2: Always attempt a FAILED transition in the
+        # background task wrapper.  The exception may have occurred in
+        # get_super_agent() (before SuperAgent itself could handle it), or
+        # SuperAgent's own FAILED transition may have itself failed.  The
+        # StateMachineService transition is idempotent — if SuperAgent already
+        # marked the event as FAILED, re-marking is a safe no-op.
+        try:
+            await state_machine.transition(
+                event_id,
+                EventStatus.FAILED,
+                operator="SuperAgent",
+                reason=f"super_agent:error:{type(exc).__name__}:{exc!s}"[:500],
+            )
+        except Exception:
+            logger.exception("Failed to mark event as FAILED: %s", event_id)
 
 
 @router.post(
@@ -747,8 +746,14 @@ async def investigate_event(
         try:
             acquired_lease = await agent.acquire_lease_or_raise(event_id)
         except ShadowTraceError as exc:
+            # ISSUE-054 Should-Fix #1: distinguish investigation_in_progress (409)
+            # from dependency_unavailable (503) so monitoring/alerting rules
+            # based on status codes are not misled.
+            http_status = (
+                503 if exc.error_code == "dependency_unavailable" else 409
+            )
             raise HTTPException(
-                status_code=409,
+                status_code=http_status,
                 detail=exc.to_response(),
             ) from exc
         background.add_task(

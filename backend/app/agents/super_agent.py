@@ -539,9 +539,21 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         """Convert final graph state into an InvestigationResult.
 
         The graph state is the authoritative record post-execution; the event
-        service row is consulted only as a fallback.
+        service row is consulted only as a fallback when state fields are
+        missing (ISSUE-054 Should-Fix #5: avoid redundant DB query).
         """
-        event = await self._event_service.get_event(event_id)
+        # Only query the event service when the graph state is missing fields
+        # that the fallback path needs.
+        _need_event_fallback = (
+            not state.get("event_status")
+            or not state.get("final_verdict")
+            or not state.get("disposition_policy")
+        )
+        event = (
+            await self._event_service.get_event(event_id)
+            if _need_event_fallback
+            else None
+        )
 
         # ── Final status: state first, then event service ───────
         final_status = EventStatus.REPORTING
@@ -549,6 +561,14 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
             try:
                 final_status = EventStatus(state["event_status"])
             except ValueError:
+                # ISSUE-054 Nit #4: log when graph produces an unrecognized
+                # status value rather than silently falling back to REPORTING.
+                logger.warning(
+                    "Unknown event_status value %r in graph state for event=%s — "
+                    "falling back to REPORTING",
+                    state["event_status"],
+                    event_id,
+                )
                 final_status = EventStatus.REPORTING
         elif event is not None:
             final_status = event.status
@@ -559,6 +579,12 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
             try:
                 final_verdict = FinalVerdict(state["final_verdict"])
             except ValueError:
+                logger.warning(
+                    "Unknown final_verdict value %r in graph state for event=%s — "
+                    "falling back to NONE",
+                    state["final_verdict"],
+                    event_id,
+                )
                 final_verdict = FinalVerdict.NONE
         elif event is not None and event.final_verdict is not None:
             final_verdict = (
@@ -573,6 +599,12 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
             try:
                 policy = DispositionPolicy(state["disposition_policy"])
             except ValueError:
+                logger.warning(
+                    "Unknown disposition_policy value %r in graph state for event=%s — "
+                    "falling back to NOT_REQUIRED",
+                    state["disposition_policy"],
+                    event_id,
+                )
                 policy = DispositionPolicy.NOT_REQUIRED
         elif event is not None and hasattr(event, "disposition_policy"):
             policy = event.disposition_policy
