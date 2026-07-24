@@ -124,9 +124,7 @@ class TestRunInvestigationTask:
             new_callable=AsyncMock,
         ) as mock_get_agent:
             mock_agent = MagicMock()
-            mock_agent.investigate = AsyncMock(
-                side_effect=RuntimeError("transient DB error")
-            )
+            mock_agent.investigate = AsyncMock(side_effect=RuntimeError("transient DB error"))
             mock_get_agent.return_value = mock_agent
 
             # Eager mode: the exception propagates through apply().

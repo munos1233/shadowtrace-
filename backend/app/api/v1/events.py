@@ -790,9 +790,7 @@ async def get_task_status(
                 event_id=event_id or task_id,
             )
         except Exception:
-            logger.warning(
-                "Failed to query Celery backend for task=%s", task_id, exc_info=True
-            )
+            logger.warning("Failed to query Celery backend for task=%s", task_id, exc_info=True)
             return s.TaskStatusResponse(
                 task_id=task_id,
                 state="UNAVAILABLE",
