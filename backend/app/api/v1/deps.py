@@ -435,3 +435,19 @@ def reset_deps() -> None:
     _action_execution = None
     _adapter_registry = None
     _workflow_runtime = None
+
+
+def reset_investigation_layer() -> None:
+    """Reset investigation-layer singletons only.
+
+    Unlike ``reset_deps()`` this leaves infrastructure singletons
+    (``_session_factory``, ``_redis_client``, ``_context_store``, …)
+    intact so that long-running workers do not leak connection pools.
+
+    Intended for Celery tasks that need a fresh SuperAgent per invocation
+    while reusing the database and Redis connections.
+    """
+    global _investigation_stack, _super_agent, _pipeline
+    _investigation_stack = None
+    _super_agent = None
+    _pipeline = None
