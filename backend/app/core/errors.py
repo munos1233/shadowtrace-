@@ -397,6 +397,15 @@ class AdapterNotFoundError(ShadowTraceError):
     default_retryable = False
 
 
+class InvestigationInProgressError(ShadowTraceError):
+    """Another orchestration is already running for this event (ISSUE-054)."""
+
+    status_code = 409
+    default_error_code = "investigation_in_progress"
+    default_category = ErrorCategory.PERMANENT
+    default_retryable = False
+
+
 class ConfigurationError(ShadowTraceError):
     """Illegal runtime configuration (ISSUE-093 §5).
 
