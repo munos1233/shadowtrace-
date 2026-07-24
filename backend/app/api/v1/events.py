@@ -696,9 +696,18 @@ async def investigate_event(
     if event is None:
         raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
 
-    if event.status != EventStatus.NEW:
+    # ISSUE-054: graph investigation accepts NEW (fresh event) or TRIAGING
+    # (crash recovery — SuperAgent died after transitioning to TRIAGING but
+    # before completing; the lease has since expired).  The synchronous lease
+    # acquisition below is the final gate: if a lease is still held (active
+    # investigation), the caller receives HTTP 409; if the lease expired
+    # (genuine crash), the acquisition succeeds and investigation resumes.
+    # This aligns with SuperAgent._build_initial_state which also accepts
+    # both NEW and TRIAGING as valid graph entry points.
+    if event.status not in (EventStatus.NEW, EventStatus.TRIAGING):
         raise InvalidStateTransitionError(
-            f"event must be in NEW status to start investigation, current: {event.status.value}",
+            f"event must be in NEW or TRIAGING status to start investigation, "
+            f"current: {event.status.value}",
             current=event.status,
             target=EventStatus.TRIAGING,
             details={"event_id": event_id},
@@ -765,7 +774,7 @@ async def investigate_event(
 
     return s.InvestigateResponse(
         event_id=event_id,
-        task_id=event_id,
+        task_id=event_id,  # TODO(ISSUE-056): replace with Celery task_id once Celery worker integration lands
         status=event.status,
     )
 

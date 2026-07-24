@@ -1360,6 +1360,67 @@ class TestGraphEdgeCases:
         assert result.final_status == EventStatus.REPORTING
 
     @pytest.mark.asyncio
+    async def test_freeze_snapshot_db_error_sets_degraded_flag(self) -> None:
+        """When freeze_source_snapshot fails with a non-AttributeError (e.g.
+        DB outage), the investigation proceeds degraded — ``degraded_flags``
+        must contain ``"source_snapshot_failed"`` and ``escalated`` must be
+        ``True`` so downstream agents know the event image may be stale."""
+        redis = _FakeRedis()
+        event_id = "evt-20240724-dbdown"
+        event = _FakeEvent(event_id)
+
+        event_service = AsyncMock()
+        event_service.get_event.return_value = event
+        # Simulate a DB operational error — NOT an AttributeError.
+        event_service.freeze_source_snapshot = AsyncMock(
+            side_effect=RuntimeError("Database connection pool exhausted")
+        )
+
+        agent = _make_super_agent(event_service=event_service, redis=redis)
+
+        # Directly exercise _build_initial_state so we can inspect
+        # degraded_flags BEFORE the graph mock swallows them.
+        state = await agent._build_initial_state(event_id)
+
+        assert "source_snapshot_failed" in state["degraded_flags"], (
+            "degraded_flags must contain 'source_snapshot_failed' "
+            "when freeze_source_snapshot raises a non-AttributeError"
+        )
+        assert state["escalated"] is True, (
+            "escalated must be True when source_snapshot freeze fails — "
+            "downstream agents need to know data may be inconsistent"
+        )
+        assert state["source_snapshot"] is None, (
+            "source_snapshot must be None when freeze fails"
+        )
+
+    @pytest.mark.asyncio
+    async def test_freeze_snapshot_attribute_error_not_degraded(self) -> None:
+        """AttributeError (method not implemented, ISSUE-029) should NOT set
+        degraded_flags — it's an expected absence, not a failure."""
+        redis = _FakeRedis()
+        event_id = "evt-20240724-noimpl"
+        event = _FakeEvent(event_id)
+
+        event_service = AsyncMock()
+        event_service.get_event.return_value = event
+        event_service.freeze_source_snapshot = AsyncMock(
+            side_effect=AttributeError(
+                "type object 'EventService' has no attribute 'freeze_source_snapshot'"
+            )
+        )
+
+        agent = _make_super_agent(event_service=event_service, redis=redis)
+        state = await agent._build_initial_state(event_id)
+
+        assert "source_snapshot_failed" not in state["degraded_flags"], (
+            "degraded_flags must NOT contain 'source_snapshot_failed' "
+            "when freeze_source_snapshot is merely not implemented (AttributeError)"
+        )
+        assert state["escalated"] is False
+        assert state["source_snapshot"] is None
+
+    @pytest.mark.asyncio
     async def test_analysis_only_mode_rejected_by_super_agent(self) -> None:
         """SuperAgent.investigate rejects analysis_only mode regardless of
         ALLOW_LIVE_SIDE_EFFECTS — the API-layer gate is tested separately."""

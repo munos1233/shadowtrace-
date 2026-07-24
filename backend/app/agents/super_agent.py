@@ -194,7 +194,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         from the original spec signature ``-> None`` (ISSUE-054 §4). Returning
         the structured result is a deliberate improvement — it lets callers
         inspect the investigation outcome without an extra DB round-trip.
-        The spec will be updated to reflect this change.
+        TODO(ISSUE-055): create a small Issue to update the spec document
+        to reflect this return type change.
         """
         self._status = SuperAgentStatus.IDLE
         self._lease_lost = False  # Reset between investigations (ISSUE-054 Blocker #1)
@@ -421,17 +422,28 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         op: Any,
         *,
         level: int = logging.WARNING,
+        critical: bool = False,
     ) -> Any:
         """Shared helper for ISSUE-029 snapshot operations.
 
         Both ``refresh_snapshot`` and ``freeze_source_snapshot`` follow the
         same pattern: call the method, swallow ``AttributeError`` only when
-        the method itself is absent (ISSUE-029 not yet landed), propagate all
-        other exceptions.  This helper eliminates the duplicated try/except
-        blocks (ISSUE-054 Nit #3).
+        the method itself is absent (ISSUE-029 not yet landed).
+
+        When *critical* is ``False`` (the default), non-AttributeError
+        exceptions are logged and swallowed — suitable for best-effort
+        cleanup like ``refresh_snapshot`` in the ``finally`` block.
+
+        When *critical* is ``True``, non-AttributeError exceptions are
+        **re-raised** so callers can record them in ``degraded_flags``
+        and escalate.  This ensures ``freeze_source_snapshot`` failures
+        (DB outage, pool exhaustion, serialisation errors) are never
+        silently lost — downstream agents must know they are working
+        with a potentially stale event image.
 
         Returns the result of ``op(event_id)`` on success, or ``None`` when
-        the method is absent or the call raises.
+        the method is absent (AttributeError) or the call raises in
+        non-critical mode.
         """
         try:
             return await op(event_id)
@@ -453,6 +465,8 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
                 op_name,
                 event_id,
             )
+            if critical:
+                raise
             return None
 
     async def _get_lease(self) -> EventLease:
@@ -630,13 +644,29 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         # ── Freeze source snapshot for this investigation ──────────
         # ISSUE-054 §4 requires the source_snapshot to be frozen before graph
         # execution so all downstream agents see a consistent event image.
-        frozen = await self._try_snapshot_op(
-            event_id,
-            "freeze_source_snapshot",
-            self._event_service.freeze_source_snapshot,
-        )
-        if frozen is not None:
-            state["source_snapshot"] = frozen
+        #
+        # Freeze is *critical*: if it fails for any reason other than "method
+        # not yet implemented" (ISSUE-029), the investigation must proceed
+        # degraded — but the degradation MUST be recorded so downstream
+        # agents know they are working with a potentially stale event image.
+        try:
+            frozen = await self._try_snapshot_op(
+                event_id,
+                "freeze_source_snapshot",
+                self._event_service.freeze_source_snapshot,
+                critical=True,
+            )
+        except Exception:
+            logger.exception(
+                "CRITICAL: freeze_source_snapshot failed for event=%s — "
+                "investigation will proceed with degraded source_snapshot",
+                event_id,
+            )
+            state["degraded_flags"].append("source_snapshot_failed")
+            state["escalated"] = True
+        else:
+            if frozen is not None:
+                state["source_snapshot"] = frozen
 
         return state
 
@@ -759,6 +789,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, InvestigationResult]):
         _MAX_RENEWAL_FAILURES = 3
         renewal_failures = 0
         while True:
+            # NOTE: asyncio.sleep is NOT interrupted by Redis connection
+            # errors — it only yields on CancelledError (from task.cancel()).
+            # If Redis becomes unreachable mid-sleep, the loop will discover
+            # the failure at the next wake-up when lease.renew() raises.
+            # This is by design rather than busy-polling.
             await asyncio.sleep(RENEW_INTERVAL_SECONDS)
             ok = await lease.renew(event_id)
             if not ok:
