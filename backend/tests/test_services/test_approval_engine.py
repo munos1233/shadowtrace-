@@ -763,3 +763,107 @@ async def test_all_rejected_transitions_to_reporting(
         event = await session.get(orm.SecurityEvent, event_id)
         assert event is not None
         assert event.status == EventStatus.REPORTING.value
+
+
+@pytest.mark.asyncio
+async def test_evaluate_plan_defers_plan_advance_until_all_actions_decided(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    state_machine: StateMachineService,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    event_id = await _create_event(session_factory, store)
+    l0 = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L0),
+    )
+    l4 = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4),
+    )
+    result = await engine.evaluate_plan(event_id, 1, _risk())
+    assert result.needs_wait is True
+    assert result.evaluated_count == 2
+    async with session_factory() as session:
+        event = await session.get(orm.SecurityEvent, event_id)
+        assert event is not None
+        assert event.status == EventStatus.WAITING_APPROVAL.value
+        l0_row = await session.get(orm.Action, l0.action_id)
+        l4_row = await session.get(orm.Action, l4.action_id)
+        assert l0_row is not None and l0_row.status == ActionStatus.APPROVED.value
+        assert l4_row is not None and l4_row.status == ActionStatus.WAITING_APPROVAL.value
+
+
+@pytest.mark.asyncio
+async def test_capability_revoked_during_wait_requires_reapproval(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    state_machine: StateMachineService,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    manifest = build_mock_capability_manifest()
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        capability_manifest=manifest,
+    )
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4, tool_name="block_ip"),
+    )
+    await engine.evaluate(action, _risk(), approval_cycle=0)
+    engine._manifest = manifest.model_copy(
+        update={
+            "allowed_operations": [op for op in manifest.allowed_operations if op != "block_ip"]
+        }
+    )
+    principal = Principal(subject="approver-1", roles=["approver"])
+    with pytest.raises(InvalidStateTransitionError, match="re-evaluate"):
+        await engine.approve(action.action_id, principal, "ok", "dec-cap-revoked")
+
+    decision = await engine.evaluate(action, _risk(), approval_cycle=1)
+    assert decision.decision is ApprovalDecisionKind.AUTO_REJECT
+    async with session_factory() as session:
+        row = await session.get(orm.Action, action.action_id)
+        assert row is not None
+        assert row.status == ActionStatus.REJECTED.value
+
+
+@pytest.mark.asyncio
+async def test_evaluate_plan_resume_hook_called_when_fully_decided(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    state_machine: StateMachineService,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    resume = AsyncMock()
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        resume_investigation=resume,
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    event_id = await _create_event(session_factory, store)
+    await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L0),
+    )
+    result = await engine.evaluate_plan(event_id, 1, _risk())
+    assert result.needs_wait is False
+    resume.assert_awaited_once_with(event_id)

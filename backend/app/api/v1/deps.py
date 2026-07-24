@@ -139,6 +139,7 @@ async def get_approval_engine() -> Any:
             event_bus=_get_event_bus(),
             state_machine=state_machine,
             context_store=_get_context_store(),
+            resume_investigation=_resume_investigation,
         )
     return _approval_engine
 

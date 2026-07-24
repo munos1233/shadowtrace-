@@ -45,5 +45,7 @@ class InvestigationState(TypedDict, total=False):
     evidence_output: dict[str, Any] | None
     rag_output: dict[str, Any] | None
     risk_assessment: dict[str, Any] | None
+    response_plan: dict[str, Any] | None
+    plan_revision: int
     report_generated: bool
     needs_approval_wait: bool

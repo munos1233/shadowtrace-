@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
@@ -54,6 +55,15 @@ L3_CONFIDENCE_THRESHOLD = 0.85
 ResumeHook = Callable[[str], Awaitable[None]]
 
 _APPROVAL_TERMINAL = frozenset({ActionStatus.APPROVED, ActionStatus.REJECTED})
+
+
+@dataclass(frozen=True)
+class EvaluatePlanResult:
+    """Outcome of evaluating every response action in one plan revision."""
+
+    needs_wait: bool
+    plan_revision: int
+    evaluated_count: int
 
 
 def evaluate_hard_gates(
@@ -198,6 +208,41 @@ class ApprovalEngine:
         self._resume = resume_investigation
         self._approval_required_published: set[str] = set()
 
+    async def evaluate_plan(
+        self,
+        event_id: str,
+        plan_revision: int,
+        risk_assessment: RiskAssessment | None,
+        *,
+        disposition_confidence: float | None = None,
+        approval_cycle: int = 0,
+    ) -> EvaluatePlanResult:
+        """Evaluate every response action for ``plan_revision`` before execution."""
+        actions = await self._load_plan_response_actions(event_id, plan_revision)
+        if not actions:
+            return EvaluatePlanResult(
+                needs_wait=False,
+                plan_revision=plan_revision,
+                evaluated_count=0,
+            )
+        for action in actions:
+            await self.evaluate(
+                action,
+                risk_assessment,
+                approval_cycle,
+                disposition_confidence=disposition_confidence,
+                advance_plan=False,
+            )
+        refreshed = await self._load_plan_response_actions(event_id, plan_revision)
+        needs_wait = any(action.status is ActionStatus.WAITING_APPROVAL for action in refreshed)
+        if not needs_wait:
+            await self._maybe_advance_plan(event_id, plan_revision)
+        return EvaluatePlanResult(
+            needs_wait=needs_wait,
+            plan_revision=plan_revision,
+            evaluated_count=len(actions),
+        )
+
     async def evaluate(
         self,
         action: Action,
@@ -205,6 +250,7 @@ class ApprovalEngine:
         approval_cycle: int,
         *,
         disposition_confidence: float | None = None,
+        advance_plan: bool = True,
     ) -> ApprovalDecision:
         existing = await self._load_record(action.action_id, approval_cycle)
         if existing is not None:
@@ -225,7 +271,7 @@ class ApprovalEngine:
             decision = evaluate_level_rules(action, confidence=confidence, severity=severity)
 
         await self._persist_evaluation(action, decision, approval_cycle)
-        await self._apply_evaluation(action, decision)
+        await self._apply_evaluation(action, decision, advance_plan=advance_plan)
         return decision
 
     async def approve(
@@ -371,6 +417,20 @@ class ApprovalEngine:
                     )
                 action = _action_from_orm(row)
 
+                if target_status is ActionStatus.APPROVED:
+                    gate = evaluate_hard_gates(action, manifest=self._manifest)
+                    if gate is not None:
+                        raise InvalidStateTransitionError(
+                            "approval blocked: capability or policy changed; re-evaluate required",
+                            current=action.status.value,
+                            target=target_status.value,
+                            details={
+                                "action_id": action_id,
+                                "rule_applied": gate.rule_applied,
+                                "reason": gate.reason,
+                            },
+                        )
+
                 if decision_id:
                     replay = await session.scalar(
                         select(ApprovalRecordORM).where(
@@ -489,8 +549,14 @@ class ApprovalEngine:
             await self._ensure_event_waiting_approval(action.event_id)
             await self._publish_approval_required(action, approval_cycle)
 
-    async def _apply_evaluation(self, action: Action, decision: ApprovalDecision) -> None:
-        if decision.decision in {
+    async def _apply_evaluation(
+        self,
+        action: Action,
+        decision: ApprovalDecision,
+        *,
+        advance_plan: bool = True,
+    ) -> None:
+        if advance_plan and decision.decision in {
             ApprovalDecisionKind.AUTO_APPROVE,
             ApprovalDecisionKind.AUTO_REJECT,
         }:

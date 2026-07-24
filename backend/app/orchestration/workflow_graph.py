@@ -21,6 +21,7 @@ from app.models.agent_io import (
     PlannerAgentInput,
     RAGOutput,
     ReportAgentInput,
+    ResponseAgentInput,
     RiskAgentInput,
     RiskAssessment,
     ScoringMode,
@@ -325,6 +326,16 @@ async def _hydrate_context(
         target["final_verdict"] = context.event.final_verdict.value
 
 
+def _plan_revision_from_state(state: InvestigationState) -> int:
+    execution_plan = state.get("execution_plan") or {}
+    revision = execution_plan.get("revision")
+    if revision is not None and int(revision) > 0:
+        return int(revision)
+    if state.get("plan_revision") is not None:
+        return int(state["plan_revision"])
+    return 1
+
+
 def build_investigation_graph(
     agents: dict[str, Any],
     services: dict[str, Any],
@@ -350,6 +361,7 @@ def build_investigation_graph(
     evidence_agent = cast(_AgentLike, agents["evidence_agent"])
     risk_agent = cast(_AgentLike, agents["risk_agent"])
     report_agent = cast(_AgentLike, agents["report_agent"])
+    response_agent = cast(_AgentLike | None, agents.get("response_agent"))
     rag_agent = cast(RAGAgent | None, agents.get("rag_agent"))
     runtime = cast(_WorkflowRuntimeLike, services["workflow_runtime"])
     event_service = cast(_EventServiceLike, services["event_service"])
@@ -609,6 +621,23 @@ def build_investigation_graph(
                 _trace(NODE_RESPONSE),
                 {"halted": True},
             )
+        plan_revision = _plan_revision_from_state(state)
+        response_update: dict[str, Any] = {"plan_revision": plan_revision}
+        if response_agent is not None:
+            risk = RiskAssessment.model_validate(state["risk_assessment"])
+            evidence = (
+                EvidenceOutput.model_validate(state["evidence_output"])
+                if state.get("evidence_output") is not None
+                else None
+            )
+            result = await response_agent.execute(
+                ResponseAgentInput(
+                    event_id=state["event_id"],
+                    risk_assessment=risk,
+                    evidence_output=evidence,
+                )
+            )
+            response_update["response_plan"] = result.model_dump(mode="json")
         verdict_raw = state.get("final_verdict")
         status = await _transition_status(
             services,
@@ -618,11 +647,63 @@ def build_investigation_graph(
                 disposition_only_intent=bool(state.get("disposition_only_intent")),
                 final_verdict=FinalVerdict(verdict_raw) if verdict_raw else None,
             ),
-            reason="investigation:response_stub",
+            reason=(
+                "investigation:response_plan"
+                if response_agent is not None
+                else "investigation:response_stub"
+            ),
         )
-        return _patch_state(_trace(NODE_RESPONSE), status)
+        return _patch_state(_trace(NODE_RESPONSE), status, response_update)
 
     async def approval_node(state: InvestigationState) -> InvestigationState:
+        approval_engine = services.get("approval_engine")
+        if approval_engine is not None:
+            plan_revision = _plan_revision_from_state(state)
+            risk = (
+                RiskAssessment.model_validate(state["risk_assessment"])
+                if state.get("risk_assessment") is not None
+                else None
+            )
+            result = await approval_engine.evaluate_plan(
+                state["event_id"],
+                plan_revision,
+                risk,
+                disposition_confidence=state.get("confidence"),
+            )
+            if result.needs_wait:
+                await runtime.set_execution_substate(
+                    state["event_id"],
+                    ExecutionSubstate.WAITING_APPROVAL,
+                    event_status=EventStatus.WAITING_APPROVAL,
+                )
+                return _patch_state(
+                    _trace(NODE_APPROVAL),
+                    {
+                        "execution_substate": ExecutionSubstate.WAITING_APPROVAL.value,
+                        "needs_approval_wait": True,
+                        "plan_revision": plan_revision,
+                    },
+                )
+            if result.evaluated_count > 0:
+                await runtime.set_execution_substate(
+                    state["event_id"],
+                    ExecutionSubstate.NONE,
+                    event_status=EventStatus.EXECUTING_RESPONSE,
+                )
+                current = EventStatus(state.get("event_status", EventStatus.WAITING_APPROVAL.value))
+                update: dict[str, Any] = {
+                    "execution_substate": ExecutionSubstate.NONE.value,
+                    "plan_revision": plan_revision,
+                }
+                if current is not EventStatus.EXECUTING_RESPONSE:
+                    status = await _transition_status(
+                        services,
+                        state,
+                        EventStatus.EXECUTING_RESPONSE,
+                        reason="investigation:approval_decided",
+                    )
+                    update.update(status)
+                return _patch_state(_trace(NODE_APPROVAL), update)
         if state.get("needs_approval_wait"):
             await runtime.set_execution_substate(
                 state["event_id"],
@@ -657,11 +738,22 @@ def build_investigation_graph(
         )
 
     async def execute_node(state: InvestigationState) -> InvestigationState:
+        action_execution = services.get("action_execution")
+        if action_execution is not None:
+            plan_revision = _plan_revision_from_state(state)
+            await action_execution.execute_plan(
+                state["event_id"],
+                plan_revision=plan_revision,
+            )
         status = await _transition_status(
             services,
             state,
             EventStatus.VERIFYING,
-            reason="investigation:execute_stub",
+            reason=(
+                "investigation:execute_plan"
+                if action_execution is not None
+                else "investigation:execute_stub"
+            ),
         )
         return _patch_state(_trace(NODE_EXECUTE), status)
 

@@ -35,6 +35,8 @@ from app.orchestration.checkpointer import (
 )
 from app.orchestration.graph_state import InvestigationState
 from app.orchestration.workflow_graph import (
+    NODE_APPROVAL,
+    NODE_APPROVAL_WAIT,
     NODE_BEGIN_DISPOSITION_ONLY,
     NODE_CLOSE,
     NODE_HALT,
@@ -574,3 +576,64 @@ def test_required_workflow_services_reject_none(service_name: str) -> None:
 
     with pytest.raises(ValueError, match=service_name):
         build_investigation_graph(_agents(), services)
+
+
+@dataclass
+class FakeEvaluatePlanResult:
+    needs_wait: bool
+    plan_revision: int
+    evaluated_count: int
+
+
+class FakeApprovalEngine:
+    def __init__(
+        self,
+        *,
+        needs_wait: bool = False,
+        evaluated_count: int = 0,
+    ) -> None:
+        self.needs_wait = needs_wait
+        self.evaluated_count = evaluated_count
+        self.calls: list[tuple[str, int]] = []
+
+    async def evaluate_plan(
+        self,
+        event_id: str,
+        plan_revision: int,
+        risk: RiskAssessment | None,
+        *,
+        disposition_confidence: float | None = None,
+    ) -> FakeEvaluatePlanResult:
+        self.calls.append((event_id, plan_revision))
+        return FakeEvaluatePlanResult(
+            needs_wait=self.needs_wait,
+            plan_revision=plan_revision,
+            evaluated_count=self.evaluated_count,
+        )
+
+
+@pytest.mark.asyncio
+async def test_approval_engine_wiring_halts_when_plan_needs_wait() -> None:
+    services = _services()
+    services["approval_engine"] = FakeApprovalEngine(needs_wait=True, evaluated_count=2)
+    final = await build_investigation_graph(_agents(), services).ainvoke(
+        _base_state(),
+        {"configurable": {"thread_id": "evt-approval-wait"}},
+    )
+    assert final["node_trace"][-2:] == [NODE_APPROVAL, NODE_APPROVAL_WAIT]
+    assert final["halted"] is True
+    assert final["execution_substate"] == ExecutionSubstate.WAITING_APPROVAL.value
+    assert services["approval_engine"].calls == [("evt-graph-001", 1)]
+
+
+@pytest.mark.asyncio
+async def test_approval_engine_wiring_without_actions_keeps_golden_path() -> None:
+    machine = FakeStateMachine()
+    services = _services(machine)
+    services["approval_engine"] = FakeApprovalEngine(needs_wait=False, evaluated_count=0)
+    final = await build_investigation_graph(_agents(), services).ainvoke(
+        _base_state(),
+        {"configurable": {"thread_id": "evt-approval-stub"}},
+    )
+    assert tuple(final["node_trace"]) == P0_NODE_SEQUENCE
+    assert machine.status is EventStatus.CLOSED
