@@ -465,7 +465,11 @@ async def _query_writebacks(
             (
                 await session.execute(
                     select(orm.DispositionReceipt)
-                    .where(orm.DispositionReceipt.action_id.like(f"{event_id}%"))
+                    .join(
+                        orm.DispositionOutbox,
+                        orm.DispositionReceipt.writeback_id == orm.DispositionOutbox.writeback_id,
+                    )
+                    .where(orm.DispositionOutbox.event_id == event_id)
                     .order_by(orm.DispositionReceipt.observed_at)
                 )
             ).scalars()

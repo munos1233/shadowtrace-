@@ -270,6 +270,46 @@ class TestDecisionTraceService:
         assert trace.summary.agent_count == 1
         assert trace.summary.llm_call_count == 0
 
+    @pytest.mark.asyncio
+    async def test_writeback_query_uses_join(self) -> None:
+        """Writeback entries are fetched via JOIN with disposition_outbox."""
+        from app.db import models as orm
+
+        receipt_row = MagicMock(
+            spec=orm.DispositionReceipt,
+            writeback_id="wbk-1",
+            sequence=1,
+            action_id="act-1",
+            status="confirmed",
+            observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            submitted_at=None,
+            provider_code="200",
+            provider_message=None,
+            simulated=True,
+        )
+
+        async def _execute(stmt: Any) -> MagicMock:
+            result = MagicMock()
+            stmt_str = str(stmt)
+            if "disposition_receipt" in stmt_str and "disposition_outbox" in stmt_str:
+                result.scalars = lambda: MagicMock(__iter__=lambda self: iter([receipt_row]))
+            else:
+                result.scalars = lambda: MagicMock(__iter__=lambda self: iter([]))
+            return result
+
+        mock_session = AsyncMock()
+        mock_session.execute = _execute
+        mock_sf = MagicMock()
+        mock_sf.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sf.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        service = DecisionTraceService(mock_sf)
+        trace = await service.get_decision_trace("evt-wb")
+
+        assert len(trace.entries) == 1
+        assert trace.entries[0].entry_type == "writeback"
+        assert trace.entries[0].detail["writeback_id"] == "wbk-1"
+
 
 __all__ = [
     "TestSortKey",
