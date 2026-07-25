@@ -227,9 +227,40 @@ class GraphResponse(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DecisionTraceEntrySchema(BaseModel):
+    entry_id: str
+    entry_type: str
+    timestamp: str
+    actor: str
+    title: str
+    detail: dict[str, Any] = Field(default_factory=dict)
+    ref_id: str = ""
+
+
+class DecisionTraceSummarySchema(BaseModel):
+    agent_count: int = 0
+    tool_call_count: int = 0
+    llm_call_count: int = 0
+    total_tokens: int = 0
+    state_transition_count: int = 0
+    approval_count: int = 0
+    action_execution_count: int = 0
+    disposition_count: int = 0
+    writeback_count: int = 0
+    total_duration_ms: int = 0
+
+
 class DecisionTraceResponse(BaseModel):
     event_id: str
-    steps: list[dict[str, Any]] = Field(default_factory=list)
+    entries: list[DecisionTraceEntrySchema] = Field(default_factory=list)
+    summary: DecisionTraceSummarySchema = Field(default_factory=DecisionTraceSummarySchema)
+    missing_sources: list[str] = Field(default_factory=list)
+
+
+class DecisionTraceQuery(BaseModel):
+    entry_type: str | None = None
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=200)
 
 
 class ActionListResponse(PageMeta):

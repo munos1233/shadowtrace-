@@ -1298,7 +1298,7 @@ async def get_graph(
 
 
 # --------------------------------------------------------------------------- #
-# GET /events/{event_id}/decision-trace (stub, real implementation deferred)
+# GET /events/{event_id}/decision-trace — aggregated timeline (ISSUE-063)
 # --------------------------------------------------------------------------- #
 
 
@@ -1306,12 +1306,46 @@ async def get_graph(
 async def get_decision_trace(
     event_id: str,
     principal: CurrentPrincipal,
+    query: Annotated[s.DecisionTraceQuery, Depends()],
     event_service: EventService = Depends(get_event_service),
 ) -> s.DecisionTraceResponse:
+    """Return a merged decision trace timeline for *event_id*.
+
+    Query params: *entry_type* (filter to one entry type), *page* / *page_size*
+    for pagination.
+    """
     event = await event_service.get_event(event_id)
     if event is None:
         raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
-    return s.DecisionTraceResponse(event_id=event_id, steps=[])
+
+    sf = _try_get_session_factory()
+    if sf is None:
+        return s.DecisionTraceResponse(event_id=event_id)
+
+    from app.services.decision_trace_service import DecisionTraceService
+
+    service = DecisionTraceService(sf)
+    trace = await service.get_decision_trace(event_id)
+
+    # Optional entry_type filter
+    if query.entry_type:
+        trace.entries = [e for e in trace.entries if e.entry_type == query.entry_type]
+        # Recompute summary for filtered view
+        from app.services.decision_trace_service import _compute_summary
+
+        trace.summary = _compute_summary(trace.entries)
+
+    # Pagination
+    start = (query.page - 1) * query.page_size
+    end = start + query.page_size
+    page_entries = trace.entries[start:end]
+
+    return s.DecisionTraceResponse(
+        event_id=trace.event_id,
+        entries=[s.DecisionTraceEntrySchema(**e.to_dict()) for e in page_entries],
+        summary=s.DecisionTraceSummarySchema(**trace.summary.to_dict()),
+        missing_sources=trace.missing_sources,
+    )
 
 
 # --------------------------------------------------------------------------- #
