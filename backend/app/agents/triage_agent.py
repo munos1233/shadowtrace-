@@ -416,6 +416,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         trace_service: Any | None = None,
         audit_service: Any | None = None,
         event_bus: Any | None = None,
+        fp_matcher: Any | None = None,
     ) -> None:
         super().__init__(
             llm_client=llm_client,
@@ -431,6 +432,22 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         # Convenience aliases matching the Issue-032 naming convention.
         self.pre_triage_hooks = self.pre_hooks
         self.post_triage_hooks = self.post_hooks
+
+        # Install the ISSUE-078 FalsePositiveMatcherHook (vector-based FP matching).
+        # Runs BEFORE the RuleBasedFalsePositiveHook so the deterministic rule-based
+        # matcher can override with higher-confidence signature matches.
+        # Uses its own BoundWorkingMemory bound to the "FalsePositiveMatcher" writer
+        # identity (same owner as RuleBasedFalsePositiveHook via WRITER_ALIASES).
+        if working_memory is not None and fp_matcher is not None:
+            from app.services.false_positive_matcher import FalsePositiveMatcherHook
+
+            fp_matcher_memory = working_memory.for_writer("FalsePositiveMatcher")
+            self.pre_triage_hooks.append(
+                FalsePositiveMatcherHook(
+                    matcher=fp_matcher,
+                    working_memory=fp_matcher_memory,
+                )
+            )
 
         # Install the P0 RuleBasedFalsePositiveHook with its own writer identity.
         # The hook must write to EventContext.false_positive_match via the
