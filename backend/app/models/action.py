@@ -25,7 +25,6 @@ from app.models.enums import (
     ActionLevel,
     ActionStatus,
     ExecutionOwner,
-    Severity,
     SourceDisposition,
     WritebackReadiness,
     WritebackStatus,
@@ -35,15 +34,30 @@ TERMINAL_DISPOSITION_TOOL = "update_source_event_disposition"
 
 
 class ImpactAssessment(BaseModel):
-    """Estimated blast radius / reversibility of an action (detailed in ISSUE-079)."""
+    """Estimated blast radius / reversibility of an action (ISSUE-079).
+
+    Fields match the ISSUE-079 unified naming:
+    - ``impact_score``: 0-100, base (action_level) + asset bonus, capped at 100
+    - ``business_disruption``: none / low / medium / high
+    - ``reversible``: per rollback mapping (e.g. force_logout → False)
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    impact_level: Severity = Severity.LOW
-    reversible: bool = True
+    action_id: str
+    impact_score: int = Field(default=0, ge=0, le=100, description="0-100 composite impact score")
+    affected_scope: str = Field(default="", description="Description of affected targets and scope")
+    reversible: bool = Field(default=True, description="Whether the action can be rolled back")
+    business_disruption: str = Field(
+        default="none",
+        description="none | low | medium | high",
+    )
+    assessment_detail: str | None = Field(
+        default=None, description="Human-readable assessment rationale"
+    )
+    # Backward-compatible fields from ISSUE-040 placeholder.
     affected_entity_count: int = 0
     affected_targets: list[str] = Field(default_factory=list)
-    notes: str | None = None
     assessed_by: str | None = None
 
 

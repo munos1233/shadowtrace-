@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -194,6 +194,7 @@ class ApprovalEngine:
         context_store: EventContextStore | None = None,
         capability_manifest: CapabilityManifest | None = None,
         resume_investigation: ResumeHook | None = None,
+        impact_assessment_service: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
@@ -206,6 +207,7 @@ class ApprovalEngine:
         else:
             self._manifest = capability_manifest
         self._resume = resume_investigation
+        self._impact_assessment = impact_assessment_service
         self._approval_required_published: set[str] = set()
 
     async def evaluate_plan(
@@ -259,6 +261,18 @@ class ApprovalEngine:
                 rule_applied=str((existing.detail or {}).get("rule_applied", "existing_record")),
                 reason=str((existing.detail or {}).get("reason", "existing approval record")),
             )
+
+        # ISSUE-079: run impact assessment before hard gates so the result
+        # flows into the approval record detail and approval_required payload.
+        if self._impact_assessment is not None and action.impact_assessment is None:
+            try:
+                action.impact_assessment = await self._impact_assessment.assess(action)
+            except Exception:
+                logger.warning(
+                    "Impact assessment failed for action=%s; continuing without it",
+                    action.action_id,
+                    exc_info=True,
+                )
 
         gate = evaluate_hard_gates(action, manifest=self._manifest)
         if gate is not None:
