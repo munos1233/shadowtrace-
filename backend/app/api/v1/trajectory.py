@@ -6,6 +6,8 @@ import logging
 
 from fastapi import APIRouter, Depends
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from app.api.v1.deps import get_event_service
 from app.api.v1.errors import EventNotFoundError
 from app.core.auth import CurrentPrincipal
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["trajectory"])
 
 
-def _try_get_session_factory():
+def _try_get_session_factory() -> async_sessionmaker[AsyncSession] | None:
     """Return the session factory, or None if DB is unavailable."""
     try:
         from app.api.v1.deps import _get_session_factory
