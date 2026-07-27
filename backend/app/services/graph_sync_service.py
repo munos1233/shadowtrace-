@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -204,7 +205,7 @@ class GraphSyncService:
                 continue
             label = _neo4j_label(node.entity_type)
             try:
-                await self._client.run_cypher(  # type: ignore[union-attr]
+                await self._client.run_cypher(
                     _MERGE_NODE.format(label=label),
                     {
                         "node_id": node.node_id,
@@ -232,7 +233,7 @@ class GraphSyncService:
                 continue
             rel_type = _neo4j_rel_type(edge.relation_type)
             try:
-                records = await self._client.run_cypher(  # type: ignore[union-attr]
+                records = await self._client.run_cypher(
                     _MERGE_EDGE.format(rel_type=rel_type),
                     {
                         "source_node_id": edge.source_node_id,
@@ -299,7 +300,7 @@ class GraphSyncService:
             return await self._pg_query_paths(event_id, start_value, end_value, max_depth)
 
         try:
-            records = await self._client.run_cypher(  # type: ignore[union-attr]
+            records = await self._client.run_cypher(
                 _SHORTEST_PATH.format(max_depth=int(max_depth)),
                 {
                     "start_value": start_value,
@@ -320,10 +321,10 @@ class GraphSyncService:
         for rec in records:
             results.append(
                 PathResult(
-                    node_ids=list(rec.get("node_ids", [])),
-                    node_labels=list(rec.get("node_labels", [])),
-                    edge_types=list(rec.get("edge_types", [])),
-                    path_length=int(rec.get("path_length", 0)),
+                    node_ids=list(cast(list[str], rec.get("node_ids", []))),
+                    node_labels=list(cast(list[str], rec.get("node_labels", []))),
+                    edge_types=list(cast(list[str], rec.get("edge_types", []))),
+                    path_length=int(cast(int, rec.get("path_length", 0))),
                 )
             )
         return results

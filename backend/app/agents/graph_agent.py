@@ -124,7 +124,9 @@ class GraphAgent(BaseAgent[GraphAgentInput, GraphOutput]):
                 )
             except Exception:
                 logger.warning(
-                    "Failed to schedule Neo4j sync for event=%s", event_id, exc_info=True,
+                    "Failed to schedule Neo4j sync for event=%s",
+                    event_id,
+                    exc_info=True,
                 )
 
         # 6. Write to EventContext via WorkingMemory
