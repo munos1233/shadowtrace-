@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections import Counter
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -45,7 +46,18 @@ class TrajectoryAnalyzer:
         decision trace is unavailable or contains too few entries.
         """
         trace_service = DecisionTraceService(self._session_factory)
-        trace = await trace_service.get_decision_trace(event_id)
+        try:
+            trace = await trace_service.get_decision_trace(event_id)
+        except Exception:
+            logger.warning(
+                "Failed to fetch decision trace for event=%s — returning insufficient",
+                event_id,
+                exc_info=True,
+            )
+            return TrajectoryReport(
+                event_id=event_id,
+                insufficient_trace=True,
+            )
 
         if not trace.entries:
             logger.info("No decision trace entries for event=%s", event_id)
@@ -84,10 +96,13 @@ class TrajectoryAnalyzer:
 
 
 def _tool_fingerprint(entry: DecisionTraceEntry) -> str:
-    """Stable fingerprint for a tool-call entry."""
-    params = entry.detail.get("parameters") or entry.detail
-    raw = f"{entry.actor}|{params}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+    """Stable fingerprint for a tool-call entry.
+
+    Uses ``actor`` (tool_name) as the grouping key.  The decision-trace
+    detail for tool calls does not include raw parameters, so the
+    fingerprint relies on the tool identity alone.
+    """
+    return hashlib.sha256(entry.actor.encode()).hexdigest()
 
 
 def _compute_redundant_tool_calls(entries: list[DecisionTraceEntry]) -> float:
@@ -95,8 +110,6 @@ def _compute_redundant_tool_calls(entries: list[DecisionTraceEntry]) -> float:
     tool_entries = [e for e in entries if e.entry_type == DecisionTraceEntryType.TOOL_CALL]
     if not tool_entries:
         return 0.0
-
-    from collections import Counter
 
     fingerprints = [_tool_fingerprint(e) for e in tool_entries]
     counts = Counter(fingerprints)

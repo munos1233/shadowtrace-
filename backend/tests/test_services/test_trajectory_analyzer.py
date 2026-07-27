@@ -70,32 +70,63 @@ class TestTrajectoryAnalyzer:
     async def test_redundant_tool_calls_detected(self) -> None:
         from app.services.trajectory_analyzer import _DUPLICATE_TOOL_THRESHOLD, TrajectoryAnalyzer
 
-        # Same tool + same params called 4 times
+        # Same tool (actor="query_endpoint") called 4 times — redundant.
+        # Detail matches real DecisionTraceService output (no "parameters" key).
         entries = [
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "query_endpoint",
-                {"tool_category": "query", "parameters": {"ip": "10.0.0.1"}},
+                {
+                    "tool_name": "query_endpoint",
+                    "tool_category": "query",
+                    "status": "success",
+                    "duration_ms": 100,
+                    "retry_count": 0,
+                },
             ),
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "query_endpoint",
-                {"tool_category": "query", "parameters": {"ip": "10.0.0.1"}},
+                {
+                    "tool_name": "query_endpoint",
+                    "tool_category": "query",
+                    "status": "success",
+                    "duration_ms": 120,
+                    "retry_count": 0,
+                },
             ),
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "query_endpoint",
-                {"tool_category": "query", "parameters": {"ip": "10.0.0.1"}},
+                {
+                    "tool_name": "query_endpoint",
+                    "tool_category": "query",
+                    "status": "success",
+                    "duration_ms": 95,
+                    "retry_count": 0,
+                },
             ),
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "query_endpoint",
-                {"tool_category": "query", "parameters": {"ip": "10.0.0.1"}},
+                {
+                    "tool_name": "query_endpoint",
+                    "tool_category": "query",
+                    "status": "success",
+                    "duration_ms": 110,
+                    "retry_count": 0,
+                },
             ),
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "block_ip",
-                {"tool_category": "action", "parameters": {"ip": "10.0.0.2"}},
+                {
+                    "tool_name": "block_ip",
+                    "tool_category": "action",
+                    "status": "success",
+                    "duration_ms": 50,
+                    "retry_count": 0,
+                },
             ),
         ]
         mock_trace = _mock_trace(entries)
@@ -122,13 +153,26 @@ class TestTrajectoryAnalyzer:
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "query_endpoint",
-                {"parameters": {"ip": "10.0.0.1"}},
+                {
+                    "tool_name": "query_endpoint",
+                    "tool_category": "query",
+                    "status": "success",
+                    "duration_ms": 100,
+                    "retry_count": 0,
+                },
             ),
             _entry(
                 DecisionTraceEntryType.TOOL_CALL,
                 "query_endpoint",
-                {"parameters": {"ip": "10.0.0.1"}},
-            ),  # only 2 calls < threshold
+                {
+                    "tool_name": "query_endpoint",
+                    "tool_category": "query",
+                    "status": "success",
+                    "duration_ms": 120,
+                    "retry_count": 0,
+                },
+            ),
+            # only 2 calls < threshold of 3
         ]
         mock_trace = _mock_trace(entries)
         mock_dt_service = MagicMock()
