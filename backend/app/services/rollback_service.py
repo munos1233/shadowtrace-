@@ -790,6 +790,7 @@ class RollbackService:
                 )
                 for outbox in outbox_rows:
                     disposition_id = new_disposition_id()
+                    parent_disposition_id = outbox.disposition_id
 
                     cmd = self._factory.build_compensation_record(
                         rollback_for_comp,
@@ -798,7 +799,7 @@ class RollbackService:
                         operator_id=operator,
                         disposition_id=disposition_id,
                         closure_cycle=original_action.plan_revision,
-                        parent_disposition_id=outbox.disposition_id,
+                        parent_disposition_id=parent_disposition_id,
                     )
 
                     try:
@@ -820,7 +821,7 @@ class RollbackService:
                     except Exception:
                         logger.exception(
                             "Failed to enqueue COMPENSATION_RECORD for disposition %s",
-                            outbox.disposition_id,
+                            parent_disposition_id,
                         )
 
                 if not writebacks:
