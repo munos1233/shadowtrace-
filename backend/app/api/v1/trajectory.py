@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends
-
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.v1.deps import get_event_service
