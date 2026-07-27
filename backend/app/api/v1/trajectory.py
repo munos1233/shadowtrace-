@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,8 +12,10 @@ from app.api.v1.deps import get_event_service
 from app.api.v1.errors import EventNotFoundError
 from app.core.auth import CurrentPrincipal
 from app.models.trajectory import TrajectoryReport
-from app.services.event_service import EventService
 from app.services.trajectory_analyzer import TrajectoryAnalyzer
+
+if TYPE_CHECKING:
+    from app.services.event_service import EventService
 
 logger = logging.getLogger(__name__)
 
