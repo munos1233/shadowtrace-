@@ -993,6 +993,7 @@ class VerifyAgent(BaseAgent[VerifyAgentInput, VerificationResult]):
             # activate_and_submit just enqueued.  Receipts may not exist yet
             # (outbox not delivered) or may be non-CONFIRMED — both route to
             # need_writeback_recovery rather than overall success.
+            assert activate_result is not None  # guarded by terminal_verify_ready
             terminal_wb_eval = await self._evaluate_terminal_writeback_status(
                 event_id=event_id,
                 activate_result=activate_result,
