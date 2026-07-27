@@ -16,6 +16,7 @@ Run (Neo4j required):
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -344,6 +345,13 @@ def test_sync_result_skipped() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _neo4j_required() -> None:
+    """Skip when NEO4J_ENABLED is not true — avoids FAIL when the user
+    runs the full suite without the required env var and Neo4j service."""
+    if os.environ.get("NEO4J_ENABLED", "").strip().lower() != "true":
+        pytest.skip("NEO4J_ENABLED not set to 'true'")
+
+
 @pytest.mark.neo4j
 @pytest.mark.asyncio
 async def test_sync_event_graph_persists_to_neo4j(
@@ -352,6 +360,7 @@ async def test_sync_event_graph_persists_to_neo4j(
 ) -> None:
     """With NEO4J_ENABLED=true, sync writes nodes+edges to Neo4j, then
     repeats idempotently with the same counts."""
+    _neo4j_required()
     from app.core.neo4j_client import Neo4jClient
 
     event_id = await _seed_event(session_factory)
@@ -382,6 +391,7 @@ async def test_query_paths_returns_shortest_path(
 ) -> None:
     """After syncing a simple graph, query_paths finds the shortest path
     between two entity values."""
+    _neo4j_required()
     from app.core.neo4j_client import Neo4jClient
 
     event_id = await _seed_event(session_factory)
