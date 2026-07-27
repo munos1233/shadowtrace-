@@ -429,11 +429,7 @@ async def build_initial_investigation_state(
     """Build LangGraph initial state from persisted EventContext + event row."""
     context = await context_store.get_full_context(event_id)
     event = context.event
-    policy = (
-        event.disposition_policy
-        if event is not None
-        else DispositionPolicy.NOT_REQUIRED
-    )
+    policy = event.disposition_policy if event is not None else DispositionPolicy.NOT_REQUIRED
     state: InvestigationState = {
         "event_id": event_id,
         "node_trace": [],
@@ -444,12 +440,8 @@ async def build_initial_investigation_state(
         "replan_count": int(context.replan_count or 0),
         "escalated": bool(event.escalated if event is not None else False),
         "disposition_policy": policy.value,
-        "event_status": (
-            event.status.value if event is not None else EventStatus.NEW.value
-        ),
-        "severity": (
-            event.severity.value if event is not None else Severity.MEDIUM.value
-        ),
+        "event_status": (event.status.value if event is not None else EventStatus.NEW.value),
+        "severity": (event.severity.value if event is not None else Severity.MEDIUM.value),
         "final_verdict": (
             event.final_verdict.value
             if event is not None and event.final_verdict is not None

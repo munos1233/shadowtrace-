@@ -79,9 +79,7 @@ async def _poll_event_status(
         if last_status == expected:
             return payload
         if last_status == "failed":
-            pytest.fail(
-                f"event {event_id} entered failed status while waiting for {expected!r}"
-            )
+            pytest.fail(f"event {event_id} entered failed status while waiting for {expected!r}")
         await asyncio.sleep(interval_s)
     pytest.fail(
         f"event {event_id} did not reach status {expected!r} within {timeout_s}s; "
