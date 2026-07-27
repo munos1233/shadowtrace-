@@ -70,6 +70,7 @@ from app.orchestration.workflow_graph import (
     ROUTE_RESPONSE,
     ROUTE_WAIT,
     ROUTE_WRITEBACK,
+    _resolve_verify_writeback_status,
     build_investigation_graph,
     route_after_approval,
     route_after_planner,
@@ -77,7 +78,6 @@ from app.orchestration.workflow_graph import (
     route_after_risk,
     route_after_triage,
     route_after_verify,
-    _resolve_verify_writeback_status,
 )
 
 
@@ -375,7 +375,9 @@ class TestResolveVerifyWritebackStatus:
             effect_status=EffectStatus.FAILED,
             writeback_required=writeback_status is not None,
             writeback_readiness=(
-                WritebackReadiness.READY if writeback_status is not None else WritebackReadiness.NOT_REQUIRED
+                WritebackReadiness.READY
+                if writeback_status is not None
+                else WritebackReadiness.NOT_REQUIRED
             ),
             writeback_status=writeback_status,
             writeback_ids=writeback_ids,
@@ -384,7 +386,12 @@ class TestResolveVerifyWritebackStatus:
     def test_matches_failed_writeback_id(self) -> None:
         result = self._result(
             failed_writebacks=["wbk-target"],
-            results=[self._action(writeback_ids=["wbk-target"], writeback_status=WritebackStatus.PENDING)],
+            results=[
+                self._action(
+                    writeback_ids=["wbk-target"],
+                    writeback_status=WritebackStatus.PENDING,
+                )
+            ],
         )
         assert _resolve_verify_writeback_status(result) == "pending"
 
@@ -392,7 +399,12 @@ class TestResolveVerifyWritebackStatus:
         """ISSUE-062: do not borrow another writeback's status on ID mismatch."""
         result = self._result(
             failed_writebacks=["wbk-target"],
-            results=[self._action(writeback_ids=["wbk-other"], writeback_status=WritebackStatus.CONFLICT)],
+            results=[
+                self._action(
+                    writeback_ids=["wbk-other"],
+                    writeback_status=WritebackStatus.CONFLICT,
+                )
+            ],
         )
         assert _resolve_verify_writeback_status(result) is None
 
