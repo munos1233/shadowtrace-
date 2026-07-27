@@ -79,9 +79,7 @@ _ZERO_DISRUPTION_TOOLS: frozenset[str] = frozenset(
 # A tool is reversible if it has a corresponding rollback tool in the canonical
 # map; tools absent from the map default to reversible=False (matching the intro
 # rule: "无映射则 rollback_supported=False").
-_REVERSIBLE_TOOLS: dict[str, bool] = {
-    tool: True for tool in RESPONSE_ROLLBACK_MAP
-}
+_REVERSIBLE_TOOLS: dict[str, bool] = {tool: True for tool in RESPONSE_ROLLBACK_MAP}
 # force_logout is explicitly irreversible (no rollback tool exists).
 _REVERSIBLE_TOOLS["force_logout"] = False
 
