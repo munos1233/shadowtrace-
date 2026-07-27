@@ -1,0 +1,27 @@
+{
+  "content": {
+    "title": "误报调查报告 · 变更窗口运维批量登录",
+    "summary": "账号 ops-change-bot 在变更窗口内通过 PC-OPS-JUMP-01 执行批量登录，匹配已知误报规则 ops_change_window_bulk_login，建议关闭。",
+    "sections": {
+      "overview": "event_id 对应误报场景：ops-change-bot 在变更窗口内通过 PC-OPS-JUMP-01 批量登录，fp_matched_pattern: ops_change_window_bulk_login。",
+      "severity_level": "severity=low；变更窗口内运维批量登录，风险评分低，判定为误报。",
+      "risk_scoring": "六维评分覆盖资产影响、行为异常、证据置信、攻击阶段、数据敏感度与威胁情报，总分低危，匹配误报规则。",
+      "involved_accounts": "- ops-change-bot",
+      "involved_assets": "- PC-OPS-JUMP-01",
+      "involved_processes": "- ssh.exe",
+      "involved_files": "- runbook.txt",
+      "involved_external_addresses": "- 10.50.2.20",
+      "evidence_chain": "变更窗口内运维账号批量登录，无异常外联或数据泄露迹象，威胁情报标记为内部 IP。",
+      "attack_storyline": "1. ops-change-bot 在变更窗口内通过 PC-OPS-JUMP-01 执行批量登录\n2. 登录后执行 ssh.exe 连接内部跳板机\n3. 访问 runbook.txt 运维手册，均为预期运维行为",
+      "attack_mapping": "暂无 ATT&CK 技术映射（误报）",
+      "executed_actions": "暂无处置动作",
+      "verification_results": "暂无验证结果",
+      "recommendations": "1. 误报依据：匹配已知模式「ops_change_window_bulk_login」，建议沉淀为检测白名单。\n2. 复核检测阈值与基线，避免重复误报。\n3. 保留审计记录后关闭事件，并同步来源处置状态。",
+      "appendix_index": "关键实体：ops-change-bot、PC-OPS-JUMP-01"
+    }
+  },
+  "model_name": "mock-model",
+  "prompt_tokens": 220,
+  "completion_tokens": 400,
+  "total_tokens": 620
+}
