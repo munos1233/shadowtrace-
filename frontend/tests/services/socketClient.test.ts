@@ -121,4 +121,31 @@ describe("socketClient", () => {
       }),
     });
   });
+
+  it.each([
+    "risk_updated",
+    "final_verdict_updated",
+    "action_executed",
+    "action_verified",
+    "disposition_submitted",
+  ])("passes through %s detail resource events", async (type) => {
+    const { socketClient } = await import("../../src/services/socketClient");
+    const handler = vi.fn();
+    socketClient.connect();
+    socketClient.onEvent(handler);
+
+    eventHandler?.({
+      type,
+      event_id: "evt-detail",
+      sequence: 4,
+      timestamp: "2026-01-01T00:00:00Z",
+      payload: { resource_id: "resource-1" },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      type,
+      event_id: "evt-detail",
+      payload: { resource_id: "resource-1" },
+    });
+  });
 });

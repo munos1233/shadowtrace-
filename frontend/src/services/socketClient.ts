@@ -120,6 +120,16 @@ class SocketClient {
           updated_at: payload.updated_at as string | undefined,
         },
       });
+      return;
+    }
+    if (
+      type === "risk_updated" ||
+      type === "final_verdict_updated" ||
+      type === "action_executed" ||
+      type === "action_verified" ||
+      type === "disposition_submitted"
+    ) {
+      this.emit({ type, event_id, payload });
     }
   }
 

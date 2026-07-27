@@ -277,7 +277,13 @@ async def test_fp_matcher_account_anomaly_fp_skips_evidence_collection(
 
     # Find the ingested event.
     async with session_factory() as session:
-        row = (await session.scalars(select(orm.SecurityEvent).limit(1))).first()
+        row = (
+            await session.scalars(
+                select(orm.SecurityEvent).where(
+                    orm.SecurityEvent.title == "Bulk login by ops account during change window"
+                )
+            )
+        ).first()
     assert row is not None
     event_id = row.event_id
 

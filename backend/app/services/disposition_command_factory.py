@@ -6,6 +6,7 @@ from app.agents.response_agent import compute_source_locator_hash
 from app.models.action import Action
 from app.models.disposition import (
     DispositionCommand,
+    RecordCompensationParams,
     RecordExecutionResultParams,
     SetEventDispositionParams,
     SourceObjectLocator,
@@ -129,6 +130,35 @@ class DispositionCommandFactory:
             idempotency_key=action.idempotency_key or f"{action.action_id}:result",
             source_concurrency_token=source_concurrency_token,
             execution_owner=ExecutionOwner.DIRECT_TOOL,
+        )
+
+    def build_compensation_record(
+        self,
+        rollback_action: Action,
+        *,
+        source_locator: SourceObjectLocator,
+        source_concurrency_token: str | None,
+        operator_id: str,
+        disposition_id: str,
+        closure_cycle: int,
+        parent_disposition_id: str,
+        summary_code: str | None = None,
+    ) -> DispositionCommand:
+        """Build a COMPENSATION_RECORD command for a rollback compensation writeback."""
+        return DispositionCommand(
+            disposition_id=disposition_id,
+            action_id=rollback_action.action_id,
+            closure_cycle=closure_cycle,
+            intent_kind=DispositionIntentKind.COMPENSATION_RECORD,
+            source_locator=source_locator,
+            operation_code="record_compensation",
+            operation_params=RecordCompensationParams(summary_code=summary_code),
+            target_results=[],
+            operator_id=operator_id,
+            idempotency_key=f"{rollback_action.action_id}:compensation:{disposition_id}",
+            source_concurrency_token=source_concurrency_token,
+            execution_owner=rollback_action.execution_owner or ExecutionOwner.XDR_MANAGED,
+            parent_disposition_id=parent_disposition_id,
         )
 
     @staticmethod

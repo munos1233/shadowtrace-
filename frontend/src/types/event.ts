@@ -58,27 +58,26 @@ export type WritebackStatus =
 
 export type ActionStatus =
   | "pending"
+  | "waiting_approval"
   | "approved"
   | "rejected"
-  | "scheduled"
-  | "dispatched"
   | "executing"
+  | "partial_success"
   | "success"
   | "failed"
-  | "rolled_back"
-  | "cancelled"
-  | "unknown";
+  | "unknown"
+  | "superseded"
+  | "rolled_back";
 
-export type ActionLevel = "immediate" | "deferred";
+export type ActionLevel = "l0" | "l1" | "l2" | "l3" | "l4" | "l5";
 
 export type ExecutionOwner = "xdr_managed" | "direct_tool";
 
 export type ActionCategory =
-  | "entity_containment"
-  | "evidence_collection"
-  | "event_status_update"
-  | "notification"
-  | "custom";
+  | "system"
+  | "response"
+  | "verification"
+  | "rollback";
 
 export type EvidenceSource =
   | "identity"
@@ -86,8 +85,9 @@ export type EvidenceSource =
   | "network_flow"
   | "data_security"
   | "dns"
+  | "asset"
   | "threat_intel"
-  | "external_feed";
+  | "false_positive_match";
 
 export type CollectionStatus =
   | "completed"
@@ -203,14 +203,78 @@ export interface SourceObjectLocator {
 }
 
 export interface DispositionReceipt {
+  writeback_id: string;
+  sequence: number;
   disposition_id: string;
-  event_id: string;
-  source_locator: SourceObjectLocator;
-  writeback_id: string | null;
-  writeback_status: WritebackStatus | null;
+  action_id: string;
+  source_record_id: string;
+  status: WritebackStatus;
   confirmation_evidence: string | null;
+  provider_record_id?: string | null;
+  provider_job_id?: string | null;
+  provider_code?: string | null;
+  provider_message?: string | null;
+  observed_at?: string | null;
   submitted_at: string | null;
   confirmed_at: string | null;
+  target_results?: TargetWritebackResult[];
+  raw_result?: Record<string, unknown>;
+  truncated?: boolean;
+  simulated: boolean;
+}
+
+export interface TargetWritebackResult {
+  canonical_target: string;
+  status: string;
+  provider_code?: string | null;
+  message_code?: string | null;
+  artifact_ref?: string | null;
+}
+
+export interface DispositionCommand {
+  disposition_id: string;
+  action_id: string;
+  closure_cycle: number;
+  intent_kind: string;
+  source_locator: SourceObjectLocator;
+  operation_code: string;
+  operation_params: Record<string, unknown>;
+  target_results: Record<string, unknown>[];
+  operator_id: string;
+  idempotency_key: string;
+  source_concurrency_token?: string | null;
+  execution_owner: ExecutionOwner;
+  parent_disposition_id?: string | null;
+  supersedes_disposition_id?: string | null;
+}
+
+export interface DispositionResponse {
+  disposition: DispositionCommand;
+  writeback_status: WritebackStatus | null;
+}
+
+export interface DispositionListResponse {
+  event_id: string;
+  items: DispositionResponse[];
+}
+
+export interface WritebackSummary {
+  event_id: string;
+  closure_cycle: number;
+  disposition_policy: DispositionPolicy;
+  required_action_count: number;
+  applicable_action_count: number;
+  blocked_action_ids: string[];
+  readiness_counts: Record<string, number>;
+  aggregate_readiness: WritebackReadiness;
+  writeback_counts: Record<string, number>;
+  aggregate_status: WritebackStatus | null;
+  terminal_event_action_id: string | null;
+  terminal_event_writeback_id: string | null;
+  terminal_event_disposition: string | null;
+  terminal_event_confirmed: boolean;
+  external_unsynced: boolean;
+  updated_at: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -224,22 +288,38 @@ export interface Evidence {
   evidence_type: string;
   description: string;
   confidence: number;
-  timestamp: string;
-  raw_data: Record<string, unknown> | null;
+  timestamp: string | null;
+  related_entities?: string[];
+  source_ref?: SourceReference | null;
+  raw_data: Record<string, unknown>;
+  mitre_technique?: string | null;
   is_conflicting: boolean;
 }
 
 export interface EvidenceConflict {
   conflict_id: string;
-  evidence_a_id: string;
-  evidence_b_id: string;
+  event_id: string;
   description: string;
+  evidence_ids: string[];
+  sources: EvidenceSource[];
+  detail?: Record<string, unknown>;
 }
 
 export interface EvidenceGap {
-  gap_id: string;
-  description: string;
-  severity: "low" | "medium" | "high";
+  event_id: string;
+  missing_source: EvidenceSource;
+  reason: string;
+  detail?: Record<string, unknown>;
+}
+
+export interface EvidenceOutput {
+  evidence_list: Evidence[];
+  conflicts: EvidenceConflict[];
+  gaps: EvidenceGap[];
+  success_sources: string[];
+  failed_sources: string[];
+  overall_confidence: number;
+  collection_status: CollectionStatus;
 }
 
 /* ------------------------------------------------------------------ */
@@ -263,6 +343,33 @@ export interface RiskAssessment {
   scoring_mode: ScoringMode;
 }
 
+export interface SourceSyncState {
+  disposition?: string;
+  source_status_raw?: string;
+  source_concurrency_token?: string | null;
+  last_observed_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface EventContextSnapshot {
+  source_snapshot?: Record<string, unknown> | null;
+  source_sync_state?: SourceSyncState | null;
+  evidence_output?: EvidenceOutput | null;
+  risk_assessment?: RiskAssessment | null;
+  execution_jobs?: ExecutionJobResponse[];
+  execution_summary?: {
+    jobs?: ExecutionJobResponse[];
+    writeback_ids?: string[];
+    [key: string]: unknown;
+  } | null;
+  disposition_commands?: DispositionCommand[];
+  disposition_receipts?: DispositionReceipt[];
+  writeback_summary?: WritebackSummary | null;
+  report?: Record<string, unknown> | null;
+  state_history?: Record<string, unknown>[];
+  [key: string]: unknown;
+}
+
 /* ------------------------------------------------------------------ */
 /*  API response models                                               */
 /* ------------------------------------------------------------------ */
@@ -278,14 +385,11 @@ export interface EventListItem {
   writeback_required: boolean;
   writeback_readiness: WritebackReadiness;
   writeback_overall_status: WritebackStatus | null;
+  confirmation_evidence?: string | null;
   pending_writeback_count: number;
   created_at: string | null;
   updated_at: string | null;
   occurred_at: string | null;
-  /** Populated from socket state_change when available (list API omits this). */
-  external_unsynced?: boolean;
-  /** Populated from detail/socket enrichment when available. */
-  confirmation_evidence?: string | null;
 }
 
 export interface EventListResponse {
@@ -336,7 +440,7 @@ export interface SecurityEvent {
   degraded_flags: string[];
   escalated: boolean;
   external_unsynced: boolean;
-  event_context_snapshot: Record<string, unknown> | null;
+  event_context_snapshot: EventContextSnapshot | null;
   row_version: number;
 }
 
@@ -398,4 +502,31 @@ export interface ExecutionJobResponse {
   status: string;
   attempt?: number;
   target_results?: Record<string, unknown>[];
+}
+
+export interface ConnectorPublic {
+  connector_id: string;
+  source_product: string;
+  display_name: string;
+  device_type?: string | null;
+  status: string;
+  capabilities: Record<string, string>;
+  disposition_policy_default?: DispositionPolicy | null;
+  last_sync_at?: string | null;
+}
+
+export interface ConnectorsResponse {
+  items: ConnectorPublic[];
+}
+
+export interface WritebackResponse {
+  writeback_id: string;
+  disposition_id: string;
+  action_id: string;
+  status: WritebackStatus;
+  confirmation_evidence: string | null;
+  evidence_tier: "strong" | "medium" | "weak" | null;
+  provider_code: string | null;
+  message_code: string | null;
+  target_results: TargetWritebackResult[];
 }

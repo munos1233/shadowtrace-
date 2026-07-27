@@ -5,24 +5,30 @@ import type { ActionCategory, ActionLevel, ActionStatus, ExecutionOwner } from "
 export interface Action {
   action_id: string;
   event_id: string;
+  plan_revision?: number;
+  action_fingerprint?: string;
   action_level: ActionLevel;
-  category: ActionCategory;
-  owner: ExecutionOwner;
+  action_category: ActionCategory;
+  action_name: string;
   tool_name: string;
-  tool_params: Record<string, unknown>;
+  execution_phase: "immediate" | "post_verify";
+  activation_condition?: string | null;
+  target_type?: string | null;
+  target?: string | null;
+  parameters: Record<string, unknown>;
   status: ActionStatus;
-  rationale: string;
-  created_at: string | null;
+  auto_execute?: boolean;
+  reason?: string | null;
+  provider_name?: string | null;
+  execution_owner?: ExecutionOwner | null;
+  execution_job_id?: string | null;
+  writeback_required?: boolean;
+  writeback_applicable?: boolean;
+  writeback_readiness?: string;
+  writeback_status?: string | null;
+  disposition_source_ref?: Record<string, unknown> | null;
+  executed_at?: string | null;
   updated_at: string | null;
-  approved_by: string | null;
-  approved_at: string | null;
-  dispatched_at: string | null;
-  completed_at: string | null;
-  error_detail: string | null;
-  retry_count: number;
-  max_retries: number;
-  rollback_action_id: string | null;
-  is_rollback: boolean;
 }
 
 export interface ActionListResponse {

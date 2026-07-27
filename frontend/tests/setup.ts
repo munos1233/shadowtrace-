@@ -21,3 +21,9 @@ if (!globalThis.matchMedia) {
     dispatchEvent: () => false,
   });
 }
+
+// jsdom logs a not-implemented error when Ant Design asks for pseudo-element
+// styles while measuring a table scrollbar. The pseudo-element is irrelevant
+// to layout assertions in this suite, so delegate to the regular style lookup.
+const getComputedStyle = globalThis.getComputedStyle;
+globalThis.getComputedStyle = (element) => getComputedStyle(element);

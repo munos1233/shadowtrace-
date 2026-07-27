@@ -886,7 +886,7 @@ def _action_from_orm(row: orm.Action) -> Action:
         "superseded_by_revision": row.superseded_by_revision,
         "executed_at": row.executed_at,
         "effect_verification_status": row.effect_verification_status,
-        "rollback_status": ActionStatus(row.rollback_status) if row.rollback_status else None,
+        "rollback_status": row.rollback_status,
         "source_action_id": row.source_action_id,
         "updated_at": row.updated_at,
     }

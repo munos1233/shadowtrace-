@@ -45,10 +45,22 @@ export interface SocketWritebackUpdatedPayload {
   updated_at?: string;
 }
 
+export type EventDetailSocketEventType =
+  | "risk_updated"
+  | "final_verdict_updated"
+  | "action_executed"
+  | "action_verified"
+  | "disposition_submitted";
+
 export type SocketEvent =
   | { type: "event_created"; event_id: string; payload: SocketEventCreatedPayload }
   | { type: "state_change"; event_id: string; payload: SocketStateChangePayload }
-  | { type: "writeback_updated"; event_id: string; payload: SocketWritebackUpdatedPayload };
+  | { type: "writeback_updated"; event_id: string; payload: SocketWritebackUpdatedPayload }
+  | {
+      type: EventDetailSocketEventType;
+      event_id: string;
+      payload: Record<string, unknown>;
+    };
 
 export function mapSocketWritebackStatus(status: string): WritebackStatus {
   return status.toLowerCase() as WritebackStatus;

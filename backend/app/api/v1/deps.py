@@ -40,6 +40,7 @@ _investigation_stack: dict[str, Any] | None = None
 _approval_engine: Any = None  # ApprovalEngine
 _disposition_sync: Any = None  # DispositionSyncService
 _action_execution: Any = None  # ActionExecutionService
+_rollback_service: Any = None  # RollbackService
 _adapter_registry: Any = None  # DispositionAdapterRegistry
 _workflow_runtime: Any = None  # WorkflowRuntimeService
 _event_disposition: Any = None  # EventDispositionService
@@ -300,8 +301,27 @@ async def get_action_execution() -> Any:
     return _action_execution
 
 
+async def get_rollback_service() -> Any:
+    global _rollback_service
+    if _rollback_service is None:
+        from app.services.event_audit_log_service import EventAuditLogService
+        from app.services.rollback_service import RollbackService, build_execute_rollback_hook
+
+        action_execution = await get_action_execution()
+        _rollback_service = RollbackService(
+            _get_session_factory(),
+            audit=EventAuditLogService(_get_session_factory()),
+            execute_rollback=build_execute_rollback_hook(action_execution),
+            disposition_sync=await get_disposition_sync(),
+            event_bus=_get_event_bus(),
+            adapter_registry=_get_adapter_registry(),
+        )
+    return _rollback_service
+
+
 DispositionSyncDep = Annotated[Any, Depends(get_disposition_sync)]
 ActionExecutionDep = Annotated[Any, Depends(get_action_execution)]
+RollbackServiceDep = Annotated[Any, Depends(get_rollback_service)]
 
 
 async def _get_wm() -> Any:
@@ -507,8 +527,8 @@ def reset_deps() -> None:
     global _session_factory, _redis_client, _context_store, _degraded_flags
     global _audit_log, _event_service, _state_machine, _event_bus, _pipeline, _approval_engine
     global _super_agent, _event_lease, _investigation_stack
-    global _disposition_sync, _action_execution, _adapter_registry, _workflow_runtime
-    global _event_disposition
+    global _disposition_sync, _action_execution, _rollback_service
+    global _adapter_registry, _workflow_runtime, _event_disposition
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -524,6 +544,7 @@ def reset_deps() -> None:
     _approval_engine = None
     _disposition_sync = None
     _action_execution = None
+    _rollback_service = None
     _adapter_registry = None
     _workflow_runtime = None
     _event_disposition = None

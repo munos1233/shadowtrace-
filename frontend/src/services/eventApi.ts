@@ -5,8 +5,11 @@ import type {
   EventDetailResponse,
   EventListParams,
   EventListResponse,
+  ConnectorsResponse,
+  DispositionListResponse,
   ExecutionJobResponse,
   SourceRecordResponse,
+  WritebackResponse,
 } from "../types/event";
 import type {
   ActionListResponse,
@@ -45,15 +48,19 @@ export function closeEvent(eventId: string) {
 // ------------------------------------------------------------------ //
 
 export function getReport(eventId: string) {
-  return apiClient.get<InvestigationReport>(`/events/${eventId}/report`);
+  return apiClient.get<{ report: InvestigationReport }>(`/events/${eventId}/report`);
 }
 
 export function getTraces(eventId: string) {
-  return apiClient.get<AgentTrace[]>(`/events/${eventId}/traces`);
+  return apiClient.get<{ total: number; page: number; page_size: number; items: AgentTrace[] }>(
+    `/events/${eventId}/traces`,
+  );
 }
 
 export function getAuditLogs(eventId: string) {
-  return apiClient.get<AuditLog[]>(`/events/${eventId}/audit-logs`);
+  return apiClient.get<{ total: number; page: number; page_size: number; items: AuditLog[] }>(
+    `/events/${eventId}/audit-logs`,
+  );
 }
 
 export function getToolCalls(eventId: string) {
@@ -92,7 +99,7 @@ export function getSourceRecord(sourceRecordId: string) {
 }
 
 export function listConnectors() {
-  return apiClient.get<unknown[]>("/connectors");
+  return apiClient.get<ConnectorsResponse>("/connectors");
 }
 
 // ------------------------------------------------------------------ //
@@ -108,7 +115,7 @@ export function getExecutionJob(jobId: string) {
 // ------------------------------------------------------------------ //
 
 export function listDispositions(eventId: string) {
-  return apiClient.get<unknown[]>(`/events/${eventId}/dispositions`);
+  return apiClient.get<DispositionListResponse>(`/events/${eventId}/dispositions`);
 }
 
 export function getDisposition(dispositionId: string) {
@@ -127,7 +134,7 @@ export function selectDispositionSource(
 // ------------------------------------------------------------------ //
 
 export function getWriteback(writebackId: string) {
-  return apiClient.get<unknown>(`/writebacks/${writebackId}`);
+  return apiClient.get<WritebackResponse>(`/writebacks/${writebackId}`);
 }
 
 export function retryWriteback(writebackId: string) {

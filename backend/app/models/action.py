@@ -84,7 +84,13 @@ class Action(BaseModel):
     superseded_by_revision: int | None = None
     executed_at: datetime | None = None
     effect_verification_status: str | None = None
-    rollback_status: ActionStatus | None = None
+    rollback_status: str | None = None
+    """Rollback lifecycle marker (e.g. ``"completed"``).
+    This is a free-form string, NOT an :class:`ActionStatus`, because the
+    ActionStatus enum reserves ``rolled_back`` for the terminal status of
+    the *original* Action after a successful rollback, while
+    ``rollback_status`` tracks the rollback operation's own lifecycle
+    (ISSUE-061 §统一命名 point 4)."""
     source_action_id: str | None = None
     updated_at: datetime | None = None
 

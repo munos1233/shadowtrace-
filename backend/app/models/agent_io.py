@@ -647,6 +647,10 @@ class ReportAgentInput(AgentInput):
     risk_assessment: RiskAssessment
     response_plan: ResponsePlan | None = None
     verification_result: VerificationResult | None = None
+    # ISSUE-062: when replan_count is exhausted the graph sets escalated=true;
+    # ReportAgent must surface a mandatory human-escalation note in the report.
+    escalated: bool = False
+    replan_count: int = 0
 
 
 class MemoryAgentInput(AgentInput):

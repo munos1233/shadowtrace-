@@ -978,6 +978,7 @@ class VerifyAgent(BaseAgent[VerifyAgentInput, VerificationResult]):
         # failures stay on MANUAL_RESOLUTION — evaluating stale receipts
         # there would produce misleading routing decisions.
         if terminal_verify_ready:
+            assert activate_result is not None
             wb_eval = await self._evaluate_writeback_statuses(
                 event_id=event_id,
                 actions=actions,
