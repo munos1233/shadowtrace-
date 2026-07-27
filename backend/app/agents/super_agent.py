@@ -334,7 +334,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             if self._investigation_graph is not None:
                 ec = await self._load_event_context(event_id)
             else:
-                ec = final_state.get("event_context", event_context)  # type: ignore[name-defined]
+                ec = final_state.get("event_context", event_context)
             await self._persist_event_context(ec)
             await self._persist_analysis_only_complete(event_id)
 
