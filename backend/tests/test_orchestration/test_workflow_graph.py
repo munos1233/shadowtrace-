@@ -561,10 +561,7 @@ async def test_required_threat_never_enters_disposition_only() -> None:
         "missing_response_plan_for_required_policy" in f for f in final.get("degraded_flags", [])
     )
     degraded = services["degraded_flags"]
-    assert any(
-        call[3] == "InvestigationGraph"
-        for call in getattr(degraded, "calls", [])
-    )
+    assert any(call[3] == "InvestigationGraph" for call in getattr(degraded, "calls", []))
 
 
 @pytest.mark.asyncio
