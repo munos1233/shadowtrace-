@@ -378,3 +378,14 @@ DECLARED_ENUMS: dict[str, type[Enum]] = {
     "QualityVerdict": QualityVerdict,
     "DecisionTraceEntryType": DecisionTraceEntryType,
 }
+
+
+class TrajectoryMetric(StrEnum):
+    """ISSUE-066 structured trajectory quality indicators."""
+
+    REDUNDANT_TOOL_CALLS = "redundant_tool_calls"
+    LOOP_SUSPECTED = "loop_suspected"
+    REPLAN_EFFECTIVENESS = "replan_effectiveness"
+    AVG_AGENT_LATENCY_MS = "avg_agent_latency_ms"
+    EVIDENCE_YIELD = "evidence_yield"
+    STEPS_TO_VERDICT = "steps_to_verdict"

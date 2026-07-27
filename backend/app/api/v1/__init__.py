@@ -13,6 +13,7 @@ from app.api.v1 import (
     source_records,
     stats,
     tools,
+    trajectory,
 )
 
 api_router = APIRouter()
@@ -26,3 +27,4 @@ api_router.include_router(execution_jobs.router)
 api_router.include_router(tools.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(stats.router)
+api_router.include_router(trajectory.router)
