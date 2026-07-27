@@ -42,27 +42,27 @@ _ASSET_VALUE_BONUS: dict[str, int] = {
 # Business disruption rules by tool_name × asset/entity characteristics.
 # Each entry: (condition_key, condition_value) → business_disruption.
 # Special condition_key "default" matches any tool not explicitly listed.
-_BUSINESS_DISRUPTION_RULES: dict[str, list[tuple[str, str, str]]] = {
+_BUSINESS_DISRUPTION_RULES: dict[str, list[tuple[str, str, BusinessDisruption]]] = {
     "isolate_host": [
-        ("asset_value", "critical", BusinessDisruption.HIGH.value),
-        ("asset_value", "high", BusinessDisruption.MEDIUM.value),
-        ("default", "", BusinessDisruption.MEDIUM.value),
+        ("asset_value", "critical", BusinessDisruption.HIGH),
+        ("asset_value", "high", BusinessDisruption.MEDIUM),
+        ("default", "", BusinessDisruption.MEDIUM),
     ],
     "disable_account": [
-        ("business_role", "admin", BusinessDisruption.HIGH.value),
-        ("business_role", "domain_admin", BusinessDisruption.HIGH.value),
-        ("default", "", BusinessDisruption.MEDIUM.value),
+        ("business_role", "admin", BusinessDisruption.HIGH),
+        ("business_role", "domain_admin", BusinessDisruption.HIGH),
+        ("default", "", BusinessDisruption.MEDIUM),
     ],
     "block_ip": [
-        ("ip_scope", "internal", BusinessDisruption.MEDIUM.value),
-        ("ip_scope", "external", BusinessDisruption.LOW.value),
-        ("default", "", BusinessDisruption.LOW.value),
+        ("ip_scope", "internal", BusinessDisruption.MEDIUM),
+        ("ip_scope", "external", BusinessDisruption.LOW),
+        ("default", "", BusinessDisruption.LOW),
     ],
     "quarantine_file": [
-        ("default", "", BusinessDisruption.LOW.value),
+        ("default", "", BusinessDisruption.LOW),
     ],
     "force_logout": [
-        ("default", "", BusinessDisruption.MEDIUM.value),
+        ("default", "", BusinessDisruption.MEDIUM),
     ],
 }
 
@@ -100,7 +100,7 @@ def _business_disruption(
     tool_name: str,
     asset_info: dict[str, Any] | None,
     target: str | None,
-) -> str:
+) -> BusinessDisruption:
     """Determine business_disruption from fixed rules.
 
     Args:
@@ -109,16 +109,16 @@ def _business_disruption(
         target: The action target (IP, hostname, username, etc.).
 
     Returns:
-        One of "none", "low", "medium", "high".
+        BusinessDisruption enum member.
     """
     # Zero-disruption tools.
     if tool_name in _ZERO_DISRUPTION_TOOLS:
-        return BusinessDisruption.NONE.value
+        return BusinessDisruption.NONE
 
     # Look up rules for this tool.
     rules = _BUSINESS_DISRUPTION_RULES.get(tool_name)
     if rules is None:
-        return BusinessDisruption.LOW.value
+        return BusinessDisruption.LOW
 
     asset = asset_info or {}
 
@@ -144,7 +144,7 @@ def _business_disruption(
                 if condition_value == "external" and not is_internal_ip(target):
                     return disruption
 
-    return BusinessDisruption.LOW.value
+    return BusinessDisruption.LOW
 
 
 def _is_reversible(tool_name: str) -> bool:
