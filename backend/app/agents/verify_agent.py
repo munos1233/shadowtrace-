@@ -917,12 +917,10 @@ class VerifyAgent(BaseAgent[VerifyAgentInput, VerificationResult]):
             if _plan_revision is None:
                 _plan_revision = await self._load_event_plan_revision(event_id)
             try:
-                activate_result = (
-                    await self._event_disposition_service.activate_and_submit(
-                        event_id=event_id,
-                        plan_revision=_plan_revision,
-                        principal_or_system=_VERIFY_OPERATOR,
-                    )
+                activate_result = await self._event_disposition_service.activate_and_submit(
+                    event_id=event_id,
+                    plan_revision=_plan_revision,
+                    principal_or_system=_VERIFY_OPERATOR,
                 )
                 terminal_activated = activate_result.activated
                 # Idempotent re-verify: a prior pass already enqueued the
@@ -950,12 +948,10 @@ class VerifyAgent(BaseAgent[VerifyAgentInput, VerificationResult]):
                         blocked_wb.add(_blocked_ref)
                     overall_status = VerificationOverallStatus.MANUAL_RESOLUTION
                 elif (
-                    not terminal_activated
-                    and activate_result.skipped_reason == "already_submitted"
+                    not terminal_activated and activate_result.skipped_reason == "already_submitted"
                 ):
                     logger.info(
-                        "Phase 2 activation idempotent: already_submitted"
-                        " wb=%s event=%s",
+                        "Phase 2 activation idempotent: already_submitted wb=%s event=%s",
                         activate_result.writeback_id,
                         event_id,
                     )
