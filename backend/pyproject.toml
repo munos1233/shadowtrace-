@@ -21,6 +21,7 @@ dependencies = [
   "langgraph>=0.2.0",
   "langgraph-checkpoint>=2.0.0,<4.0.0",
   "celery>=5.4.0",
+  "neo4j>=5.27.0",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +51,7 @@ markers = [
   "rag: RAG + risk scoring integration (ISSUE-047)",
   "e2e_basic: analysis-only golden-path integration (ISSUE-039)",
   "orchestration: multi-agent orchestration integration (ISSUE-055)",
+  "neo4j: requires Neo4j service (docker compose --profile optional up -d neo4j)",
 ]
 
 [tool.coverage.run]
