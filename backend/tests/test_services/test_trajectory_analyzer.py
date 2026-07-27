@@ -214,6 +214,7 @@ class TestTrajectoryAnalyzer:
         from app.services.trajectory_analyzer import TrajectoryAnalyzer
 
         entries = [
+            _entry(DecisionTraceEntryType.AGENT_EXECUTION, "planner_agent"),
             _entry(DecisionTraceEntryType.AGENT_EXECUTION, "verify_agent", {"status": "failed"}),
             _entry(DecisionTraceEntryType.AGENT_EXECUTION, "planner_agent"),
             _entry(DecisionTraceEntryType.AGENT_EXECUTION, "verify_agent", {"status": "success"}),

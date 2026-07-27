@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Thresholds
 # --------------------------------------------------------------------------- #
 
-_DUPLICATE_TOOL_THRESHOLD = 3  # same tool+params called ≥N times → redundant
+_DUPLICATE_TOOL_THRESHOLD = 3  # same tool called ≥N times → redundant
 _LOOP_WINDOW = 5  # consecutive same-agent entries → suspected loop
 
 
@@ -233,8 +233,7 @@ def _generate_findings(
     redundant = metrics.get(TrajectoryMetric.REDUNDANT_TOOL_CALLS, 0)
     if redundant > 0:
         findings.append(
-            f"检测到 {int(redundant)} 次冗余工具调用"
-            f"（相同工具+参数 ≥ {_DUPLICATE_TOOL_THRESHOLD} 次）"
+            f"检测到 {int(redundant)} 次冗余工具调用（相同工具 ≥ {_DUPLICATE_TOOL_THRESHOLD} 次）"
         )
 
     loop = metrics.get(TrajectoryMetric.LOOP_SUSPECTED, 0)
