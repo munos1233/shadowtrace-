@@ -1,12 +1,14 @@
-"""GraphAgent: entity-relationship graph from evidence (ISSUE-050).
+"""GraphAgent: entity-relationship graph from evidence (ISSUE-050 / ISSUE-082).
 
 Builds a PostgreSQL-backed graph from EvidenceOutput, computes centrality
-and attack-path candidates, persists nodes/edges, and writes ``graph_output``
-to EventContext via WorkingMemory.
+and attack-path candidates, persists nodes/edges, triggers Neo4j mirror
+sync (ISSUE-082), and writes ``graph_output`` to EventContext via
+WorkingMemory.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -51,6 +53,7 @@ class GraphAgent(BaseAgent[GraphAgentInput, GraphOutput]):
         audit_service: Any | None = None,
         event_bus: Any | None = None,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
+        graph_sync_service: Any | None = None,  # ISSUE-082 Neo4j mirror
     ) -> None:
         super().__init__(
             llm_client=llm_client,
@@ -63,6 +66,7 @@ class GraphAgent(BaseAgent[GraphAgentInput, GraphOutput]):
             event_bus=event_bus,
         )
         self._session_factory = session_factory
+        self._graph_sync_service = graph_sync_service
         self.last_persist_error: str | None = None
         self.last_persist_ok: bool = False
         self.last_degraded_reason: str | None = None
@@ -107,6 +111,21 @@ class GraphAgent(BaseAgent[GraphAgentInput, GraphOutput]):
                 event_id,
                 reason=f"graph_persist_failed: {self.last_persist_error}",
             )
+
+        # 5b. Trigger Neo4j mirror sync (ISSUE-082 §实现步骤 point 3).
+        # Fire-and-forget: NEO4J_ENABLED=false → immediately returns skipped=True.
+        # Only trigger when PG persist succeeded — if the nodes/edges aren't in
+        # PostgreSQL, there is nothing to mirror to Neo4j.
+        if self._graph_sync_service is not None and self.last_persist_ok:
+            try:
+                asyncio.create_task(
+                    self._graph_sync_service.sync_event_graph(event_id),
+                    name=f"neo4j-sync-{event_id}",
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to schedule Neo4j sync for event=%s", event_id, exc_info=True,
+                )
 
         # 6. Write to EventContext via WorkingMemory
         await self._write_context(event_id, output)
