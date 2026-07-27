@@ -129,7 +129,17 @@ def _agent_detail(row: orm.AgentTrace, inferred: bool) -> dict[str, Any]:
         value = basis.get(key)
         if value not in (None, "", [], {}):
             detail[key] = value
-    for key in ("severity", "event_type", "need_investigation"):
+    for key in (
+        "severity",
+        "event_type",
+        "need_investigation",
+        # ISSUE-066: verification / evidence fields for TrajectoryAnalyzer.
+        "overall_status",
+        "need_action_replan",
+        "need_writeback_recovery",
+        "collection_status",
+        "evidence_list",
+    ):
         if key in output_data and output_data[key] is not None:
             detail[key] = output_data[key]
     return _maybe_inferred_detail(detail, inferred)
