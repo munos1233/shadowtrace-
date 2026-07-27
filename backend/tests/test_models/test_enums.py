@@ -49,6 +49,7 @@ EXPECTED_ENUM_NAMES = {
     "ErrorCategory",
     "GuardRailDimension",
     "BudgetScope",
+    "BusinessDisruption",
     "QualityVerdict",
     "DecisionTraceEntryType",
 }
@@ -209,6 +210,7 @@ EXPECTED_ENUM_VALUES: dict[str, set[str]] = {
     },
     "GuardRailDimension": {"schema", "grounding", "policy", "sanitization"},
     "BudgetScope": {"system", "event", "agent"},
+    "BusinessDisruption": {"none", "low", "medium", "high"},
     "QualityVerdict": {"pass", "warn", "fail"},
     "DecisionTraceEntryType": {
         "agent_execution",

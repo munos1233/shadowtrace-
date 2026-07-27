@@ -24,6 +24,7 @@ from app.models.enums import (
     ActionExecutionPhase,
     ActionLevel,
     ActionStatus,
+    BusinessDisruption,
     ExecutionOwner,
     SourceDisposition,
     WritebackReadiness,
@@ -48,8 +49,8 @@ class ImpactAssessment(BaseModel):
     impact_score: int = Field(default=0, ge=0, le=100, description="0-100 composite impact score")
     affected_scope: str = Field(default="", description="Description of affected targets and scope")
     reversible: bool = Field(default=True, description="Whether the action can be rolled back")
-    business_disruption: str = Field(
-        default="none",
+    business_disruption: BusinessDisruption = Field(
+        default=BusinessDisruption.NONE,
         description="none | low | medium | high",
     )
     assessment_detail: str | None = Field(

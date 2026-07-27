@@ -100,6 +100,15 @@ class Severity(StrEnum):
     CRITICAL = "critical"
 
 
+class BusinessDisruption(StrEnum):
+    """Business impact disruption level (ISSUE-079)."""
+
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class ActionLevel(StrEnum):
     L0 = "l0"
     L1 = "l1"
@@ -352,6 +361,7 @@ DECLARED_ENUMS: dict[str, type[Enum]] = {
     "ActionCategory": ActionCategory,
     "ActionExecutionPhase": ActionExecutionPhase,
     "Severity": Severity,
+    "BusinessDisruption": BusinessDisruption,
     "ActionLevel": ActionLevel,
     "EvidenceSource": EvidenceSource,
     "ToolCategory": ToolCategory,

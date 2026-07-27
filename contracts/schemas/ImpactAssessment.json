@@ -1,27 +1,60 @@
 {
   "$defs": {
-    "Severity": {
+    "BusinessDisruption": {
       "enum": [
+        "none",
         "low",
         "medium",
-        "high",
-        "critical"
+        "high"
       ],
-      "title": "Severity",
+      "title": "BusinessDisruption",
       "type": "string"
     }
   },
   "additionalProperties": false,
-  "description": "Estimated blast radius / reversibility of an action (detailed in ISSUE-079).",
+  "description": "Estimated blast radius / reversibility of an action (ISSUE-079).",
   "properties": {
-    "impact_level": {
-      "$ref": "#/$defs/Severity",
-      "default": "low"
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "impact_score": {
+      "default": 0,
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Impact Score",
+      "type": "integer",
+      "description": "0-100 composite impact score"
+    },
+    "affected_scope": {
+      "default": "",
+      "title": "Affected Scope",
+      "type": "string",
+      "description": "Description of affected targets and scope"
     },
     "reversible": {
       "default": true,
       "title": "Reversible",
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the action can be rolled back"
+    },
+    "business_disruption": {
+      "$ref": "#/$defs/BusinessDisruption",
+      "default": "none",
+      "description": "none | low | medium | high"
+    },
+    "assessment_detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assessment Detail",
+      "description": "Human-readable assessment rationale"
     },
     "affected_entity_count": {
       "default": 0,
@@ -34,18 +67,6 @@
       },
       "title": "Affected Targets",
       "type": "array"
-    },
-    "notes": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Notes"
     },
     "assessed_by": {
       "anyOf": [
@@ -60,6 +81,7 @@
       "title": "Assessed By"
     }
   },
+  "required": ["action_id"],
   "title": "ImpactAssessment",
   "type": "object"
 }

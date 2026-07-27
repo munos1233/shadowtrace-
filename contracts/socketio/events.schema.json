@@ -147,7 +147,14 @@
         "action_name": { "type": "string" },
         "summary": { "type": "string" },
         "target_count": { "type": "integer", "minimum": 0 },
-        "deadline": { "type": "string", "format": "date-time" }
+        "deadline": { "type": "string", "format": "date-time" },
+        "impact_assessment": {
+          "oneOf": [
+            { "$ref": "https://shadowtrace.local/schemas/ImpactAssessment.json" },
+            { "type": "null" }
+          ],
+          "description": "Impact assessment for the action requiring approval (ISSUE-079)."
+        }
       },
       "additionalProperties": false
     },

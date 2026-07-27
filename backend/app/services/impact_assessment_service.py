@@ -12,7 +12,8 @@ from typing import Any
 
 from app.core.network_utils import is_internal_ip
 from app.models.action import Action, ImpactAssessment
-from app.models.enums import ActionLevel
+from app.models.enums import ActionLevel, BusinessDisruption
+from app.tools.specs.response import RESPONSE_ROLLBACK_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -43,25 +44,25 @@ _ASSET_VALUE_BONUS: dict[str, int] = {
 # Special condition_key "default" matches any tool not explicitly listed.
 _BUSINESS_DISRUPTION_RULES: dict[str, list[tuple[str, str, str]]] = {
     "isolate_host": [
-        ("asset_value", "critical", "high"),
-        ("asset_value", "high", "medium"),
-        ("default", "", "medium"),
+        ("asset_value", "critical", BusinessDisruption.HIGH.value),
+        ("asset_value", "high", BusinessDisruption.MEDIUM.value),
+        ("default", "", BusinessDisruption.MEDIUM.value),
     ],
     "disable_account": [
-        ("business_role", "admin", "high"),
-        ("business_role", "domain_admin", "high"),
-        ("default", "", "medium"),
+        ("business_role", "admin", BusinessDisruption.HIGH.value),
+        ("business_role", "domain_admin", BusinessDisruption.HIGH.value),
+        ("default", "", BusinessDisruption.MEDIUM.value),
     ],
     "block_ip": [
-        ("ip_scope", "internal", "medium"),
-        ("ip_scope", "external", "low"),
-        ("default", "", "low"),
+        ("ip_scope", "internal", BusinessDisruption.MEDIUM.value),
+        ("ip_scope", "external", BusinessDisruption.LOW.value),
+        ("default", "", BusinessDisruption.LOW.value),
     ],
     "quarantine_file": [
-        ("default", "", "low"),
+        ("default", "", BusinessDisruption.LOW.value),
     ],
     "force_logout": [
-        ("default", "", "medium"),
+        ("default", "", BusinessDisruption.MEDIUM.value),
     ],
 }
 
@@ -74,15 +75,15 @@ _ZERO_DISRUPTION_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# Reversibility by tool_name (mapped against rollback tool registry).
-# True → there is a corresponding rollback tool; False → irreversible.
+# Reversibility derived from RESPONSE_ROLLBACK_MAP (ISSUE-079 §4.5).
+# A tool is reversible if it has a corresponding rollback tool in the canonical
+# map; tools absent from the map default to reversible=False (matching the intro
+# rule: "无映射则 rollback_supported=False").
 _REVERSIBLE_TOOLS: dict[str, bool] = {
-    "isolate_host": True,
-    "disable_account": True,
-    "block_ip": True,
-    "quarantine_file": True,
-    "force_logout": False,
+    tool: True for tool in RESPONSE_ROLLBACK_MAP
 }
+# force_logout is explicitly irreversible (no rollback tool exists).
+_REVERSIBLE_TOOLS["force_logout"] = False
 
 
 def _base_score(action_level: str) -> int:
@@ -114,12 +115,12 @@ def _business_disruption(
     """
     # Zero-disruption tools.
     if tool_name in _ZERO_DISRUPTION_TOOLS:
-        return "none"
+        return BusinessDisruption.NONE.value
 
     # Look up rules for this tool.
     rules = _BUSINESS_DISRUPTION_RULES.get(tool_name)
     if rules is None:
-        return "low"
+        return BusinessDisruption.LOW.value
 
     asset = asset_info or {}
 
@@ -145,12 +146,16 @@ def _business_disruption(
                 if condition_value == "external" and not is_internal_ip(target):
                     return disruption
 
-    return "low"
+    return BusinessDisruption.LOW.value
 
 
 def _is_reversible(tool_name: str) -> bool:
-    """Check reversibility against the known rollback registry."""
-    return _REVERSIBLE_TOOLS.get(tool_name, True)
+    """Check reversibility against the canonical RESPONSE_ROLLBACK_MAP.
+
+    Defaults to False for tools with no rollback mapping, matching the
+    intro §4.5 rule: "无映射则 rollback_supported=False".
+    """
+    return _REVERSIBLE_TOOLS.get(tool_name, False)
 
 
 def _describe_scope(action: Action, asset_info: dict[str, Any] | None) -> str:
@@ -174,6 +179,51 @@ def _describe_scope(action: Action, asset_info: dict[str, Any] | None) -> str:
             parts.append(f"hostname={hostname}")
 
     return "; ".join(parts)
+
+
+# --------------------------------------------------------------------------- #
+# Default asset info provider
+# --------------------------------------------------------------------------- #
+
+
+def create_default_asset_provider() -> Any:
+    """Build a default ``asset_info_provider`` backed by ``query_asset_info``.
+
+    The provider tries the real tool first; if the evidence projection is not
+    available or the query fails, it returns ``None`` and the service degrades
+    gracefully to medium estimates.
+    """
+
+    async def _provider(target: str, target_type: str | None) -> dict[str, Any] | None:
+        try:
+            from app.tools.query.query_asset_info import execute as _query_asset_info
+
+            params: dict[str, Any] = {}
+            if target_type in ("ip", "host") or not target_type:
+                params["ip"] = target
+            else:
+                params["hostname"] = target
+
+            result = await _query_asset_info(params)
+            data = result.get("data", [])
+            if isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict):
+                    return {
+                        "asset_value": first.get("asset_value", "medium"),
+                        "business_role": first.get("business_role", ""),
+                        "hostname": first.get("hostname", target),
+                    }
+            return None
+        except Exception:
+            logger.debug(
+                "default asset_info_provider: query_asset_info unavailable for target=%s",
+                target,
+                exc_info=True,
+            )
+            return None
+
+    return _provider
 
 
 # --------------------------------------------------------------------------- #
@@ -272,6 +322,5 @@ class ImpactAssessmentService:
 
 __all__ = [
     "ImpactAssessmentService",
-    "_ACTION_LEVEL_BASE_SCORE",
-    "_ASSET_VALUE_BONUS",
+    "create_default_asset_provider",
 ]

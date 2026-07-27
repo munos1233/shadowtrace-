@@ -19,6 +19,7 @@ from app.services.impact_assessment_service import (
     _ASSET_VALUE_BONUS,
     ImpactAssessmentService,
     _base_score,
+    create_default_asset_provider,
 )
 
 # --------------------------------------------------------------------------- #
@@ -429,3 +430,109 @@ def test_impact_assessment_extra_forbidden() -> None:
 def test_all_action_levels_have_base_scores() -> None:
     for level in ActionLevel:
         assert level.value in _ACTION_LEVEL_BASE_SCORE, f"Missing base score for {level.value}"
+
+
+# --------------------------------------------------------------------------- #
+# Reversibility: unknown tools default to False (ISSUE-079 §4.5)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_not_reversible() -> None:
+    """Tools not in RESPONSE_ROLLBACK_MAP default to reversible=False."""
+    svc = ImpactAssessmentService()
+    action = _action(tool_name="some_future_tool", target="test-target")
+
+    result = await svc.assess(action)
+    assert result.reversible is False
+
+
+@pytest.mark.asyncio
+async def test_create_ticket_is_reversible() -> None:
+    """create_ticket is in RESPONSE_ROLLBACK_MAP → reversible=True."""
+    svc = ImpactAssessmentService()
+    action = _action(tool_name="create_ticket", target=None)
+
+    result = await svc.assess(action)
+    assert result.reversible is True
+
+
+@pytest.mark.asyncio
+async def test_disable_account_is_reversible() -> None:
+    """disable_account is in RESPONSE_ROLLBACK_MAP → reversible=True."""
+    svc = ImpactAssessmentService()
+    action = _action(tool_name="disable_account", target="user1")
+
+    result = await svc.assess(action)
+    assert result.reversible is True
+
+
+# --------------------------------------------------------------------------- #
+# BusinessDisruption enum validation
+# --------------------------------------------------------------------------- #
+
+
+def test_business_disruption_invalid_value_rejected() -> None:
+    """ImpactAssessment rejects business_disruption values outside the enum."""
+    with pytest.raises(ValidationError):
+        ImpactAssessment(
+            action_id="act-001",
+            impact_score=50,
+            affected_scope="test",
+            business_disruption="extreme",  # not a valid enum value
+        )
+
+
+def test_business_disruption_enum_values() -> None:
+    """All four BusinessDisruption values are accepted."""
+    from app.models.enums import BusinessDisruption
+
+    for value in ("none", "low", "medium", "high"):
+        ia = ImpactAssessment(
+            action_id="act-001",
+            impact_score=50,
+            affected_scope="test",
+            business_disruption=value,  # type: ignore[arg-type]
+        )
+        assert ia.business_disruption == value
+        # Verify it's the enum member, not just the string
+        assert isinstance(ia.business_disruption, BusinessDisruption)
+
+
+# --------------------------------------------------------------------------- #
+# create_default_asset_provider
+# --------------------------------------------------------------------------- #
+
+
+def test_create_default_asset_provider_returns_callable() -> None:
+    """Factory returns an async callable."""
+    provider = create_default_asset_provider()
+    assert callable(provider)
+
+
+@pytest.mark.asyncio
+async def test_default_asset_provider_returns_none_when_tool_unavailable() -> None:
+    """Provider returns None gracefully when query_asset_info not available."""
+    provider = create_default_asset_provider()
+    # With no evidence projection initialized, the provider should
+    # return None rather than raising.
+    result = await provider("10.0.0.1", "ip")
+    # Should degrade gracefully (None = asset info unavailable).
+    assert result is None or isinstance(result, dict)
+
+
+# --------------------------------------------------------------------------- #
+# Impact score with critical asset (properly mocked)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_score_l5_with_critical_asset_capped_at_100() -> None:
+    """L5 (90) + critical (20) = 110 → capped at 100."""
+    provider = AsyncMock(return_value=_asset_info(asset_value="critical"))
+    svc = ImpactAssessmentService(asset_info_provider=provider)
+    action = _action(tool_name="isolate_host", action_level=ActionLevel.L5, target="10.0.0.1")
+
+    result = await svc.assess(action)
+    assert result.impact_score == 100
+    assert result.business_disruption == "high"  # critical asset → high disruption

@@ -12,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -867,3 +868,216 @@ async def test_evaluate_plan_resume_hook_called_when_fully_decided(
     result = await engine.evaluate_plan(event_id, 1, _risk())
     assert result.needs_wait is False
     resume.assert_awaited_once_with(event_id)
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-079: ImpactAssessment integration with ApprovalEngine
+# --------------------------------------------------------------------------- #
+
+
+@pytest_asyncio.fixture
+async def impact_assessment_service() -> Any:
+    """ImpactAssessmentService with a mock asset provider (ISSUE-079)."""
+    from app.services.impact_assessment_service import ImpactAssessmentService
+
+    mock_provider = AsyncMock(
+        return_value={
+            "asset_value": "critical",
+            "business_role": "domain_controller",
+            "hostname": "DC-01",
+        }
+    )
+    return ImpactAssessmentService(asset_info_provider=mock_provider)
+
+
+@pytest_asyncio.fixture
+async def engine_with_impact(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_bus: FakeEventBus,
+    store: EventContextStore,
+    state_machine: StateMachineService,
+    impact_assessment_service: Any,
+    cleanup: None,
+) -> ApprovalEngine:
+    """ApprovalEngine wired with ImpactAssessmentService (ISSUE-079)."""
+    return ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        context_store=store,
+        capability_manifest=build_mock_capability_manifest(),
+        impact_assessment_service=impact_assessment_service,
+    )
+
+
+@pytest.mark.asyncio
+async def test_l4_evaluate_stores_impact_assessment_in_record_detail(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine_with_impact: ApprovalEngine,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    """L4 evaluate → approval_record.detail["impact_assessment"] is non-null."""
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            action_level=ActionLevel.L4,
+            tool_name="isolate_host",
+            target="10.0.0.1",
+        ),
+    )
+    await engine_with_impact.evaluate(action, _risk(), approval_cycle=0)
+
+    async with session_factory() as session:
+        record = await session.scalar(
+            select(ApprovalRecordORM).where(
+                ApprovalRecordORM.action_id == action.action_id,
+                ApprovalRecordORM.approval_cycle == 0,
+            )
+        )
+        assert record is not None
+        detail = record.detail or {}
+        ia = detail.get("impact_assessment")
+        assert ia is not None, f"impact_assessment missing from detail: {detail}"
+        assert ia.get("action_id") == action.action_id
+        assert ia.get("impact_score", 0) > 0
+        assert ia.get("business_disruption") == "high"
+
+
+@pytest.mark.asyncio
+async def test_approval_required_payload_includes_impact_assessment(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine_with_impact: ApprovalEngine,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    """approval_required Socket event payload carries impact_assessment."""
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            action_level=ActionLevel.L4,
+            tool_name="isolate_host",
+            target="10.0.0.1",
+        ),
+    )
+    await engine_with_impact.evaluate(action, _risk(), approval_cycle=0)
+
+    # Find the approval_required event in the fake bus.
+    approval_events = [
+        (eid, mtype, payload)
+        for (eid, mtype, payload) in fake_bus.published
+        if mtype == "approval_required"
+    ]
+    assert len(approval_events) >= 1, f"No approval_required published; got {fake_bus.published}"
+    _, _, payload = approval_events[0]
+    assert "impact_assessment" in payload, f"payload missing impact_assessment: {payload}"
+    ia = payload["impact_assessment"]
+    assert ia is not None
+    assert ia.get("action_id") == action.action_id
+
+
+@pytest.mark.asyncio
+async def test_impact_assessment_persisted_to_action_row(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine_with_impact: ApprovalEngine,
+    cleanup: None,
+) -> None:
+    """Action row in DB has impact_assessment JSONB after L4 evaluate."""
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            action_level=ActionLevel.L4,
+            tool_name="isolate_host",
+            target="10.0.0.1",
+        ),
+    )
+    await engine_with_impact.evaluate(action, _risk(), approval_cycle=0)
+
+    async with session_factory() as session:
+        row = await session.get(orm.Action, action.action_id)
+        assert row is not None
+        assert row.impact_assessment is not None, "impact_assessment not persisted to action row"
+        assert row.impact_assessment.get("action_id") == action.action_id
+        assert row.impact_assessment.get("impact_score", 0) > 0
+
+
+@pytest.mark.asyncio
+async def test_impact_assessments_written_to_event_context(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine_with_impact: ApprovalEngine,
+    cleanup: None,
+) -> None:
+    """After evaluate, EventContext.impact_assessments contains the assessment."""
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            action_level=ActionLevel.L4,
+            tool_name="isolate_host",
+            target="10.0.0.1",
+        ),
+    )
+    await engine_with_impact.evaluate(action, _risk(), approval_cycle=0)
+
+    ctx = await store.rebuild_context(event_id)
+    assessments = ctx.impact_assessments
+    assert len(assessments) >= 1, (
+        f"impact_assessments empty in context: {ctx.model_dump(mode='json')}"
+    )
+    assert any(a.action_id == action.action_id for a in assessments), (
+        f"action_id {action.action_id} not in impact_assessments"
+    )
+
+
+@pytest.mark.asyncio
+async def test_impact_assessment_degraded_when_no_provider(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    fake_bus: FakeEventBus,
+    state_machine: StateMachineService,
+    cleanup: None,
+) -> None:
+    """Without impact_assessment_service, evaluation still completes (degraded)."""
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        context_store=store,
+        capability_manifest=build_mock_capability_manifest(),
+        # No impact_assessment_service — degraded path.
+    )
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            action_level=ActionLevel.L4,
+            tool_name="isolate_host",
+            target="10.0.0.1",
+        ),
+    )
+    # Should not raise — degraded path swallows the missing service.
+    decision = await engine.evaluate(action, _risk(), approval_cycle=0)
+    assert decision.decision is ApprovalDecisionKind.REQUIRE_APPROVAL
+
+    async with session_factory() as session:
+        row = await session.get(orm.Action, action.action_id)
+        assert row is not None
+        # No impact_assessment persisted (service not injected).
+        assert row.impact_assessment is None

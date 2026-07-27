@@ -38,6 +38,7 @@ _super_agent: Any = None  # SuperAgent
 _event_lease: Any = None  # EventLease
 _investigation_stack: dict[str, Any] | None = None
 _approval_engine: Any = None  # ApprovalEngine
+_impact_assessment_service: Any = None  # ImpactAssessmentService
 _disposition_sync: Any = None  # DispositionSyncService
 _action_execution: Any = None  # ActionExecutionService
 _adapter_registry: Any = None  # DispositionAdapterRegistry
@@ -127,6 +128,21 @@ async def get_state_machine() -> Any:
     return _state_machine
 
 
+def _get_impact_assessment_service() -> Any:
+    """Return the ImpactAssessmentService singleton (ISSUE-079)."""
+    global _impact_assessment_service
+    if _impact_assessment_service is None:
+        from app.services.impact_assessment_service import (
+            ImpactAssessmentService,
+            create_default_asset_provider,
+        )
+
+        _impact_assessment_service = ImpactAssessmentService(
+            asset_info_provider=create_default_asset_provider(),
+        )
+    return _impact_assessment_service
+
+
 async def get_approval_engine() -> Any:
     """Return the tiered approval engine singleton (ISSUE-058)."""
     global _approval_engine
@@ -140,6 +156,7 @@ async def get_approval_engine() -> Any:
             state_machine=state_machine,
             context_store=_get_context_store(),
             resume_investigation=_resume_investigation,
+            impact_assessment_service=_get_impact_assessment_service(),
         )
     return _approval_engine
 
@@ -418,6 +435,7 @@ def reset_deps() -> None:
     global _audit_log, _event_service, _state_machine, _event_bus, _pipeline, _approval_engine
     global _super_agent, _event_lease, _investigation_stack
     global _disposition_sync, _action_execution, _adapter_registry, _workflow_runtime
+    global _impact_assessment_service
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -431,6 +449,7 @@ def reset_deps() -> None:
     _event_lease = None
     _investigation_stack = None
     _approval_engine = None
+    _impact_assessment_service = None
     _disposition_sync = None
     _action_execution = None
     _adapter_registry = None
