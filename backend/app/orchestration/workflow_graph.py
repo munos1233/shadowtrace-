@@ -495,6 +495,26 @@ async def _hydrate_context(
         target["final_verdict"] = context.event.final_verdict.value
 
 
+def _resolve_verify_writeback_status(
+    verification_result: VerificationResult,
+) -> str | None:
+    """Pick the writeback status for the first failed writeback in verify output.
+
+    ``WritebackRecoveryHandler`` reads ``verify_writeback_status`` from graph
+    state; when VerifyAgent reports ``failed_writebacks`` we mirror the matching
+    ``VerificationActionResult.writeback_status`` so recovery routes correctly
+    instead of falling back to LOOKUP.
+    """
+    failed = verification_result.failed_writebacks
+    if not failed:
+        return None
+    target = failed[0]
+    for item in verification_result.results:
+        if target in item.writeback_ids and item.writeback_status is not None:
+            return item.writeback_status.value
+    return None
+
+
 def _plan_revision_from_state(state: InvestigationState) -> int:
     execution_plan = state.get("execution_plan") or {}
     revision = execution_plan.get("revision")
@@ -684,6 +704,8 @@ def build_investigation_graph(
                     event_id=state["event_id"],
                     evidence_output=evidence,
                     risk_assessment=assessment,
+                    escalated=bool(state.get("escalated", False)),
+                    replan_count=int(state.get("replan_count", 0)),
                 )
             )
             report_generated = report is not None
@@ -1217,6 +1239,9 @@ def build_investigation_graph(
             "verify_need_manual_resolution": verification_result.need_manual_resolution,
             "verify_failed_actions": verification_result.failed_actions,
             "verify_failed_writebacks": verification_result.failed_writebacks,
+            "verify_writeback_status": _resolve_verify_writeback_status(
+                verification_result
+            ),
             "verify_has_partial_success": verification_result.overall_status.value == "partial",
         }
 
@@ -1305,6 +1330,8 @@ def build_investigation_graph(
                 event_id=state["event_id"],
                 evidence_output=EvidenceOutput.model_validate(state["evidence_output"]),
                 risk_assessment=RiskAssessment.model_validate(state["risk_assessment"]),
+                escalated=bool(state.get("escalated", False)),
+                replan_count=int(state.get("replan_count", 0)),
             )
         )
         # ISSUE-062 B2: When the writeback recovery path routes to report_node,

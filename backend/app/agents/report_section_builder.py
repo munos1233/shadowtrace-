@@ -71,6 +71,8 @@ class ReportSectionBuilder:
         final_verdict: FinalVerdict = FinalVerdict.NONE,
         false_positive_match: dict[str, Any] | None = None,
         content_sha256: str | None = None,
+        escalated: bool = False,
+        replan_count: int = 0,
     ) -> list[ReportSection]:
         # Prefer triage entities; otherwise derive labels from evidence raw/related.
         account_lines, asset_lines, process_lines, file_lines, external_lines = self._entity_lines(
@@ -85,6 +87,8 @@ class ReportSectionBuilder:
             final_verdict=final_verdict,
             evidence_output=evidence_output,
             false_positive_match=false_positive_match,
+            escalated=escalated,
+            replan_count=replan_count,
         )
         severity_level = (
             f"severity={risk_assessment.severity.value}\n"
@@ -105,6 +109,8 @@ class ReportSectionBuilder:
             response_actions=response_actions,
             final_verdict=final_verdict,
             false_positive_match=false_positive_match,
+            escalated=escalated,
+            replan_count=replan_count,
         )
         appendix = self._appendix(
             event_id=event_id,
@@ -271,6 +277,8 @@ class ReportSectionBuilder:
         final_verdict: FinalVerdict,
         evidence_output: EvidenceOutput,
         false_positive_match: dict[str, Any] | None = None,
+        escalated: bool = False,
+        replan_count: int = 0,
     ) -> str:
         event_type = triage_result.event_type.value if triage_result else "unknown"
         reasoning = (triage_result.reasoning if triage_result else "") or ""
@@ -284,6 +292,12 @@ class ReportSectionBuilder:
             f"collection_status: {evidence_output.collection_status.value}",
         ]
         lines.extend(self._fp_basis_lines(false_positive_match))
+        if escalated:
+            lines.append(
+                "human_escalation: 本事件已完成 "
+                f"{replan_count} 轮重规划仍未能通过验证，已标记 escalated=true，"
+                "需安全运营人员接管后续调查与处置。"
+            )
         if reasoning:
             lines.append(f"triage_reasoning: {reasoning}")
         if risk_assessment.severity is Severity.LOW and not evidence_output.evidence_list:
@@ -436,8 +450,16 @@ class ReportSectionBuilder:
         response_actions: list[Action],
         final_verdict: FinalVerdict,
         false_positive_match: dict[str, Any] | None = None,
+        escalated: bool = False,
+        replan_count: int = 0,
     ) -> str:
         tips: list[str] = []
+        if escalated:
+            tips.append(
+                "人工升级：自动重规划已达上限（"
+                f"replan_count={replan_count}，escalated=true），"
+                "请安全运营人员复核失败动作、决定是否人工处置或关闭事件。"
+            )
         if risk_assessment.severity in {Severity.HIGH, Severity.CRITICAL}:
             tips.append("对高价值主机执行隔离或进程阻断，并复核外联阻断生效。")
             tips.append("冻结涉事账号会话并强制改密，排查横向移动痕迹。")

@@ -12,10 +12,13 @@ from app.agents.planner_agent import PlannerAgent
 from app.core.errors import InvalidStateTransitionError
 from app.models.agent_io import (
     CollectionStatus,
+    EffectStatus,
     EvidenceOutput,
+    ReportAgentInput,
     RiskAssessment,
     ScoringMode,
     TriageResult,
+    VerificationActionResult,
     VerificationOverallStatus,
     VerificationPhase,
     VerificationResult,
@@ -29,6 +32,7 @@ from app.models.enums import (
     FinalVerdict,
     Severity,
     WritebackReadiness,
+    WritebackStatus,
 )
 from app.models.workflow import TransitionContext, validate_transition
 from app.orchestration.checkpointer import (
@@ -37,6 +41,7 @@ from app.orchestration.checkpointer import (
     checkpoint_key_for_event,
 )
 from app.orchestration.graph_state import InvestigationState
+from app.orchestration.replan_handler import MAX_REPLAN_COUNT
 from app.orchestration.workflow_graph import (
     NODE_APPROVAL,
     NODE_APPROVAL_WAIT,
@@ -72,6 +77,7 @@ from app.orchestration.workflow_graph import (
     route_after_risk,
     route_after_triage,
     route_after_verify,
+    _resolve_verify_writeback_status,
 )
 
 
@@ -128,9 +134,47 @@ class ReplanOnceVerifyAgent:
         )
 
 
+class AlwaysFailVerifyAgent:
+    """Every verify pass requests action replan (ISSUE-062 exhaustion e2e)."""
+
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    async def execute(self, input: Any) -> VerificationResult:
+        self.calls.append(input)
+        return VerificationResult(
+            overall_status=VerificationOverallStatus.FAILED,
+            verification_phase=VerificationPhase.EFFECT,
+            need_action_replan=True,
+            failed_actions=[f"act-failed-{len(self.calls):03d}"],
+        )
+
+
+class CapturingReportAgent:
+    """Records ReportAgentInput for escalation assertions."""
+
+    def __init__(self) -> None:
+        self.calls: list[ReportAgentInput] = []
+
+    async def execute(self, input: ReportAgentInput) -> SimpleNamespace:
+        self.calls.append(input)
+        return SimpleNamespace(report_id="rpt-capture")
+
+
 def _agents_with_verify(verify_agent: Any, *, triage: TriageResult | None = None) -> dict[str, Any]:
     agents = _agents(triage=triage)
     agents["verify_agent"] = verify_agent
+    return agents
+
+
+def _agents_with_verify_and_report(
+    verify_agent: Any,
+    report_agent: Any,
+    *,
+    triage: TriageResult | None = None,
+) -> dict[str, Any]:
+    agents = _agents_with_verify(verify_agent, triage=triage)
+    agents["report_agent"] = report_agent
     return agents
 
 
@@ -306,6 +350,53 @@ def _services(
     }
 
 
+class TestResolveVerifyWritebackStatus:
+    def _result(
+        self,
+        *,
+        failed_writebacks: list[str],
+        results: list[VerificationActionResult],
+    ) -> VerificationResult:
+        return VerificationResult(
+            overall_status=VerificationOverallStatus.FAILED,
+            verification_phase=VerificationPhase.EFFECT,
+            failed_writebacks=failed_writebacks,
+            results=results,
+        )
+
+    def _action(
+        self,
+        *,
+        writeback_ids: list[str],
+        writeback_status: WritebackStatus | None,
+    ) -> VerificationActionResult:
+        return VerificationActionResult(
+            action_id="act-001",
+            effect_status=EffectStatus.FAILED,
+            writeback_required=writeback_status is not None,
+            writeback_readiness=(
+                WritebackReadiness.READY if writeback_status is not None else WritebackReadiness.NOT_REQUIRED
+            ),
+            writeback_status=writeback_status,
+            writeback_ids=writeback_ids,
+        )
+
+    def test_matches_failed_writeback_id(self) -> None:
+        result = self._result(
+            failed_writebacks=["wbk-target"],
+            results=[self._action(writeback_ids=["wbk-target"], writeback_status=WritebackStatus.PENDING)],
+        )
+        assert _resolve_verify_writeback_status(result) == "pending"
+
+    def test_no_fallback_when_id_mismatch(self) -> None:
+        """ISSUE-062: do not borrow another writeback's status on ID mismatch."""
+        result = self._result(
+            failed_writebacks=["wbk-target"],
+            results=[self._action(writeback_ids=["wbk-other"], writeback_status=WritebackStatus.CONFLICT)],
+        )
+        assert _resolve_verify_writeback_status(result) is None
+
+
 class TestRouteAfterTriage:
     def test_not_required_no_investigation_closes(self) -> None:
         assert route_after_triage(_base_state(need_investigation=False)) == ROUTE_CLOSE
@@ -425,6 +516,38 @@ async def test_graph_replan_one_cycle_then_success() -> None:
     assert final["escalated"] is False
     assert NODE_CLOSE in trace
     assert len(verify_agent.calls) == 2
+    assert machine.status is EventStatus.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_graph_replan_exhaustion_escalates() -> None:
+    """ISSUE-062: three replan cycles then escalation → report with human note."""
+    verify_agent = AlwaysFailVerifyAgent()
+    report_agent = CapturingReportAgent()
+    machine = FakeStateMachine()
+    services = _services(machine)
+    final = await build_investigation_graph(
+        _agents_with_verify_and_report(verify_agent, report_agent),
+        services,
+    ).ainvoke(
+        _base_state(),
+        {"configurable": {"thread_id": "evt-replan-exhaust"}},
+    )
+    trace = final["node_trace"]
+
+    assert trace.count(NODE_VERIFY) == MAX_REPLAN_COUNT + 1
+    assert trace.count(NODE_REPLAN) == MAX_REPLAN_COUNT + 1
+    assert final["replan_count"] == MAX_REPLAN_COUNT
+    assert final["escalated"] is True
+    assert NODE_REPORT in trace
+    assert NODE_CLOSE in trace
+    assert len(report_agent.calls) == 1
+    assert report_agent.calls[0].escalated is True
+    assert report_agent.calls[0].replan_count == MAX_REPLAN_COUNT
+    failed_transitions = [
+        target for _event_id, target, _reason in machine.transitions if target is EventStatus.FAILED
+    ]
+    assert failed_transitions, "escalation must transition through FAILED before report"
     assert machine.status is EventStatus.CLOSED
 
 

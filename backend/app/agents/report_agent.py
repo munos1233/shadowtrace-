@@ -110,6 +110,8 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             rag_output=rag,
             final_verdict=final_verdict,
             false_positive_match=fp_match,
+            escalated=input.escalated,
+            replan_count=input.replan_count,
         )
         title = self.section_builder.default_title(triage, input.event_id)
         summary = self.section_builder.default_summary(
@@ -240,6 +242,24 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             )
         return title, summary, parsed
 
+    @staticmethod
+    def _missing_required_lines(
+        base_content: str,
+        merged_content: str,
+        *,
+        prefixes: tuple[str, ...] = (),
+        contains: tuple[str, ...] = (),
+    ) -> list[str]:
+        """Return template lines from *base_content* absent from *merged_content*."""
+        required: list[str] = []
+        for line in base_content.splitlines():
+            if prefixes and any(line.startswith(p) for p in prefixes):
+                required.append(line)
+            elif contains and any(token in line for token in contains):
+                required.append(line)
+        merged_lines = merged_content.splitlines()
+        return [line for line in required if line not in merged_lines]
+
     def _merge_sections(
         self,
         base: list[ReportSection],
@@ -249,14 +269,21 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         for section in base:
             content = overrides.get(section.key) or section.content
             if section.key == "overview" and section.key in overrides:
-                required_fp_lines = [
-                    line for line in section.content.splitlines() if line.startswith("fp_")
-                ]
-                missing_fp_lines = [
-                    line for line in required_fp_lines if line not in content.splitlines()
-                ]
-                if missing_fp_lines:
-                    content = "\n".join([content, *missing_fp_lines])
+                missing = self._missing_required_lines(
+                    section.content,
+                    content,
+                    prefixes=("fp_", "human_escalation:"),
+                )
+                if missing:
+                    content = "\n".join([content, *missing])
+            elif section.key == "recommendations" and section.key in overrides:
+                missing = self._missing_required_lines(
+                    section.content,
+                    content,
+                    contains=("人工升级", "escalated=true"),
+                )
+                if missing:
+                    content = "\n".join([content, *missing])
             merged.append(
                 ReportSection(
                     key=section.key,
