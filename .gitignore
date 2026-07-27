@@ -35,3 +35,4 @@ frontend/.vite/
 tmp/
 *.local
 .env.local
+.github_token
