@@ -349,9 +349,7 @@ class TestSearchServiceFallback:
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         event_id = f"evt-{uuid.uuid4().hex[:8]}"
-        await _seed_tool_call(
-            session_factory, event_id=event_id, tool_name="revoke_token"
-        )
+        await _seed_tool_call(session_factory, event_id=event_id, tool_name="revoke_token")
         result = await service.search("revoke_token", scope="tool-calls")
         assert result.total >= 1
         item = result.items[0]
