@@ -51,7 +51,7 @@ export default function MainLayout() {
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
+      <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} className="shadowtrace-sidebar">
         <div
           style={{
             height: 48,
@@ -77,7 +77,7 @@ export default function MainLayout() {
         />
       </Sider>
       <Layout>
-        <Header
+        <Header className="shadowtrace-header"
           style={{
             background: "#fff",
             padding: "0 24px",

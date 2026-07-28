@@ -1,6 +1,6 @@
 /** ReportViewer — 15-chapter report with TOC, Markdown rendering, export (ISSUE-074). */
 
-import { useMemo } from "react";
+import { useMemo, useRef, useEffect } from "react";
 import { Alert, Spin, Typography, Divider } from "antd";
 import { FileTextOutlined } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
@@ -12,7 +12,7 @@ import { CHAPTER_KEYS } from "../../utils/exportMarkdown";
 
 const { Title, Text } = Typography;
 
-/** Print stylesheet — injected once. */
+/** Print stylesheet — injected once per page lifecycle. */
 const PRINT_STYLES = `
 @media print {
   .shadowtrace-sidebar, .shadowtrace-header, .shadowtrace-toc, .shadowtrace-export-btns {
@@ -22,13 +22,6 @@ const PRINT_STYLES = `
 }
 `;
 
-// Inject print styles once
-if (typeof document !== "undefined") {
-  const style = document.createElement("style");
-  style.textContent = PRINT_STYLES;
-  document.head.appendChild(style);
-}
-
 interface ReportViewerProps {
   report: InvestigationReport | null;
   loading: boolean;
@@ -36,6 +29,21 @@ interface ReportViewerProps {
 }
 
 export default function ReportViewer({ report, loading, eventStatus }: ReportViewerProps) {
+  const printStyleRef = useRef<HTMLStyleElement | null>(null);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const style = document.createElement("style");
+    style.textContent = PRINT_STYLES;
+    document.head.appendChild(style);
+    printStyleRef.current = style;
+    return () => {
+      if (printStyleRef.current) {
+        document.head.removeChild(printStyleRef.current);
+        printStyleRef.current = null;
+      }
+    };
+  }, []);
   const sections = useMemo(() => {
     if (!report) return [];
     return CHAPTER_KEYS
