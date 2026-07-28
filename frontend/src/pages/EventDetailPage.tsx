@@ -18,6 +18,7 @@ import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useEffect, useMemo } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
+import ReportViewer from "../components/report/ReportViewer";
 import EventOverviewCard from "../components/event/EventOverviewCard";
 import EntityList from "../components/event/EntityList";
 import EvidenceList from "../components/event/EvidenceList";
@@ -568,7 +569,7 @@ export default function EventDetailPage() {
     {
       key: "report",
       label: "报告",
-      children: context?.report ? <JsonPreview value={context.report} /> : <Placeholder feature="调查报告" />,
+      children: <ReportViewer report={context?.report ?? null} loading={loading} eventStatus={event.event.status} />,
     },
   ];
 
