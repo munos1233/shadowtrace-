@@ -17,6 +17,7 @@ interface ApprovalState {
   /** Polling timer handle. */
   _pollTimer: ReturnType<typeof setInterval> | null;
   _socketUnsub: (() => void) | null;
+  _eventIds: string[];
 
   /** Fetch all WAITING_APPROVAL actions from the server (initial load). */
   loadPendingApprovals: (eventIds: string[]) => Promise<void>;
@@ -54,6 +55,7 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
   unreadCount: 0,
   _pollTimer: null,
   _socketUnsub: null,
+  _eventIds: [],
 
   async loadPendingApprovals(eventIds: string[]) {
     set({ loading: true, error: null });
@@ -93,6 +95,7 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
   startPolling(eventIds: string[]) {
     const { _pollTimer, _socketUnsub } = get();
     if (_pollTimer) clearInterval(_pollTimer);
+    set({ _eventIds: eventIds });
 
     // Socket listener
     if (!_socketUnsub) {
@@ -105,9 +108,10 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
       set({ _socketUnsub: unsub });
     }
 
-    // 10-second polling fallback
+    // 10-second polling fallback — reads eventIds from store to avoid stale closure
     const timer = setInterval(() => {
-      get().loadPendingApprovals(eventIds);
+      const ids = get()._eventIds;
+      if (ids.length > 0) get().loadPendingApprovals(ids);
     }, 10_000);
     set({ _pollTimer: timer });
   },
