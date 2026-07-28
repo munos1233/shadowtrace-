@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Typography, Space, Empty, Spin, Alert, Badge, Statistic, Row, Col } from "antd";
-import { CheckCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined } from "@ant-design/icons";
 import { useApprovalStore } from "../stores/approvalStore";
 import { useEventStore } from "../stores/eventStore";
 import ApprovalCard from "../components/approval/ApprovalCard";
