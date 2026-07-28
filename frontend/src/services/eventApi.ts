@@ -90,6 +90,10 @@ export function approveAction(actionId: string) {
   return apiClient.post(`/actions/${actionId}/approve`);
 }
 
+export function rejectAction(actionId: string, body: { comment?: string }) {
+  return apiClient.post(`/actions/${actionId}/reject`, body);
+}
+
 // ------------------------------------------------------------------ //
 // Source records & connectors
 // ------------------------------------------------------------------ //
