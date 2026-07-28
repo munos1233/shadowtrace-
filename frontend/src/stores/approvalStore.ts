@@ -5,6 +5,7 @@ import { notification } from "antd";
 import type { Action } from "../types/action";
 import { listActions, approveAction, rejectAction } from "../services/eventApi";
 import { socketClient } from "../services/socketClient";
+import type { SocketEvent } from "../types/socket";
 
 interface ApprovalState {
   /** All pending approval actions across events. */
@@ -38,15 +39,7 @@ interface ApprovalState {
   clearUnread: () => void;
 
   /** Apply a socket-driven update: add or remove an approval. */
-  _applySocketEvent: (event: ApprovalSocketEvent) => void;
-}
-
-interface ApprovalSocketEvent {
-  type: "approval_required" | "approval_updated";
-  action_id: string;
-  event_id?: string;
-  status?: string;
-  payload?: Record<string, unknown>;
+  _applySocketEvent: (event: SocketEvent) => void;
 }
 
 export const useApprovalStore = create<ApprovalState>((set, get) => ({
@@ -126,8 +119,8 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
     set({ _pollTimer: null, _socketUnsub: null });
   },
 
-  _applySocketEvent(event: ApprovalSocketEvent) {
-    const action_id = (event.payload as Record<string, unknown> | undefined)?.action_id as string ?? event.action_id;
+  _applySocketEvent(event: SocketEvent) {
+    const action_id = event.payload?.action_id as string ?? "";
     if (event.type === "approval_updated") {
       set((s) => ({
         pendingApprovals: s.pendingApprovals.filter((a) => a.action_id !== action_id),
