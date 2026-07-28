@@ -19,6 +19,7 @@ import { useEffect, useMemo } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
 import ReportViewer from "../components/report/ReportViewer";
+import type { InvestigationReport } from "../types/report";
 import EventOverviewCard from "../components/event/EventOverviewCard";
 import EntityList from "../components/event/EntityList";
 import EvidenceList from "../components/event/EvidenceList";
@@ -569,7 +570,7 @@ export default function EventDetailPage() {
     {
       key: "report",
       label: "报告",
-      children: <ReportViewer report={context?.report ?? null} loading={loading} eventStatus={event.event.status} />,
+      children: <ReportViewer report={context?.report as InvestigationReport | null ?? null} loading={loading} eventStatus={event.event.status} />,
     },
   ];
 
