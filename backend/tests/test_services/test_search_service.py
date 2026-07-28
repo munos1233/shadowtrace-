@@ -21,10 +21,10 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.core.opensearch_client import OpenSearchClient
 from app.db import models as orm
-from app.models.search import SearchResponse, SearchResultItem
+from app.models.search import SearchResponse
 from app.services.search_service import SearchService
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]

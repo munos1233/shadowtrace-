@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Layout, Menu, Space } from "antd";
+import { Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
 import {
   UnorderedListOutlined,
