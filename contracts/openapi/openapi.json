@@ -815,48 +815,6 @@
         }
       }
     },
-    "/api/v1/events/{event_id}/graph": {
-      "get": {
-        "tags": [
-          "events"
-        ],
-        "summary": "Get Graph",
-        "operationId": "get_graph_api_v1_events__event_id__graph_get",
-        "parameters": [
-          {
-            "name": "event_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Event Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/events/{event_id}/decision-trace": {
       "get": {
         "tags": [
@@ -1769,6 +1727,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AttackStoryline"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{event_id}/graph": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Get Graph",
+        "description": "Return the persisted entity graph for an event.\n\nA known event without graph rows is a valid, not-yet-generated graph and\ntherefore returns four empty arrays rather than a 404.",
+        "operationId": "get_graph_api_v1_events__event_id__graph_get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphOutput"
                 }
               }
             }
@@ -3453,34 +3454,141 @@
         "title": "FinalVerdict",
         "description": "Verdict label, independent from EventStatus."
       },
-      "GraphResponse": {
+      "GraphEdge": {
         "properties": {
+          "edge_id": {
+            "type": "string",
+            "title": "Edge Id"
+          },
           "event_id": {
             "type": "string",
             "title": "Event Id"
           },
+          "source_node_id": {
+            "type": "string",
+            "title": "Source Node Id"
+          },
+          "target_node_id": {
+            "type": "string",
+            "title": "Target Node Id"
+          },
+          "relation_type": {
+            "$ref": "#/components/schemas/GraphRelationType"
+          },
+          "evidence_id": {
+            "type": "string",
+            "title": "Evidence Id"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "edge_id",
+          "event_id",
+          "source_node_id",
+          "target_node_id",
+          "relation_type",
+          "evidence_id"
+        ],
+        "title": "GraphEdge"
+      },
+      "GraphNode": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "entity_value": {
+            "type": "string",
+            "title": "Entity Value"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "node_id",
+          "event_id",
+          "entity_type",
+          "entity_value"
+        ],
+        "title": "GraphNode"
+      },
+      "GraphOutput": {
+        "properties": {
           "nodes": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/GraphNode"
             },
             "type": "array",
             "title": "Nodes"
           },
           "edges": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/GraphEdge"
             },
             "type": "array",
             "title": "Edges"
+          },
+          "central_entities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Central Entities"
+          },
+          "attack_path_candidates": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Attack Path Candidates"
           }
         },
+        "additionalProperties": false,
         "type": "object",
-        "required": [
-          "event_id"
+        "title": "GraphOutput"
+      },
+      "GraphRelationType": {
+        "type": "string",
+        "enum": [
+          "logged_in_from",
+          "logged_in_to",
+          "executed",
+          "accessed",
+          "connected_to",
+          "resolved",
+          "requested",
+          "uploaded_to"
         ],
-        "title": "GraphResponse"
+        "title": "GraphRelationType"
       },
       "HTTPValidationError": {
         "properties": {

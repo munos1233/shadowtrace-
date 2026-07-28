@@ -338,7 +338,7 @@ def test_export_openapi_writes_valid_json(tmp_path: Path) -> None:
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/traces",
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/audit-logs",
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/tool-calls",
-        f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/graph",
+        f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/timeline",
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/decision-trace",
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/actions",
         f"/api/v1/events/{s.EXAMPLE_EVENT_ID}/dispositions",

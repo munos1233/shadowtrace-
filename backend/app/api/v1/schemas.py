@@ -221,12 +221,6 @@ class TimelineResponse(BaseModel):
     items: list[TimelineItem] = Field(default_factory=list)
 
 
-class GraphResponse(BaseModel):
-    event_id: str
-    nodes: list[dict[str, Any]] = Field(default_factory=list)
-    edges: list[dict[str, Any]] = Field(default_factory=list)
-
-
 class DecisionTraceResponse(BaseModel):
     event_id: str
     entries: list[dict[str, Any]] = Field(default_factory=list)

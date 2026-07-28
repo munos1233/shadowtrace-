@@ -22,6 +22,7 @@ import EventOverviewCard from "../components/event/EventOverviewCard";
 import EntityList from "../components/event/EntityList";
 import EvidenceList from "../components/event/EvidenceList";
 import RiskScorePanel from "../components/event/RiskScorePanel";
+import EntityGraph from "../components/graph/EntityGraph";
 import StorylineTimeline from "../components/storyline/StorylineTimeline";
 import AgentStatusPanel from "../components/agent/AgentStatusPanel";
 import { useEventDetail, type EventWriteback } from "../hooks/useEventDetail";
@@ -501,7 +502,16 @@ export default function EventDetailPage() {
         />
       ),
     },
-    { key: "graph", label: "攻击图谱", children: <Placeholder feature="攻击图谱" /> },
+    {
+      key: "graph",
+      label: "攻击图谱",
+      children: (
+        <EntityGraph
+          eventId={eventId}
+          refreshToken={event.event.updated_at}
+        />
+      ),
+    },
     {
       key: "evidence",
       label: `证据（${evidenceOutput?.evidence_list?.length ?? 0}）`,
@@ -571,6 +581,7 @@ export default function EventDetailPage() {
       <Card>
         <Tabs
           activeKey={selectedTab}
+          destroyOnHidden
           items={items}
           onChange={(key) =>
             navigate(

@@ -8,7 +8,6 @@ to EventContext via WorkingMemory.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,11 +20,12 @@ from app.core.errors import ShadowTraceError
 from app.db.orm.graph import GraphEdgeORM, GraphNodeORM
 from app.models.agent_io import GraphAgentInput, GraphOutput
 from app.models.evidence import Evidence
+from app.services.graph_projection import (
+    compute_central_entities as _compute_central_entities,
+)
+from app.services.graph_projection import find_attack_paths as _find_attack_paths
 
 logger = logging.getLogger(__name__)
-
-MAX_PATH_DEPTH = 6
-MAX_ATTACK_PATHS = 3
 
 
 class GraphAgent(BaseAgent[GraphAgentInput, GraphOutput]):
@@ -248,124 +248,3 @@ class GraphAgent(BaseAgent[GraphAgentInput, GraphOutput]):
             central_entities=[],
             attack_path_candidates=[],
         )
-
-
-# ====================================================================== #
-# Centrality
-# ====================================================================== #
-
-
-def _compute_central_entities(
-    nodes: list[Any],
-    edges: list[Any],
-    top_n: int = 3,
-) -> list[str]:
-    """Return the top-N entity_values ranked by degree (undirected).
-
-    ``entity_value`` is used as the label so results read naturally
-    (e.g. "zhangsan", "PC-FIN-023").
-    """
-    degree: dict[str, int] = defaultdict(int)
-    node_value_by_id: dict[str, str] = {}
-
-    for n in nodes:
-        node_value_by_id[n.node_id] = n.entity_value
-
-    for e in edges:
-        src = e.source_node_id
-        tgt = e.target_node_id
-        src_label = node_value_by_id.get(src, src)
-        tgt_label = node_value_by_id.get(tgt, tgt)
-        degree[src_label] += 1
-        degree[tgt_label] += 1
-
-    # Fallback: include any node not incident to any edge
-    for n in nodes:
-        label = n.entity_value
-        if label not in degree:
-            degree[label] = 0
-
-    ranked = sorted(degree.items(), key=lambda kv: (-kv[1], kv[0]))
-    return [label for label, _ in ranked[:top_n]]
-
-
-# ====================================================================== #
-# Attack-path discovery
-# ====================================================================== #
-
-
-def _find_attack_paths(
-    nodes: list[Any],
-    edges: list[Any],
-    max_depth: int = MAX_PATH_DEPTH,
-    max_paths: int = MAX_ATTACK_PATHS,
-) -> list[list[str]]:
-    """Discover time-monotonic attack-path candidates via depth-limited DFS.
-
-    Returns up to *max_paths* chains of ``node_id`` values.  A chain is
-    considered valid only when its edges have monotonically non-decreasing
-    ``occurred_at`` timestamps.
-    """
-    if not edges:
-        return []
-
-    # Build adjacency list: source → [(target, edge)]
-    adj: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-    for e in edges:
-        adj[e.source_node_id].append((e.target_node_id, e))
-
-    # Sort outgoing edges by timestamp
-    for src in adj:
-        adj[src].sort(key=lambda item: _ts_or_min(item[1].occurred_at))
-
-    paths: list[list[str]] = []
-
-    # Start from every node
-    for node in nodes:
-        for path in _dfs_chain(node.node_id, adj, [], max_depth):
-            if len(path) >= 2:  # at least one edge
-                paths.append(path)
-            if len(paths) >= max_paths * 3:  # collect extra then filter
-                break
-
-    # Deduplicate by canonical string representation; pick longest then earliest
-    seen: set[str] = set()
-    unique: list[list[str]] = []
-    for p in sorted(paths, key=lambda p: (-len(p), str(p))):
-        key = "|".join(p)
-        if key not in seen:
-            seen.add(key)
-            unique.append(p)
-
-    return unique[:max_paths]
-
-
-def _dfs_chain(
-    current: str,
-    adj: dict[str, list[tuple[str, Any]]],
-    visited: list[str],
-    max_depth: int,
-    last_ts: datetime | None = None,
-) -> list[list[str]]:
-    """Depth-limited DFS that enforces time monotonicity."""
-    results: list[list[str]] = []
-
-    if len(visited) >= max_depth:
-        return results
-
-    new_visited = visited + [current]
-    results.append(list(new_visited))
-
-    for neighbor, edge in adj.get(current, []):
-        if neighbor in new_visited:
-            continue
-        edge_ts = edge.occurred_at
-        if last_ts is not None and edge_ts is not None and edge_ts < last_ts:
-            continue
-        results.extend(_dfs_chain(neighbor, adj, new_visited, max_depth, edge_ts or last_ts))
-
-    return results
-
-
-def _ts_or_min(ts: datetime | None) -> datetime:
-    return ts if ts is not None else datetime.min.replace(tzinfo=UTC)

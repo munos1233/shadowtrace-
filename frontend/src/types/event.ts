@@ -360,6 +360,53 @@ export interface AttackStoryline {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Entity graph models                                               */
+/* ------------------------------------------------------------------ */
+
+export type GraphEntityType =
+  | "account"
+  | "host"
+  | "ip"
+  | "domain"
+  | "process"
+  | "file";
+
+export type GraphRelationType =
+  | "logged_in_from"
+  | "logged_in_to"
+  | "executed"
+  | "accessed"
+  | "connected_to"
+  | "resolved"
+  | "requested"
+  | "uploaded_to";
+
+export interface GraphNode {
+  node_id: string;
+  event_id: string;
+  entity_type: GraphEntityType;
+  entity_value: string;
+  properties: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  edge_id: string;
+  event_id: string;
+  source_node_id: string;
+  target_node_id: string;
+  relation_type: GraphRelationType;
+  evidence_id: string;
+  occurred_at: string | null;
+}
+
+export interface GraphOutput {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  central_entities: string[];
+  attack_path_candidates: string[][];
+}
+
+/* ------------------------------------------------------------------ */
 /*  Risk models                                                       */
 /* ------------------------------------------------------------------ */
 

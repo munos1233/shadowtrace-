@@ -6,6 +6,7 @@ import type {
   EventDetailResponse,
   EventListParams,
   EventListResponse,
+  GraphOutput,
   ConnectorsResponse,
   DispositionListResponse,
   ExecutionJobResponse,
@@ -34,6 +35,10 @@ export function getEvent(eventId: string) {
 
 export function getTimeline(eventId: string) {
   return apiClient.get<AttackStoryline>(`/events/${eventId}/timeline`);
+}
+
+export function getGraph(eventId: string) {
+  return apiClient.get<GraphOutput>(`/events/${eventId}/graph`);
 }
 
 export function triggerInvestigation(eventId: string) {
