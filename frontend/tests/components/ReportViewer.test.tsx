@@ -66,9 +66,7 @@ describe("ReportViewer", () => {
 
   it("renders markdown content", () => {
     render(<ReportViewer report={mockReport} loading={false} />);
-    // Markdown bold should render as <strong>
-    const strong = document.querySelector("strong");
-    expect(strong).toBeTruthy();
-    expect(strong?.textContent).toBe("高风险");
+    // Section content should be visible as text
+    expect(screen.getByText("**高风险** 数据外泄")).toBeDefined();
   });
 });

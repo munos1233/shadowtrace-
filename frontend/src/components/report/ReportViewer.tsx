@@ -3,8 +3,6 @@
 import { useMemo, useRef, useEffect } from "react";
 import { Alert, Spin, Typography, Divider } from "antd";
 import { FileTextOutlined } from "@ant-design/icons";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { InvestigationReport } from "../../types/report";
 import ReportToc from "./ReportToc";
 import ReportExportButtons from "./ReportExportButtons";
@@ -113,9 +111,7 @@ export default function ReportViewer({ report, loading, eventStatus }: ReportVie
             <Title level={5} id={`${section.key}-title`}>
               {section.title}
             </Title>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {section.content}
-            </ReactMarkdown>
+            <Text style={{ whiteSpace: "pre-wrap" }}>{section.content}</Text>
           </div>
         ))}
       </div>
