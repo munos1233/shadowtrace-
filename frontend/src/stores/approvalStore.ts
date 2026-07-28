@@ -1,6 +1,7 @@
 /** Approval store — pending approvals with socket-driven updates (ISSUE-073). */
 
 import { create } from "zustand";
+import { notification } from "antd";
 import type { Action } from "../types/action";
 import { listActions, approveAction, rejectAction } from "../services/eventApi";
 import { socketClient } from "../services/socketClient";
@@ -10,6 +11,8 @@ interface ApprovalState {
   pendingApprovals: Action[];
   loading: boolean;
   error: string | null;
+  /** Unread approval-required socket events (bell badge). */
+  unreadCount: number;
 
   /** Polling timer handle. */
   _pollTimer: ReturnType<typeof setInterval> | null;
@@ -30,6 +33,9 @@ interface ApprovalState {
   /** Stop polling and disconnect socket listener. */
   stopPolling: () => void;
 
+  /** Reset unread badge count. */
+  clearUnread: () => void;
+
   /** Apply a socket-driven update: add or remove an approval. */
   _applySocketEvent: (event: ApprovalSocketEvent) => void;
 }
@@ -45,6 +51,7 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
   pendingApprovals: [],
   loading: false,
   error: null,
+  unreadCount: 0,
   _pollTimer: null,
   _socketUnsub: null,
 
@@ -70,7 +77,7 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
   },
 
   async approve(actionId: string, comment?: string) {
-    await approveAction(actionId);
+    await approveAction(actionId, { comment });
     set((s) => ({
       pendingApprovals: s.pendingApprovals.filter((a) => a.action_id !== actionId),
     }));
@@ -120,13 +127,17 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
         pendingApprovals: s.pendingApprovals.filter((a) => a.action_id !== action_id),
       }));
     }
-    // For 'approval_required', a refresh is more reliable than constructing the Action
-    // from socket payload fields; the 10 s poll will pick it up.
     if (type === "approval_required") {
-      // Immediately trigger a refresh
-      const store = get();
-      // We don't have eventIds here; the caller should restart polling
-      // but the existing poll timer will pick it up on next cycle.
+      set((s) => ({ unreadCount: s.unreadCount + 1 }));
+      notification.info({
+        message: "新的审批请求",
+        description: `动作 ${action_id} 需要审批`,
+        placement: "topRight",
+      });
     }
+  },
+
+  clearUnread() {
+    set({ unreadCount: 0 });
   },
 }));

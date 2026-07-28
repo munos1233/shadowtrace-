@@ -54,14 +54,6 @@ export default function ApprovalPage() {
     };
   }, [eventIds.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic refresh every 10 s (fallback)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (eventIds.length > 0) loadPendingApprovals(eventIds);
-    }, 10_000);
-    return () => clearInterval(timer);
-  }, [eventIds]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Count unique event_ids among pending approvals
   const eventPlanInfo = useMemo(() => {
     const map = new Map<string, { total: number; eventId: string }>();

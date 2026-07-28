@@ -86,8 +86,8 @@ export function listActions(
   });
 }
 
-export function approveAction(actionId: string) {
-  return apiClient.post(`/actions/${actionId}/approve`);
+export function approveAction(actionId: string, body?: { comment?: string }) {
+  return apiClient.post(`/actions/${actionId}/approve`, body ?? {});
 }
 
 export function rejectAction(actionId: string, body: { comment?: string }) {

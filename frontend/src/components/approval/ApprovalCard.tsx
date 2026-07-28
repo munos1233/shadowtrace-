@@ -5,7 +5,7 @@ import { Card, Tag, Typography, Space, theme } from "antd";
 import { ClockCircleOutlined, WarningOutlined } from "@ant-design/icons";
 import type { Action } from "../../types/action";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { useToken } = theme;
 
 interface ApprovalCardProps {

@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Layout, Menu } from "antd";
+import { Layout, Menu, Badge } from "antd";
 import type { MenuProps } from "antd";
 import {
   UnorderedListOutlined,
   CheckCircleOutlined,
   ToolOutlined,
+  BellOutlined,
 } from "@ant-design/icons";
+import { useApprovalStore } from "../stores/approvalStore";
 
 const { Header, Sider, Content } = Layout;
 
@@ -22,6 +24,9 @@ export default function MainLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  const unreadCount = useApprovalStore((s) => s.unreadCount);
+  const clearUnread = useApprovalStore((s) => s.clearUnread);
 
   // Determine selected key from current path
   const selectedKey = location.pathname.startsWith("/events")
@@ -67,11 +72,15 @@ export default function MainLayout() {
             borderBottom: "1px solid #f0f0f0",
             display: "flex",
             alignItems: "center",
+            justifyContent: "space-between",
             fontSize: 16,
             fontWeight: 500,
           }}
         >
-          ShadowTrace — 多 Agent 安全运营系统
+          <span>ShadowTrace — 多 Agent 安全运营系统</span>
+          <Badge count={unreadCount} overflowCount={99} onClick={clearUnread}>
+            <BellOutlined style={{ fontSize: 18, cursor: "pointer" }} />
+          </Badge>
         </Header>
         <Content style={{ margin: 16 }}>
           <Outlet />
