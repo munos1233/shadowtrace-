@@ -180,6 +180,7 @@ async def _seed_evidence(
                         severity="low",
                         risk_score=0,
                         confidence=0.5,
+                        creation_source_ref={},
                         replan_count=0,
                         escalated=False,
                         external_unsynced=False,
@@ -220,7 +221,7 @@ class TestSearchServiceFallback:
         assert isinstance(result, SearchResponse)
         assert result.total >= 1
         assert result.degraded is True
-        assert any("isolate_host" in item.source_summary for item in result.items)
+        assert any(item.index == "tool_call_log" for item in result.items)
 
     @pytest.mark.asyncio
     async def test_search_tool_calls_no_match(
