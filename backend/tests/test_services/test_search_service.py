@@ -403,10 +403,20 @@ class TestSearchServiceOpenSearch:
     async def os_service(
         self,
         session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> AsyncIterator[SearchService]:
-        """Wired SearchService with real OpenSearch client."""
+        """Wired SearchService with real OpenSearch client.
+
+        Skips the test when OpenSearch is not reachable.
+        """
+        monkeypatch.setenv("OPENSEARCH_ENABLED", "true")
+        monkeypatch.setenv(
+            "OPENSEARCH_URL", os.environ.get("OPENSEARCH_URL", "http://localhost:9200")
+        )
         settings = Settings()
         client = OpenSearchClient(settings)
+        if not await client.health_check():
+            pytest.skip("OpenSearch is not reachable")
         await client.initialize_indices()
         yield SearchService(session_factory, opensearch=client)
         await client.close()
