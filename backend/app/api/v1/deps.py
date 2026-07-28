@@ -45,6 +45,8 @@ _rollback_service: Any = None  # RollbackService
 _adapter_registry: Any = None  # DispositionAdapterRegistry
 _workflow_runtime: Any = None  # WorkflowRuntimeService
 _event_disposition: Any = None  # EventDispositionService
+_graph_sync_service: Any = None  # GraphSyncService (ISSUE-082)
+_neo4j_client: Any = None  # Neo4jClient (ISSUE-082)
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -338,6 +340,29 @@ async def get_rollback_service() -> Any:
     return _rollback_service
 
 
+async def get_graph_sync_service() -> Any:
+    """Return GraphSyncService when NEO4J_ENABLED=true; None otherwise.
+
+    ISSUE-082 §实现步骤 point 3: GraphAgent 输出后异步触发 Neo4j 同步。
+    Wiring: inject into GraphAgent(graph_sync_service=...) when GraphAgent
+    is integrated into the production orchestration stack (ISSUE-050/P1).
+    """
+    global _graph_sync_service, _neo4j_client
+    settings = get_settings()
+    if not settings.neo4j_enabled:
+        return None
+    if _graph_sync_service is None:
+        from app.core.neo4j_client import Neo4jClient
+        from app.services.graph_sync_service import GraphSyncService
+
+        _neo4j_client = Neo4jClient()
+        _graph_sync_service = GraphSyncService(
+            _get_session_factory(),
+            client=_neo4j_client,
+        )
+    return _graph_sync_service
+
+
 DispositionSyncDep = Annotated[Any, Depends(get_disposition_sync)]
 ActionExecutionDep = Annotated[Any, Depends(get_action_execution)]
 RollbackServiceDep = Annotated[Any, Depends(get_rollback_service)]
@@ -558,6 +583,7 @@ def reset_deps() -> None:
     global _disposition_sync, _action_execution, _rollback_service
     global _adapter_registry, _workflow_runtime, _event_disposition
     global _impact_assessment_service
+    global _graph_sync_service, _neo4j_client
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -578,3 +604,5 @@ def reset_deps() -> None:
     _adapter_registry = None
     _workflow_runtime = None
     _event_disposition = None
+    _graph_sync_service = None
+    _neo4j_client = None
