@@ -28,6 +28,11 @@ export default function MainLayout() {
   const unreadCount = useApprovalStore((s) => s.unreadCount);
   const clearUnread = useApprovalStore((s) => s.clearUnread);
 
+  const handleBellClick = () => {
+    clearUnread();
+    navigate("/approvals");
+  };
+
   // Determine selected key from current path
   const selectedKey = location.pathname.startsWith("/events")
     ? "/events"
@@ -78,7 +83,7 @@ export default function MainLayout() {
           }}
         >
           <span>ShadowTrace — 多 Agent 安全运营系统</span>
-          <Badge count={unreadCount} overflowCount={99} onClick={clearUnread}>
+          <Badge count={unreadCount} overflowCount={99} onClick={handleBellClick}>
             <BellOutlined style={{ fontSize: 18, cursor: "pointer" }} />
           </Badge>
         </Header>

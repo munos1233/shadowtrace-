@@ -1,10 +1,10 @@
 /** ApprovalCenterPage — approval queue with cards and real-time updates (ISSUE-073). */
 
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { Typography, Space, Empty, Spin, Alert, Badge, Statistic, Row, Col } from "antd";
+import { useEffect, useState, useCallback } from "react";
+import { Typography, Space, Empty, Spin, Alert } from "antd";
 import { CheckCircleOutlined } from "@ant-design/icons";
 import { useApprovalStore } from "../stores/approvalStore";
-import { useEventStore } from "../stores/eventStore";
+import { listEvents } from "../services/eventApi";
 import ApprovalCard from "../components/approval/ApprovalCard";
 import ApprovalActionModal from "../components/approval/ApprovalActionModal";
 
@@ -28,34 +28,22 @@ export default function ApprovalPage() {
     stopPolling,
   } = useApprovalStore();
 
-  const { items } = useEventStore();
-
-  const [modal, setModal] = useState<ModalState>({
-    open: false,
-    actionId: null,
-    mode: "approve",
-  });
+  const [modal, setModal] = useState<ModalState>({ open: false, actionId: null, mode: "approve" });
   const [submitting, setSubmitting] = useState(false);
-  const polledRef = useRef(false);
 
-  // Collect all event IDs that are currently active
-  const eventIds = useMemo(() => items.map((e) => e.event_id), [items]);
-
-  // One-time initialisation: load events + start polling
+  // Fetch event IDs on mount — load from API, not eventStore
   useEffect(() => {
-    if (polledRef.current) return;
-    polledRef.current = true;
-
-    loadPendingApprovals(eventIds);
-    startPolling(eventIds);
-
-    return () => {
-      stopPolling();
-    };
-  }, [eventIds.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+    listEvents({ page_size: 200 })
+      .then((res) => {
+        const ids = res.data.items.map((e: { event_id: string }) => e.event_id);
+        loadPendingApprovals(ids);
+        startPolling(ids);
+      })
+      .catch(() => { /* swallow */ });
+    return () => stopPolling();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Count unique event_ids among pending approvals
-  const eventPlanInfo = useMemo(() => {
     const map = new Map<string, { total: number; eventId: string }>();
     for (const a of pendingApprovals) {
       const existing = map.get(a.event_id);
@@ -116,25 +104,10 @@ export default function ApprovalPage() {
 
       <Text type="secondary">
         需审批的处置动作。同一事件的审批计划需全部决出后方可进入执行。
+        {pendingApprovals.length > 0 && (
+          <span style={{ marginLeft: 16 }}>共 {pendingApprovals.length} 个待审批动作</span>
+        )}
       </Text>
-
-      {/* Per-event progress */}
-      {eventPlanInfo.length > 0 && (
-        <Row gutter={16} style={{ marginTop: 16, marginBottom: 16 }}>
-          {eventPlanInfo.map((info) => (
-            <Col key={info.eventId}>
-              <Badge count={info.total} overflowCount={99}>
-                <Statistic
-                  title="待批动作"
-                  value={info.total}
-                  suffix={`/ ${info.eventId}`}
-                  valueStyle={{ fontSize: 18 }}
-                />
-              </Badge>
-            </Col>
-          ))}
-        </Row>
-      )}
 
       {error && (
         <Alert message={error} type="error" showIcon style={{ marginBottom: 16 }} closable />

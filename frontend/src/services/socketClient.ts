@@ -122,6 +122,19 @@ class SocketClient {
       });
       return;
     }
+    if (type === "approval_required" || type === "approval_updated") {
+      this.emit({
+        type,
+        event_id,
+        payload: {
+          action_id: String(payload.action_id ?? ""),
+          event_id: String(payload.event_id ?? event_id),
+          status: payload.status as string | undefined,
+          approval_cycle: payload.approval_cycle as number | undefined,
+        },
+      });
+      return;
+    }
     if (
       type === "risk_updated" ||
       type === "final_verdict_updated" ||

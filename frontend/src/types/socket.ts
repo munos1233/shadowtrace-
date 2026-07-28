@@ -55,6 +55,44 @@ export interface SocketToolCallPayload {
   retry_count?: number;
 }
 
+export interface SocketApprovalPayload {
+  action_id: string;
+  event_id?: string;
+  status?: string;
+  approval_cycle?: number;
+}
+
+export type EventDetailSocketEventType =
+  | "risk_updated"
+  | "final_verdict_updated"
+  | "action_executed"
+  | "action_verified"
+  | "disposition_submitted"
+  | "tool_call_started"
+  | "tool_call_completed";
+
+export type SocketEvent =
+  | { type: "event_created"; event_id: string; payload: SocketEventCreatedPayload }
+  | { type: "state_change"; event_id: string; payload: SocketStateChangePayload }
+  | { type: "writeback_updated"; event_id: string; payload: SocketWritebackUpdatedPayload }
+  | { type: "approval_required"; event_id: string; payload: SocketApprovalPayload }
+  | { type: "approval_updated"; event_id: string; payload: SocketApprovalPayload }
+  | {
+      type: EventDetailSocketEventType;
+      event_id: string;
+      payload: Record<string, unknown> & Partial<SocketToolCallPayload>;
+    };
+
+export interface SocketToolCallPayload {
+  call_id: string;
+  tool_name: string;
+  status?: string;
+  tool_category?: string;
+  provider_code?: string;
+  duration_ms?: number;
+  retry_count?: number;
+}
+
 export type EventDetailSocketEventType =
   | "risk_updated"
   | "final_verdict_updated"

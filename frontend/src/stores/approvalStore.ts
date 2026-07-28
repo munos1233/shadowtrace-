@@ -46,6 +46,7 @@ interface ApprovalSocketEvent {
   action_id: string;
   event_id?: string;
   status?: string;
+  payload?: Record<string, unknown>;
 }
 
 export const useApprovalStore = create<ApprovalState>((set, get) => ({
@@ -97,12 +98,14 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
     if (_pollTimer) clearInterval(_pollTimer);
     set({ _eventIds: eventIds });
 
+    // Ensure socket is connected
+    socketClient.connect();
+
     // Socket listener
     if (!_socketUnsub) {
-      const unsub = socketClient.onEvent((envelope: Record<string, unknown>) => {
-        const type = envelope?.type as string | undefined;
-        if (type === "approval_required" || type === "approval_updated") {
-          get()._applySocketEvent(envelope as unknown as ApprovalSocketEvent);
+      const unsub = socketClient.onEvent((event) => {
+        if (event.type === "approval_required" || event.type === "approval_updated") {
+          get()._applySocketEvent(event);
         }
       });
       set({ _socketUnsub: unsub });
@@ -124,20 +127,22 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
   },
 
   _applySocketEvent(event: ApprovalSocketEvent) {
-    const { type, action_id } = event;
-    if (type === "approval_updated") {
-      // Remove the action from pending list (already decided)
+    const action_id = (event.payload as Record<string, unknown> | undefined)?.action_id as string ?? event.action_id;
+    if (event.type === "approval_updated") {
       set((s) => ({
         pendingApprovals: s.pendingApprovals.filter((a) => a.action_id !== action_id),
       }));
     }
-    if (type === "approval_required") {
+    if (event.type === "approval_required") {
       set((s) => ({ unreadCount: s.unreadCount + 1 }));
       notification.info({
         message: "新的审批请求",
         description: `动作 ${action_id} 需要审批`,
         placement: "topRight",
       });
+      // Trigger immediate refresh to show the new card
+      const ids = get()._eventIds;
+      if (ids.length > 0) get().loadPendingApprovals(ids);
     }
   },
 
