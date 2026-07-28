@@ -22,7 +22,7 @@ import { useApprovalStore } from "../../src/stores/approvalStore";
 const mockStore = {
   pendingApprovals: [] as unknown[],
   loading: false,
-  error: null,
+  error: null as string | null,
   loadPendingApprovals: vi.fn(),
   approve: vi.fn(),
   reject: vi.fn(),
