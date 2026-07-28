@@ -43,19 +43,6 @@ export default function ApprovalPage() {
     return () => stopPolling();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Count unique event_ids among pending approvals
-    const map = new Map<string, { total: number; eventId: string }>();
-    for (const a of pendingApprovals) {
-      const existing = map.get(a.event_id);
-      if (existing) {
-        existing.total += 1;
-      } else {
-        map.set(a.event_id, { total: 1, eventId: a.event_id });
-      }
-    }
-    return Array.from(map.values());
-  }, [pendingApprovals]);
-
   // Check if an action has timed out (backend timeout is authoritative;
   // this is a front-end visual hint based on updated_at age > 30 min).
   const isTimedOut = useCallback(
