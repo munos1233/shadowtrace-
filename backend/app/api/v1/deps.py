@@ -45,6 +45,8 @@ _rollback_service: Any = None  # RollbackService
 _adapter_registry: Any = None  # DispositionAdapterRegistry
 _workflow_runtime: Any = None  # WorkflowRuntimeService
 _event_disposition: Any = None  # EventDispositionService
+_opensearch_client: Any = None  # OpenSearchClient
+_search_service: Any = None  # SearchService
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -336,6 +338,29 @@ async def get_rollback_service() -> Any:
     return _rollback_service
 
 
+def _get_opensearch_client() -> Any:
+    """Return the OpenSearchClient singleton (ISSUE-084)."""
+    global _opensearch_client
+    if _opensearch_client is None:
+        from app.core.opensearch_client import OpenSearchClient
+
+        _opensearch_client = OpenSearchClient(get_settings())
+    return _opensearch_client
+
+
+def get_search_service() -> Any:
+    """Return the SearchService singleton (ISSUE-084)."""
+    global _search_service
+    if _search_service is None:
+        from app.services.search_service import SearchService
+
+        _search_service = SearchService(
+            _get_session_factory(),
+            opensearch=_get_opensearch_client(),
+        )
+    return _search_service
+
+
 DispositionSyncDep = Annotated[Any, Depends(get_disposition_sync)]
 ActionExecutionDep = Annotated[Any, Depends(get_action_execution)]
 RollbackServiceDep = Annotated[Any, Depends(get_rollback_service)]
@@ -547,6 +572,7 @@ def reset_deps() -> None:
     global _disposition_sync, _action_execution, _rollback_service
     global _adapter_registry, _workflow_runtime, _event_disposition
     global _impact_assessment_service
+    global _opensearch_client, _search_service
     _session_factory = None
     _redis_client = None
     _context_store = None
@@ -567,3 +593,5 @@ def reset_deps() -> None:
     _adapter_registry = None
     _workflow_runtime = None
     _event_disposition = None
+    _opensearch_client = None
+    _search_service = None

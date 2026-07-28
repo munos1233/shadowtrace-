@@ -615,3 +615,33 @@ export interface WritebackResponse {
   message_code: string | null;
   target_results: TargetWritebackResult[];
 }
+
+/* ------------------------------------------------------------------ */
+/*  Search models (ISSUE-084)                                         */
+/* ------------------------------------------------------------------ */
+
+export interface SearchResultItem {
+  index: string;
+  doc_id: string;
+  highlight: string;
+  source_summary: string;
+  event_id: string | null;
+  occurred_at: string | null;
+}
+
+export interface SearchResponse {
+  items: SearchResultItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  degraded: boolean;
+}
+
+export type SearchScope = "tool-calls" | "audit-logs" | "evidence" | "all";
+
+export interface SearchParams {
+  q: string;
+  scope?: SearchScope;
+  page?: number;
+  page_size?: number;
+}

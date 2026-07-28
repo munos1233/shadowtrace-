@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
@@ -12,8 +14,11 @@ import orjson
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.opensearch_client import TOOL_CALLS_SUFFIX, OpenSearchClient
 from app.core.sanitization import REDACTED, is_sensitive_key, redact_sensitive_text
 from app.db import models as orm
+
+logger = logging.getLogger(__name__)
 
 MAX_AUDIT_FIELD_BYTES = 1_048_576
 _MAX_CREDENTIAL_REFERENCE_BYTES = 2_048
@@ -146,8 +151,41 @@ def _string_value(value: str | Enum) -> str:
 class ToolCallLogService:
     """Two-phase writer and query service for ``tool_call_log``."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        opensearch: OpenSearchClient | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._opensearch = opensearch
+
+    async def _index_to_opensearch(self, row: orm.ToolCallLog) -> None:
+        """Fire-and-forget index a completed tool-call row into OpenSearch.
+
+        Never raises — all failures are caught and logged.
+        """
+        if self._opensearch is None or not self._opensearch.enabled:
+            return
+        try:
+            await self._opensearch.index_document(
+                TOOL_CALLS_SUFFIX,
+                row.call_id,
+                {
+                    "call_id": row.call_id,
+                    "event_id": row.event_id,
+                    "action_id": row.action_id,
+                    "tool_name": row.tool_name,
+                    "tool_category": row.tool_category,
+                    "status": row.status,
+                    "error_detail": row.error_detail,
+                    "started_at": row.started_at.isoformat() if row.started_at else None,
+                    "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                    "duration_ms": row.duration_ms,
+                    "retry_count": row.retry_count,
+                },
+            )
+        except Exception:
+            logger.warning("OpenSearch index failed for tool call %s", row.call_id, exc_info=True)
 
     async def log_start(
         self,
@@ -204,6 +242,10 @@ class ToolCallLogService:
                 row.error_detail = _bounded_error_detail(error_detail)
                 row.retry_count = retry_count
                 await session.flush()
+
+        # Fire-and-forget OpenSearch indexing (ISSUE-084).
+        if self._opensearch is not None and self._opensearch.enabled:
+            asyncio.ensure_future(self._index_to_opensearch(row))
 
     async def get_logs_by_event(self, event_id: str) -> list[orm.ToolCallLog]:
         async with self._session_factory() as session:

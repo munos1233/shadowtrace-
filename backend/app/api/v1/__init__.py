@@ -11,6 +11,7 @@ from app.api.v1 import (
     graph,
     health,
     knowledge,
+    search,
     source_records,
     stats,
     timeline,
@@ -32,3 +33,4 @@ api_router.include_router(stats.router)
 api_router.include_router(trajectory.router)
 api_router.include_router(timeline.router)
 api_router.include_router(graph.router)
+api_router.include_router(search.router)

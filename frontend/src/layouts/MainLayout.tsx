@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Layout, Menu } from "antd";
+import { Layout, Menu, Space } from "antd";
 import type { MenuProps } from "antd";
 import {
   UnorderedListOutlined,
   CheckCircleOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
+import GlobalSearchBox from "../components/search/GlobalSearchBox";
 
 const { Header, Sider, Content } = Layout;
 
@@ -67,11 +68,13 @@ export default function MainLayout() {
             borderBottom: "1px solid #f0f0f0",
             display: "flex",
             alignItems: "center",
+            justifyContent: "space-between",
             fontSize: 16,
             fontWeight: 500,
           }}
         >
-          ShadowTrace — 多 Agent 安全运营系统
+          <span>ShadowTrace — 多 Agent 安全运营系统</span>
+          <GlobalSearchBox />
         </Header>
         <Content style={{ margin: 16 }}>
           <Outlet />

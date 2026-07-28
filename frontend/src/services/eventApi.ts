@@ -10,6 +10,8 @@ import type {
   ConnectorsResponse,
   DispositionListResponse,
   ExecutionJobResponse,
+  SearchParams,
+  SearchResponse,
   SourceRecordResponse,
   WritebackResponse,
 } from "../types/event";
@@ -159,4 +161,12 @@ export function resolveWriteback(
   body: ResolveWritebackRequest,
 ) {
   return apiClient.post(`/writebacks/${writebackId}/resolve`, body);
+}
+
+// ------------------------------------------------------------------ //
+// Search (ISSUE-084)
+// ------------------------------------------------------------------ //
+
+export function search(params: SearchParams) {
+  return apiClient.get<SearchResponse>("/search", { params });
 }

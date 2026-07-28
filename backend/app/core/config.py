@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
 
+    opensearch_enabled: bool = Field(default=False, alias="OPENSEARCH_ENABLED")
+    opensearch_url: str = Field(default="http://opensearch:9200", alias="OPENSEARCH_URL")
+    opensearch_index_prefix: str = Field(default="shadowtrace", alias="OPENSEARCH_INDEX_PREFIX")
+
     source_mode: str = Field(default="mock_xdr", alias="SOURCE_MODE")
     source_read_only: bool = Field(default=True, alias="SOURCE_READ_ONLY")
 
