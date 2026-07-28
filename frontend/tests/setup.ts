@@ -27,3 +27,10 @@ if (!globalThis.matchMedia) {
 // to layout assertions in this suite, so delegate to the regular style lookup.
 const getComputedStyle = globalThis.getComputedStyle;
 globalThis.getComputedStyle = (element) => getComputedStyle(element);
+
+// Polyfill scrollIntoView for jsdom (not implemented)
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {
+    // noop — jsdom does not implement layout scrolling
+  };
+}

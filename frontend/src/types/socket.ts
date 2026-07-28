@@ -52,6 +52,21 @@ export type EventDetailSocketEventType =
   | "action_verified"
   | "disposition_submitted";
 
+export type AgentSocketEventType =
+  | "agent_progress"
+  | "agent_completed"
+  | "agent_failed";
+
+/** AgentStatus 5-state enum for the frontend agent status panel (ISSUE-075). */
+export type AgentStatus = "IDLE" | "PROCESSING" | "COMPLETED" | "FAILED" | "DEGRADED";
+
+export interface AgentSocketPayload {
+  agent_name: string;
+  status: AgentStatus;
+  message: string;
+  progress_percent?: number | null;
+}
+
 export type SocketEvent =
   | { type: "event_created"; event_id: string; payload: SocketEventCreatedPayload }
   | { type: "state_change"; event_id: string; payload: SocketStateChangePayload }
@@ -60,7 +75,8 @@ export type SocketEvent =
       type: EventDetailSocketEventType;
       event_id: string;
       payload: Record<string, unknown>;
-    };
+    }
+  | { type: AgentSocketEventType; event_id: string; payload: AgentSocketPayload };
 
 export function mapSocketWritebackStatus(status: string): WritebackStatus {
   return status.toLowerCase() as WritebackStatus;

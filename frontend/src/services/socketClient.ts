@@ -131,6 +131,25 @@ class SocketClient {
     ) {
       this.emit({ type, event_id, payload });
     }
+    if (
+      type === "agent_progress" ||
+      type === "agent_completed" ||
+      type === "agent_failed"
+    ) {
+      this.emit({
+        type,
+        event_id,
+        payload: {
+          agent_name: String(payload.agent_name ?? ""),
+          status: String(payload.status ?? "IDLE"),
+          message: String(payload.message ?? ""),
+          progress_percent:
+            payload.progress_percent != null
+              ? Number(payload.progress_percent)
+              : null,
+        },
+      });
+    }
   }
 
   private emit(event: SocketEvent): void {

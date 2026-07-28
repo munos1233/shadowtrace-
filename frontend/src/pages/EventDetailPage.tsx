@@ -23,6 +23,7 @@ import EntityList from "../components/event/EntityList";
 import EvidenceList from "../components/event/EvidenceList";
 import RiskScorePanel from "../components/event/RiskScorePanel";
 import StorylineTimeline from "../components/storyline/StorylineTimeline";
+import AgentStatusPanel from "../components/agent/AgentStatusPanel";
 import { useEventDetail, type EventWriteback } from "../hooks/useEventDetail";
 import type { Action } from "../types/action";
 import type {
@@ -391,6 +392,7 @@ export default function EventDetailPage() {
   const navigate = useNavigate();
   const {
     event,
+    traces,
     actions,
     executionJobs,
     dispositions,
@@ -561,6 +563,11 @@ export default function EventDetailPage() {
           />
         </Col>
       </Row>
+      <AgentStatusPanel
+        eventId={eventId}
+        eventStatus={event.event.status}
+        traces={traces}
+      />
       <Card>
         <Tabs
           activeKey={selectedTab}

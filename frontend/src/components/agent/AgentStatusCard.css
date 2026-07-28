@@ -1,0 +1,21 @@
+/** AgentStatusCard styles — pulse animation for PROCESSING state (ISSUE-075). */
+
+.agent-status-card {
+  transition: border-color 0.3s ease;
+  min-height: 100px;
+}
+
+.agent-status-card--processing {
+  border-color: #1677ff;
+  animation: agent-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(22, 119, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(22, 119, 255, 0);
+  }
+}
