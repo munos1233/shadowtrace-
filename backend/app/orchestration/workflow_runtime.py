@@ -10,16 +10,25 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agents.response_agent import compute_template_hash
 from app.core.errors import ValidationError
 from app.db import models as orm
 from app.models.enums import (
+    ActionCategory,
+    ActionExecutionPhase,
+    ActionLevel,
+    ActionStatus,
     DispositionPolicy,
     EventStatus,
+    EventType,
+    ExecutionOwner,
     ExecutionSubstate,
     FinalVerdict,
     Severity,
+    SourceDisposition,
     WritebackReadiness,
 )
+from app.models.ids import new_action_id
 from app.models.workflow import (
     TransitionContext,
     validate_execution_substate,
@@ -30,6 +39,10 @@ from app.services.context_service import append_context_journal_in_session
 logger = logging.getLogger(__name__)
 
 _RUNTIME_OPERATOR = "WorkflowRuntimeService"
+
+# Audit log reason codes (structured classification for queryability).
+_AUDIT_DISPOSITION_ONLY_CONFIDENCE = "disposition_only_confidence"
+_AUDIT_DISPOSITION_ONLY_DEFERRED = "disposition_only_deferred_action"
 
 
 class _EventServicePort(Protocol):
@@ -92,18 +105,37 @@ class WorkflowRuntimeService:
                 row = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
                 if row is None:
                     raise KeyError(f"security_event not found: {event_id}")
-                if DispositionPolicy(row.disposition_policy) is not DispositionPolicy.REQUIRED:
+
+                # Idempotency guard: if a prior begin_disposition_only call
+                # already persisted the intent (and created the deferred
+                # action), treat a subsequent call as a no-op.
+                if bool(
+                    await self._journal_scalar(
+                        session,
+                        event_id,
+                        "disposition_only_intent",
+                    )
+                ):
+                    return  # idempotent no-op
+
+                if DispositionPolicy(row.disposition_policy) != DispositionPolicy.REQUIRED:
                     raise ValidationError(
                         "disposition-only requires disposition_policy=required",
                         details={"event_id": event_id},
                     )
-                if EventStatus(row.status) is not EventStatus.TRIAGING:
+                if EventStatus(row.status) != EventStatus.TRIAGING:
                     raise ValidationError(
                         "disposition-only must begin from TRIAGING",
                         details={"event_id": event_id, "status": row.status},
                     )
+                if EventType(row.event_type) == EventType.INSIDER_THREAT:
+                    raise ValidationError(
+                        "INSIDER_THREAT events must follow full investigation path "
+                        "and are not eligible for disposition-only",
+                        details={"event_id": event_id, "event_type": row.event_type},
+                    )
 
-                fp = await self._journal_dict(session, event_id, "false_positive_match")
+                fp = await self._journal_value(session, event_id, "false_positive_match")
                 if not isinstance(fp, dict) or fp.get("recommendation") != "close_as_fp":
                     raise ValidationError(
                         "begin_disposition_only requires close_as_fp false_positive_match",
@@ -128,7 +160,8 @@ class WorkflowRuntimeService:
                             to_status=row.status,
                             operator=_RUNTIME_OPERATOR,
                             reason=(
-                                f"disposition_only_confidence:{previous_confidence}->{confidence}"
+                                f"{_AUDIT_DISPOSITION_ONLY_CONFIDENCE}:"
+                                f"{previous_confidence}->{confidence}"
                             ),
                         )
                     )
@@ -143,19 +176,66 @@ class WorkflowRuntimeService:
                     FinalVerdict.FALSE_POSITIVE,
                     operator=_RUNTIME_OPERATOR,
                 )
-                if not bool(
-                    await self._journal_scalar(
-                        session,
-                        event_id,
-                        "disposition_only_intent",
+                # Idempotency guard (line 112) already confirms
+                # disposition_only_intent is not set, so always
+                # record it now (SF-1: removed redundant re-query).
+                await append_context_journal_in_session(
+                    session,
+                    event_id,
+                    "disposition_only_intent",
+                    True,
+                )
+
+                # ISSUE-064: For disposition-only FP events with REQUIRED
+                # policy, create a deferred update_source_event_disposition
+                # Action so the standard execute → VERIFYING →
+                # activate_and_submit → EVENT_STATUS_UPDATE →
+                # CONFIRMED(readback_verified) → CLOSED chain produces a
+                # proper disposition writeback.  The policy stays REQUIRED;
+                # the deferred action carries IGNORED as the pre-approved
+                # terminal disposition.
+                approved_dispositions = [SourceDisposition.IGNORED]
+                approved_hash = compute_template_hash(approved_dispositions)
+
+                deferred_action_id = new_action_id()
+                session.add(
+                    orm.Action(
+                        action_id=deferred_action_id,
+                        event_id=event_id,
+                        plan_revision=1,
+                        action_fingerprint=f"fp-disposition-only-{event_id}",
+                        action_category=ActionCategory.RESPONSE.value,
+                        action_name="update_source_event_disposition",
+                        tool_name="update_source_event_disposition",
+                        action_level=ActionLevel.L2.value,
+                        execution_phase=ActionExecutionPhase.POST_VERIFY.value,
+                        activation_condition="after_effect_resolution",
+                        approved_operation_template_hash=approved_hash,
+                        approved_terminal_dispositions=[d.value for d in approved_dispositions],
+                        status=ActionStatus.APPROVED.value,
+                        execution_owner=ExecutionOwner.XDR_MANAGED.value,
+                        writeback_required=True,
+                        writeback_applicable=True,
+                        writeback_readiness=WritebackReadiness.READY.value,
+                        reason="disposition_only: FP → IGNORED deferred disposition",
+                        disposition_source_ref=row.disposition_source_ref,
                     )
-                ):
-                    await append_context_journal_in_session(
-                        session,
-                        event_id,
-                        "disposition_only_intent",
-                        True,
+                )
+                session.add(
+                    orm.EventAuditLog(
+                        event_id=event_id,
+                        from_status=row.status,
+                        to_status=row.status,
+                        operator=_RUNTIME_OPERATOR,
+                        reason=(
+                            f"{_AUDIT_DISPOSITION_ONLY_DEFERRED}:"
+                            f"created {deferred_action_id}"
+                            " (POST_VERIFY update_source_event_disposition"
+                            ", approved=[IGNORED])"
+                        ),
                     )
+                )
+
                 await session.flush()
 
         if verdict_changed:
@@ -249,7 +329,7 @@ class WorkflowRuntimeService:
             if row is None:
                 raise KeyError(f"security_event not found: {event_id}")
             intent = await self._journal_scalar(session, event_id, "disposition_only_intent")
-            fp = await self._journal_dict(session, event_id, "false_positive_match")
+            fp = await self._journal_value(session, event_id, "false_positive_match")
         validate_transition(
             current,
             target,
@@ -268,6 +348,12 @@ class WorkflowRuntimeService:
         event_id: str,
         field_name: str,
     ) -> Any:
+        """Read the latest journal value for *field_name*.
+
+        Returns the unwrapped scalar when the stored value is a
+        ``{"_scalar": ...}`` dict, otherwise returns the raw value
+        (which may be a dict, list, or scalar).
+        """
         row = await session.scalar(
             select(orm.EventContextJournal)
             .where(
@@ -284,12 +370,17 @@ class WorkflowRuntimeService:
             return value["_scalar"]
         return value
 
-    async def _journal_dict(
+    async def _journal_value(
         self,
         session: AsyncSession,
         event_id: str,
         field_name: str,
     ) -> dict[str, Any] | None:
+        """Read the latest journal entry and return it only if it is a dict.
+
+        This is a convenience wrapper around ``_journal_scalar`` that
+        filters non-dict values (scalars, lists) to ``None``.
+        """
         value = await self._journal_scalar(session, event_id, field_name)
         return value if isinstance(value, dict) else None
 

@@ -4,7 +4,7 @@ Acceptance criteria
 -------------------
 1. A subscribed client receives a ``state_change`` message **within 1 second**
    of a state transition.
-2. All 16 event types are declared in ``contracts/socketio/events.schema.json``
+2. All 17 event types are declared in ``contracts/socketio/events.schema.json``
    and every per-type payload validates against its definition in the schema.
 3. Multiple clients subscribed to the same event room all receive the broadcast.
 
@@ -90,7 +90,7 @@ def test_schema_defines_all_sixteen_event_types() -> None:
     doc = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     one_of = doc.get("oneOf")
     assert isinstance(one_of, list), "Schema root must have oneOf."
-    assert len(one_of) == 16, f"Expected 16 entries in oneOf, got {len(one_of)}"
+    assert len(one_of) == 17, f"Expected 17 entries in oneOf, got {len(one_of)}"
 
     types_in_schema: set[str] = set()
     for entry in one_of:
@@ -653,7 +653,7 @@ async def test_dispatch_redacts_secrets_before_emit(redis_required: RedisClient)
 
 @pytest.mark.asyncio
 async def test_all_event_types_publishable(bus: tuple[EventBus, RedisClient]) -> None:
-    """Each of the 16 event types can be published with schema-valid payloads."""
+    """Each of the 17 event types can be published with schema-valid payloads."""
     event_bus, _redis = bus
     event_id = _event_id("alltype1")
 
@@ -887,6 +887,13 @@ def _example_payload(event_type: str) -> dict:
             "provider_code": "mock",
             "created_at": "2026-07-12T09:00:00Z",
             "updated_at": "2026-07-12T10:00:00Z",
+        },
+        "writeback_readback_failed": {
+            "disposition_id": "disp-0a1b2c3d",
+            "writeback_id": "wbk-0a1b2c3d",
+            "receipt_status": "ACCEPTED",
+            "error_summary": "readback confirmation timed out",
+            "severity": "warning",
         },
     }
     return examples.get(event_type, {})

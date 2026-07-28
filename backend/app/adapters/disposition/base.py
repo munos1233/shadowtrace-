@@ -61,6 +61,16 @@ class BaseDispositionAdapter(ABC):
         """Optional idempotency lookup after lost responses. Default: unsupported."""
         return None
 
+    async def confirm_readback(self, command: DispositionCommand) -> DispositionReceipt | None:
+        """Optional authoritative readback confirmation (ISSUE-064).
+
+        After ``submit`` returns ACCEPTED, callers may invoke this to
+        verify the provider-side state transition has actually occurred
+        and promote the receipt to CONFIRMED+readback_verified.
+        Default: unsupported (returns None).
+        """
+        return None
+
     @abstractmethod
     async def health_check(self) -> ConnectorStatus:
         """Return connector health without side effects."""

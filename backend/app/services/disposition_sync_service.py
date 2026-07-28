@@ -394,6 +394,14 @@ class DispositionSyncService:
                 current_status = WritebackStatus(
                     outbox.latest_writeback_status or WritebackStatus.UNKNOWN.value
                 )
+                # Idempotency guard (ISSUE-064): If the outbox already
+                # reached the target terminal status (e.g. CONFIRMED from
+                # synchronous delivery in activate_and_submit), the
+                # transition is a no-op.  CONFIRMED → CONFIRMED is NOT
+                # in the transition matrix because CONFIRMED is terminal;
+                # we short-circuit here to keep the resolve call safe.
+                if current_status is target:
+                    return current_status
                 validate_writeback_status_transition(
                     current_status,
                     target,
@@ -539,6 +547,14 @@ class DispositionSyncService:
     async def process_ready_outboxes(self, *, limit: int = 10) -> int:
         return await OutboxWorker(self).run_once(limit=limit)
 
+    async def deliver_outbox(self, outbox_id: str) -> None:
+        """Public entry point for synchronous outbox delivery (ISSUE-064).
+
+        Exists so that EventDispositionService can trigger same-turn
+        delivery without reaching into the private ``_deliver_outbox``.
+        """
+        await self._deliver_outbox(outbox_id)
+
     async def _deliver_outbox(self, outbox_id: str) -> None:
         command: DispositionCommand
         receipt: DispositionReceipt
@@ -571,6 +587,41 @@ class DispositionSyncService:
                 adapter.validate_command(command)
                 receipt = await adapter.submit(command)
                 await self._append_receipt(session, outbox, receipt=receipt)
+
+                # B1 fix (ISSUE-064): For EVENT_STATUS_UPDATE intents,
+                # perform readback confirmation to produce the P0
+                # CONFIRMED+readback_verified receipt.  The submit
+                # above produces ACCEPTED; the readback converts it to
+                # CONFIRMED by verifying the provider-side state
+                # transition actually occurred (provider truth).
+                confirm_readback = getattr(adapter, "confirm_readback", None)
+                if (
+                    confirm_readback is not None
+                    and command.intent_kind == DispositionIntentKind.EVENT_STATUS_UPDATE
+                ):
+                    try:
+                        confirmed = await confirm_readback(command)
+                        await self._append_receipt(session, outbox, receipt=confirmed)
+                        receipt = confirmed
+                    except Exception as exc:
+                        logger.warning(
+                            "readback confirmation failed for %s; receipt stays at %s",
+                            command.disposition_id,
+                            receipt.status.value,
+                        )
+                        if self._bus is not None:
+                            await self._bus.publish_event(
+                                outbox.event_id,
+                                "writeback_readback_failed",
+                                {
+                                    "disposition_id": command.disposition_id,
+                                    "writeback_id": outbox.writeback_id,
+                                    "receipt_status": receipt.status.value,
+                                    "error_summary": f"{type(exc).__name__}: {exc}",
+                                    "severity": "warn",
+                                },
+                            )
+
                 outbox.latest_writeback_status = receipt.status.value
                 outbox.delivery_status = OutboxDeliveryStatus.DELIVERED.value
                 outbox.delivered_at = datetime.now(UTC)

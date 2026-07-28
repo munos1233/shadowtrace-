@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.mock_xdr.state import find_forbidden_analysis_keys
 
 
@@ -45,3 +47,80 @@ def test_captured_requests_contain_no_forbidden(state, client) -> None:
     assert state.captured_requests
     for item in state.captured_requests:
         assert find_forbidden_analysis_keys(item) == []
+
+
+# ---------------------------------------------------------------------------
+# Parameterized: all four DispositionIntentKind payload variants (ISSUE-064)
+# ---------------------------------------------------------------------------
+
+_INTENT_PAYLOADS = [
+    (
+        "entity_action_submit",
+        {
+            "disposition_id": "disp-1",
+            "operation_code": "submit_entity_action",
+            "operation_params": {
+                "entity_action_code": "contain_device",
+                "canonical_target": "host-1",
+            },
+        },
+    ),
+    (
+        "event_status_update",
+        {
+            "disposition_id": "disp-2",
+            "operation_code": "set_event_disposition",
+            "operation_params": {
+                "target_disposition": "contained",
+                "comment_code": "threat_contained",
+            },
+        },
+    ),
+    (
+        "execution_result_record",
+        {
+            "disposition_id": "disp-3",
+            "operation_code": "record_execution_result",
+            "operation_params": {
+                "summary_code": "isolate_success",
+            },
+        },
+    ),
+    (
+        "compensation_record",
+        {
+            "disposition_id": "disp-4",
+            "operation_code": "record_compensation",
+            "operation_params": {
+                "summary_code": "rollback_complete",
+            },
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize("scenario_name,payload", _INTENT_PAYLOADS)
+def test_all_intent_kinds_no_analysis_content_leaked(
+    scenario_name: str,
+    payload: dict,
+) -> None:
+    """Verify no forbidden analysis keys appear in any disposition intent kind.
+
+    Covers all four DispositionIntentKind variants:
+    ENTITY_ACTION_SUBMIT, EVENT_STATUS_UPDATE, EXECUTION_RESULT_RECORD,
+    and COMPENSATION_RECORD.  Also self-tests that detection catches an
+    injected forbidden key (``report``).
+    """
+    hits = find_forbidden_analysis_keys(payload)
+    assert not hits, f"{scenario_name}: payload contains forbidden analysis keys: {hits}"
+
+    # Also test with injected forbidden keys to confirm detection works
+    contaminated = dict(payload)
+    contaminated["report"] = "# Secret Analysis Report"
+    contaminated_hits = find_forbidden_analysis_keys(contaminated)
+    assert contaminated_hits, (
+        f"{scenario_name}: detection is broken — injected 'report' key was not flagged"
+    )
+    assert any("report" in h for h in contaminated_hits), (
+        f"{scenario_name}: expected 'report' to be flagged"
+    )

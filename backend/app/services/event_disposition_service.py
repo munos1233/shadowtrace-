@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agents.response_agent import compute_template_hash, derive_disposition_idempotency_key
-from app.core.errors import GuardrailViolationError, ValidationError
+from app.core.errors import GuardrailViolationError, ShadowTraceError, ValidationError
 from app.core.event_bus import EventBus
 from app.db import models as orm
 from app.models.action import TERMINAL_DISPOSITION_TOOL, Action
@@ -362,6 +362,23 @@ class EventDispositionService:
                 result_disposition_id = outbox.disposition_id
                 result_writeback_id = outbox.writeback_id
                 result_action_id = action.action_id
+                result_outbox_id: str = outbox.outbox_id
+
+        # B1 fix (ISSUE-064): Synchronously deliver the outbox so the
+        # adapter produces a receipt.  Without this the outbox row sits
+        # in READY state forever and the P0 CONFIRMED receipt (via
+        # readback) is never created.
+        #
+        # Delivery is best-effort in-process: if it fails the outbox
+        # stays at READY and the outbox worker will retry.
+        try:
+            await self._sync.deliver_outbox(result_outbox_id)
+        except (ShadowTraceError, OSError):
+            logger.warning(
+                "synchronous outbox delivery failed for %s; outbox worker will retry",
+                result_outbox_id,
+                exc_info=True,
+            )
 
         if self._bus is not None:
             await self._bus.publish_event(

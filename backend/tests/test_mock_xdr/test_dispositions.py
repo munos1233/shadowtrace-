@@ -26,19 +26,19 @@ def test_sync_requires_authoritative_change_before_readback_confirmed(
     receipt = state.submit_disposition(cmd)
     assert receipt.status is WritebackStatus.ACCEPTED
     assert receipt.provider_job_id is None
-    inconclusive = state.confirm_via_readback(cmd.disposition_id)
-    assert inconclusive.status is WritebackStatus.UNKNOWN
-    assert inconclusive.confirmation_evidence is None
-    state.transition_source_disposition(
-        "incident",
-        "INC-1",
-        SourceDisposition.CONTAINED,
-        allow_unknown_recovery=True,
-    )
+    # B1 fix (ISSUE-064): confirm_via_readback now auto-applies the source
+    # disposition transition before reading back the authoritative state,
+    # so the sync path returns CONFIRMED+readback_verified directly.
     confirmed = state.confirm_via_readback(cmd.disposition_id)
     assert confirmed.status is WritebackStatus.CONFIRMED
     assert confirmed.confirmation_evidence is ConfirmationEvidence.READBACK_VERIFIED
     assert confirmed.simulated is True
+    # Verify the source disposition was actually updated on the stored object.
+    rb = state.readback_source_disposition("incident", "INC-1")
+    assert rb["source_disposition"] == SourceDisposition.CONTAINED.value
+    # Second confirm is idempotent — already CONFIRMED.
+    second = state.confirm_via_readback(cmd.disposition_id)
+    assert second.status is WritebackStatus.CONFIRMED
 
 
 def test_conflict_on_token_mismatch(state: MockXDRState) -> None:
@@ -174,22 +174,46 @@ def test_source_disposition_changes_only_through_authoritative_control(
     # Accept alone must NOT mutate the source object's disposition.
     rb = state.readback_source_disposition("incident", "INC-1")
     assert rb["source_disposition"] == SourceDisposition.PENDING.value
-    # Readback without an authoritative change remains inconclusive.
-    inconclusive = state.confirm_via_readback(cmd.disposition_id)
-    assert inconclusive.status is WritebackStatus.UNKNOWN
-    rb2 = state.readback_source_disposition("incident", "INC-1")
-    assert rb2["source_disposition"] == SourceDisposition.PENDING.value
-    # The independent control-plane mutation changes provider truth.
-    state.transition_source_disposition(
-        "incident",
-        "INC-1",
-        SourceDisposition.CONTAINED,
-        allow_unknown_recovery=True,
-    )
+    # B1 fix (ISSUE-064): confirm_via_readback auto-applies the source
+    # disposition transition before readback, so it returns CONFIRMED
+    # and the stored object's disposition is updated.
     confirmed = state.confirm_via_readback(cmd.disposition_id)
     assert confirmed.status is WritebackStatus.CONFIRMED
+    assert confirmed.confirmation_evidence is ConfirmationEvidence.READBACK_VERIFIED
     rb2 = state.readback_source_disposition("incident", "INC-1")
     assert rb2["source_disposition"] == SourceDisposition.CONTAINED.value
+    # Second confirm is idempotent — already CONFIRMED.
+    second = state.confirm_via_readback(cmd.disposition_id)
+    assert second.status is WritebackStatus.CONFIRMED
+
+
+def test_readback_unknown_when_target_disposition_not_set(
+    state: MockXDRState,
+) -> None:
+    """Readback returns UNKNOWN for intents without a target_disposition.
+
+    SF-3 (ISSUE-064 review): Restores coverage of the UNKNOWN readback
+    path.  The B1 fix (ISSUE-064) auto-applies the source disposition
+    transition inside ``confirm_via_readback``, so the sync path
+    normally returns CONFIRMED+readback_verified.  But for intent kinds
+    that do not carry a target_disposition (e.g. ENTITY_ACTION_SUBMIT),
+    the auto-apply is a no-op and the readback cannot match any target,
+    resulting in UNKNOWN (readback_not_yet_applied).
+    """
+    token = state.objects[("incident", "INC-1")].concurrency_token
+    cmd = disposition_command(
+        token=token,
+        intent=DispositionIntentKind.ENTITY_ACTION_SUBMIT,
+        disposition_id="disp-unknown-no-target",
+        idempotency_key="idem-unknown-no-target",
+    )
+    receipt = state.submit_disposition(cmd)
+    assert receipt.status is WritebackStatus.ACCEPTED
+
+    confirmed = state.confirm_via_readback(cmd.disposition_id)
+    assert confirmed.status is WritebackStatus.UNKNOWN
+    assert confirmed.confirmation_evidence is None
+    assert confirmed.provider_code == "readback_not_yet_applied"
 
 
 def test_unauthorized_analysis_fields_rejected(state: MockXDRState, client) -> None:

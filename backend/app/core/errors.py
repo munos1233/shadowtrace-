@@ -137,6 +137,8 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "replan_count_exceeded": ErrorCategory.PERMANENT,
     "writeback_recovery_exhausted": ErrorCategory.PERMANENT,
     "writeback_manual_resolution_required": ErrorCategory.PERMANENT,
+    # Writeback readback (ISSUE-064)
+    "readback_failed": ErrorCategory.TOOL,
 }
 
 

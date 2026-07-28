@@ -242,6 +242,73 @@ async def test_begin_disposition_only_rejects_untrusted_entry_conditions(
 
 
 @pytest.mark.asyncio
+async def test_begin_disposition_only_rejects_insider_threat_event_type(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ISSUE-064 SF-1: INSIDER_THREAT events must follow full investigation path.
+
+    ``begin_disposition_only`` must raise ``ValidationError`` for
+    ``EventType.INSIDER_THREAT`` even when all other preconditions
+    (TRIAGING status, REQUIRED policy, valid false_positive_match)
+    are satisfied.  Insider threat scenarios require the complete
+    analysis → response → verify → disposition pipeline.
+    """
+    # --- Arrange: INSIDER_THREAT event in TRIAGING with valid FP match ---
+    event = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_reference("INC-workflow-runtime-insider"),
+            title="Insider Threat — must not bypass investigation",
+            event_type=EventType.INSIDER_THREAT,
+            severity=Severity.HIGH,
+            source_type="mock_xdr",
+        )
+    )
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.SecurityEvent, event.event_id, with_for_update=True)
+            assert row is not None
+            row.status = EventStatus.TRIAGING.value
+            row.disposition_policy = DispositionPolicy.REQUIRED.value
+            await append_context_journal_in_session(
+                session,
+                event.event_id,
+                "false_positive_match",
+                {"recommendation": "close_as_fp", "max_score": 0.92},
+            )
+
+    runtime = WorkflowRuntimeService(
+        session_factory,
+        event_service=event_service,
+        readiness_resolver=_ready,
+    )
+
+    # --- Act & Assert: INSIDER_THREAT guarded by ValidationError ---
+    with pytest.raises(ValidationError, match="INSIDER_THREAT"):
+        await runtime.begin_disposition_only(event.event_id)
+
+    # --- Assert: Event untouched by the rejected call ---
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, event.event_id)
+        assert row is not None
+        assert row.status == EventStatus.TRIAGING.value, (
+            f"INSIDER_THREAT event status must remain TRIAGING, got {row.status}"
+        )
+        assert row.final_verdict == FinalVerdict.NONE.value, (
+            "INSIDER_THREAT final_verdict must remain NONE after rejected disposition_only"
+        )
+        intent = await session.scalar(
+            select(orm.EventContextJournal).where(
+                orm.EventContextJournal.event_id == event.event_id,
+                orm.EventContextJournal.field_name == "disposition_only_intent",
+            )
+        )
+        assert intent is None, (
+            "INSIDER_THREAT event must not have disposition_only_intent journal entry"
+        )
+
+
+@pytest.mark.asyncio
 async def test_execution_substate_rejects_forged_event_status(
     event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],

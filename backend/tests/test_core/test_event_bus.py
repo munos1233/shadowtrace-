@@ -28,8 +28,8 @@ async def bus() -> AsyncIterator[tuple[EventBus, RedisClient]]:
     await client.aclose()
 
 
-def test_socket_message_types_are_exactly_sixteen() -> None:
-    assert len(SOCKET_MESSAGE_TYPES) == 16
+def test_socket_message_types_are_exactly_seventeen() -> None:
+    assert len(SOCKET_MESSAGE_TYPES) == 17
     assert "state_change" in SOCKET_MESSAGE_TYPES
     assert "disposition_submitted" in SOCKET_MESSAGE_TYPES
     assert "writeback_updated" in SOCKET_MESSAGE_TYPES

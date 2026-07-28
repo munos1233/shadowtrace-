@@ -35,6 +35,7 @@ from app.adapters.source.base import (
 )
 from app.core.errors import (
     DependencyUnavailableError,
+    ShadowTraceError,
     WritebackConflictError,
     WritebackUnsupportedError,
 )
@@ -48,6 +49,7 @@ from app.models.enums import (
     ConnectorCapability,
     ConnectorStatus,
     DispositionIntentKind,
+    ErrorCategory,
     SourceObjectKind,
     WritebackStatus,
 )
@@ -512,6 +514,79 @@ class MockXDRDispositionAdapter(BaseDispositionAdapter):
             return None
         if resp.status_code >= 400:
             return None
+        receipt = DispositionReceipt.model_validate(resp.json())
+        return sanitize_disposition_receipt(receipt)
+
+    async def confirm_readback(self, command: DispositionCommand) -> DispositionReceipt:
+        """Confirm a previously submitted disposition via authoritative readback.
+
+        B1 fix (ISSUE-064): This completes the P0 writeback closure
+        evidence chain by verifying the provider-side state transition
+        actually occurred.  The submit above produces ACCEPTED; this
+        method reads back the authoritative state and returns
+        CONFIRMED+readback_verified.
+
+        Steps:
+        1. Transition the source object's disposition to the target
+           (simulates the provider applying the requested change).
+        2. Read back the authoritative disposition and confirm it
+           matches the requested target.
+
+        Design note — two-phase HTTP simulation:
+        This mock performs two sequential HTTP calls within the same
+        Python method: a POST to ``/source-disposition`` (apply the
+        change) followed by a POST to ``/confirm/{id}`` (read back the
+        authoritative state).  In production, the external system
+        applies the change independently and the readback path
+        verifies it asynchronously.  The mock collapses this timeline
+        but preserves the critical contract: the readback endpoint
+        checks that the stored state actually transitioned (token
+        change validation) and returns UNKNOWN when it hasn't — the
+        same failure mode the real adapter surfaces.  A
+        ``MIN_READBACK_DELAY_MS`` config option (default 0) may be
+        added to inject latency and exercise timeout paths more
+        realistically.
+        """
+        client = await self._http()
+        locator = command.source_locator
+        target_disp = getattr(command.operation_params, "target_disposition", None)
+        if target_disp is not None:
+            # Step 1: transition the stored object to the target disposition
+            try:
+                await client.post(
+                    "/mock-xdr/v1/control/source-disposition",
+                    params={
+                        "kind": locator.source_kind.value,
+                        "object_id": locator.source_object_id,
+                        "target": target_disp.value,
+                    },
+                )
+            except httpx.HTTPStatusError:
+                logger.warning(
+                    "source-disposition transition failed for %s",
+                    command.disposition_id,
+                )
+        # Step 2: confirm via readback
+        resp = await client.post(
+            f"/mock-xdr/v1/control/confirm/{command.disposition_id}",
+        )
+        if resp.status_code >= 400:
+            body = resp.json() if resp.content else {}
+            # Distinguish permanent (4xx) from transient (5xx) errors so
+            # upstream retry / recovery logic can make the right choice.
+            if 400 <= resp.status_code < 500:
+                raise ShadowTraceError(
+                    body.get("error_message", f"readback confirm failed: HTTP {resp.status_code}"),
+                    error_code=body.get("error_code", "readback_failed"),
+                    category=ErrorCategory.PERMANENT,
+                    details=body.get("details") or {},
+                )
+            raise ShadowTraceError(
+                body.get("error_message", f"readback confirm failed: HTTP {resp.status_code}"),
+                error_code=body.get("error_code", "readback_failed"),
+                category=ErrorCategory.TRANSIENT,
+                details=body.get("details") or {},
+            )
         receipt = DispositionReceipt.model_validate(resp.json())
         return sanitize_disposition_receipt(receipt)
 

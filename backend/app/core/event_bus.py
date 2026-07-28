@@ -12,7 +12,7 @@ from app.core.sanitization import sanitize_data
 
 logger = logging.getLogger(__name__)
 
-# Intro §4.2.4 SocketEventEnvelope message types (exactly 16).
+# Intro §4.2.4 SocketEventEnvelope message types (17).
 SOCKET_MESSAGE_TYPES: frozenset[str] = frozenset(
     {
         "event_created",
@@ -31,6 +31,7 @@ SOCKET_MESSAGE_TYPES: frozenset[str] = frozenset(
         "final_verdict_updated",
         "disposition_submitted",
         "writeback_updated",
+        "writeback_readback_failed",
     }
 )
 

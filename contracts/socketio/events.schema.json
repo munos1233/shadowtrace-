@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://shadowtrace.local/socketio/events.schema.json",
   "title": "ShadowTrace Socket.IO Event Envelope Schema (ISSUE-040)",
-  "description": "Unified envelope and 16 event-type payloads for the /events namespace.",
+  "description": "Unified envelope and 17 event-type payloads for the /events namespace.",
   "definitions": {
     "SocketEventEnvelope": {
       "type": "object",
@@ -26,7 +26,8 @@
             "report_generated",
             "final_verdict_updated",
             "disposition_submitted",
-            "writeback_updated"
+            "writeback_updated",
+            "writeback_readback_failed"
           ]
         },
         "event_id": {
@@ -267,6 +268,20 @@
       "not": {
         "required": ["raw_result"]
       }
+    },
+
+    "WritebackReadbackFailedPayload": {
+      "description": "Broadcast when readback confirmation fails after a disposition writeback.",
+      "type": "object",
+      "required": ["disposition_id", "writeback_id", "receipt_status"],
+      "properties": {
+        "disposition_id": { "type": "string", "pattern": "^disp-[0-9a-f]{8}$" },
+        "writeback_id": { "type": "string", "pattern": "^wbk-[0-9a-f]{8}$" },
+        "receipt_status": { "type": "string" },
+        "error_summary": { "type": "string" },
+        "severity": { "type": "string", "enum": ["warning", "error", "critical"] }
+      },
+      "additionalProperties": false
     }
   },
 
@@ -381,6 +396,13 @@
       "allOf": [
         { "$ref": "#/definitions/SocketEventEnvelope" },
         { "properties": { "type": { "const": "writeback_updated" }, "payload": { "$ref": "#/definitions/WritebackUpdatedPayload" } } }
+      ]
+    },
+    {
+      "description": "writeback_readback_failed",
+      "allOf": [
+        { "$ref": "#/definitions/SocketEventEnvelope" },
+        { "properties": { "type": { "const": "writeback_readback_failed" }, "payload": { "$ref": "#/definitions/WritebackReadbackFailedPayload" } } }
       ]
     }
   ]

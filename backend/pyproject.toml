@@ -50,6 +50,7 @@ markers = [
   "rag: RAG + risk scoring integration (ISSUE-047)",
   "e2e_basic: analysis-only golden-path integration (ISSUE-039)",
   "orchestration: multi-agent orchestration integration (ISSUE-055)",
+  "e2e_response: end-to-end response-loop integration (ISSUE-064)",
 ]
 
 [tool.coverage.run]

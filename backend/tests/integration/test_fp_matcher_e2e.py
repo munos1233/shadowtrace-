@@ -59,9 +59,13 @@ async def test_e2e_pipeline_with_fp_matcher_wired(
     summary = await source_ingester.poll(source_adapter, ALL_SOURCE_KINDS, batch_size=10)
     assert summary.accepted >= 1
 
-    # Find the ingested event.
+    # Find the ingested event (most recently created).
     async with session_factory() as session:
-        row = (await session.scalars(select(orm.SecurityEvent).limit(1))).first()
+        row = (
+            await session.scalars(
+                select(orm.SecurityEvent).order_by(orm.SecurityEvent.created_at.desc()).limit(1)
+            )
+        ).first()
     assert row is not None
     event_id = row.event_id
 
@@ -106,7 +110,11 @@ async def test_e2e_fp_matcher_triage_result_persisted(
     assert summary.accepted >= 1
 
     async with session_factory() as session:
-        row = (await session.scalars(select(orm.SecurityEvent).limit(1))).first()
+        row = (
+            await session.scalars(
+                select(orm.SecurityEvent).order_by(orm.SecurityEvent.created_at.desc()).limit(1)
+            )
+        ).first()
     assert row is not None
     event_id = row.event_id
 
@@ -388,7 +396,11 @@ async def test_fp_matcher_required_disposition_false_positive_no_auto_close(
     assert summary.accepted >= 1
 
     async with session_factory() as session:
-        row = (await session.scalars(select(orm.SecurityEvent).limit(1))).first()
+        row = (
+            await session.scalars(
+                select(orm.SecurityEvent).order_by(orm.SecurityEvent.created_at.desc()).limit(1)
+            )
+        ).first()
     assert row is not None
     event_id = row.event_id
 

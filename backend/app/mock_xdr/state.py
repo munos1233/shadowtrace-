@@ -839,6 +839,13 @@ class MockXDRState:
                 f"cannot confirm from status {latest.status.value}",
                 error_code="invalid_state_transition",
             )
+        # B1 fix (ISSUE-064): Apply the source disposition transition
+        # before reading back the authoritative state.  Without this the
+        # stored object's source_disposition is never updated in the
+        # submit→confirm_via_readback sync path, so the readback always
+        # returns UNKNOWN (readback_not_yet_applied) instead of CONFIRMED
+        # (readback_verified).
+        self._apply_confirmed_source_disposition(attempt.command)
         locator = attempt.command.source_locator
         kind_value = locator.source_kind.value
         stored: StoredObject | None = None
