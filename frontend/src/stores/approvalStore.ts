@@ -120,6 +120,7 @@ export const useApprovalStore = create<ApprovalState>((set, get) => ({
   },
 
   _applySocketEvent(event: SocketEvent) {
+    if (event.type !== "approval_required" && event.type !== "approval_updated") return;
     const action_id = event.payload?.action_id as string ?? "";
     if (event.type === "approval_updated") {
       set((s) => ({
