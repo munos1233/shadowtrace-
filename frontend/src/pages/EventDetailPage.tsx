@@ -66,15 +66,6 @@ function activeTab(hash: string): TabKey {
   return keys.includes(value) ? value : "source";
 }
 
-function Placeholder({ feature }: { feature: string }) {
-  return (
-    <Empty
-      image={Empty.PRESENTED_IMAGE_SIMPLE}
-      description={`${feature}将在对应功能中提供`}
-    />
-  );
-}
-
 function JsonPreview({ value }: { value: unknown }) {
   if (value === null || value === undefined) {
     return <Typography.Text type="secondary">暂无数据</Typography.Text>;
