@@ -41,16 +41,20 @@ export function buildReportMarkdown(report: InvestigationReport): string {
 
 /** Download a Markdown file for the report. */
 export function downloadReportMarkdown(report: InvestigationReport): void {
-  const md = buildReportMarkdown(report);
-  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `shadowtrace-report-${report.event_id}.md`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const md = buildReportMarkdown(report);
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `shadowtrace-report-${report.event_id}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch {
+    // SSR / test environment — silently no-op
+  }
 }
 
 export { CHAPTER_KEYS };
