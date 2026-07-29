@@ -2,10 +2,13 @@
 
 import type { InvestigationReport } from "../types/report";
 
+/** 15 chapter keys matching backend ReportSectionBuilder.SECTION_KEYS (ISSUE-036). */
 const CHAPTER_KEYS = [
-  "overview", "triage", "evidence", "fp_match", "rag",
-  "graph", "storyline", "risk", "response", "execution",
-  "verification", "disposition", "writeback", "timeline", "summary",
+  "overview", "severity_level", "risk_scoring", "involved_accounts",
+  "involved_assets", "involved_processes", "involved_files",
+  "involved_external_addresses", "evidence_chain", "attack_storyline",
+  "attack_mapping", "executed_actions", "verification_results",
+  "recommendations", "appendix_index",
 ] as const;
 
 /** Build a complete Markdown document from report sections. */

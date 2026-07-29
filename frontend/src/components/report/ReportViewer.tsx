@@ -1,12 +1,16 @@
-/** ReportViewer — 15-chapter report with TOC, Markdown rendering, export (ISSUE-074). */
+/** ReportViewer — 15-chapter report with TOC, export (ISSUE-074).
 
-import { useMemo, useRef, useEffect } from "react";
+Sections are rendered in the order returned by the backend
+(ReportSectionBuilder.SECTION_SPECS).  The TOC and Markdown export
+use CHAPTER_KEYS for stable ordering / dedup.
+*/
+
+import { useRef, useEffect } from "react";
 import { Alert, Spin, Typography, Divider } from "antd";
 import { FileTextOutlined } from "@ant-design/icons";
 import type { InvestigationReport } from "../../types/report";
 import ReportToc from "./ReportToc";
 import ReportExportButtons from "./ReportExportButtons";
-import { CHAPTER_KEYS } from "../../utils/exportMarkdown";
 
 const { Title, Text } = Typography;
 
@@ -42,27 +46,21 @@ export default function ReportViewer({ report, loading, eventStatus }: ReportVie
       }
     };
   }, []);
-  const sections = useMemo(() => {
-    if (!report) return [];
-    return CHAPTER_KEYS
-      .filter((k) => report.sections.some((s) => s.key === k))
-      .map((k) => report.sections.find((s) => s.key === k)!);
-  }, [report]);
 
-  // Loading state
+  // Loading state — page loading, not report generation
   if (loading) {
     return (
       <div style={{ textAlign: "center", padding: 48 }}>
         <Spin size="large" />
         <Text type="secondary" style={{ display: "block", marginTop: 16 }}>
-          正在生成报告...
+          加载中...
         </Text>
       </div>
     );
   }
 
   // Not yet generated
-  if (!report || sections.length === 0) {
+  if (!report || report.sections.length === 0) {
     const isReporting = eventStatus === "reporting";
     return (
       <div style={{ textAlign: "center", padding: 48 }}>
@@ -106,7 +104,7 @@ export default function ReportViewer({ report, loading, eventStatus }: ReportVie
 
         <Divider />
 
-        {sections.map((section) => (
+        {report.sections.map((section) => (
           <div key={section.key} id={section.key} style={{ marginBottom: 32 }}>
             <Title level={5} id={`${section.key}-title`}>
               {section.title}

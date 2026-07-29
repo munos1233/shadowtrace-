@@ -4,6 +4,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import ReportViewer from "../../src/components/report/ReportViewer";
 
+// Mock IntersectionObserver for jsdom
+const MockIntersectionObserver = vi.fn((callback: IntersectionObserverCallback) => ({
+  observe: vi.fn(),
+  unobserve: vi.fn(),
+  disconnect: vi.fn(),
+  takeRecords: vi.fn(() => []),
+  root: null,
+  rootMargin: "",
+  thresholds: [],
+}));
+vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+
 describe("ReportViewer", () => {
   const mockReport = {
     report_id: "rpt-abc12345",
@@ -12,10 +24,10 @@ describe("ReportViewer", () => {
     summary: "",
     sections: [
       { key: "overview", title: "事件概述", content: "事件概述内容...", data: {} },
-      { key: "triage", title: "分诊结果", content: "分诊结果内容...", data: {} },
-      { key: "evidence", title: "证据采集", content: "证据详情...", data: {} },
-      { key: "risk", title: "风险评估", content: "**高风险** 数据外泄", data: {} },
-      { key: "summary", title: "总结", content: "总结内容...", data: {} },
+      { key: "severity_level", title: "严重级别", content: "高危", data: {} },
+      { key: "risk_scoring", title: "风险评分", content: "**高风险** 数据外泄", data: {} },
+      { key: "executed_actions", title: "已执行处置", content: "block_ip", data: {} },
+      { key: "recommendations", title: "处置建议", content: "加强监控", data: {} },
     ],
     final_verdict: "confirmed_threat",
     risk_score: 85,
@@ -32,7 +44,7 @@ describe("ReportViewer", () => {
 
   it("shows loading spinner when loading", () => {
     render(<ReportViewer report={null} loading={true} />);
-    expect(screen.getByText("正在生成报告...")).toBeDefined();
+    expect(screen.getByText("加载中...")).toBeDefined();
   });
 
   it("shows placeholder when no report and not generating", () => {
@@ -48,10 +60,11 @@ describe("ReportViewer", () => {
   it("renders report title and sections", () => {
     render(<ReportViewer report={mockReport} loading={false} />);
     expect(screen.getByText("数据外泄调查报告")).toBeDefined();
-    expect(screen.getByText("事件概述")).toBeDefined();
-    expect(screen.getByText("分诊结果")).toBeDefined();
-    expect(screen.getByText("风险评估")).toBeDefined();
-    expect(screen.getByText("总结")).toBeDefined();
+    expect(screen.getAllByText("事件概述").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("严重级别").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("风险评分").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("已执行处置").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("处置建议").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows template warning when generated_by=template", () => {
@@ -64,9 +77,8 @@ describe("ReportViewer", () => {
     expect(screen.getByText("模板生成（LLM 降级）")).toBeDefined();
   });
 
-  it("renders markdown content", () => {
+  it("renders section content as text", () => {
     render(<ReportViewer report={mockReport} loading={false} />);
-    // Section content should be visible as text
     expect(screen.getByText("**高风险** 数据外泄")).toBeDefined();
   });
 });
