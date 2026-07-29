@@ -5,7 +5,7 @@ import { render, screen } from "@testing-library/react";
 import ReportViewer from "../../src/components/report/ReportViewer";
 
 // Mock IntersectionObserver for jsdom
-const MockIntersectionObserver = vi.fn((_callback: IntersectionObserverCallback) => ({
+const MockIntersectionObserver = vi.fn(() => ({
   observe: vi.fn(),
   unobserve: vi.fn(),
   disconnect: vi.fn(),
