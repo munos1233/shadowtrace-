@@ -57,4 +57,6 @@ EXPOSE 8000
 
 # Multi-worker uvicorn (ISSUE-088 §实现步骤 point 1).
 # ``socket_app`` wraps the FastAPI app with the Socket.IO ASGI handler.
-CMD ["uvicorn", "app.main:socket_app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info"]
+# Uses ``python -m uvicorn`` rather than the bare ``uvicorn`` console script
+# because the multi-stage build only copies site-packages, not /usr/local/bin.
+CMD ["python", "-m", "uvicorn", "app.main:socket_app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info"]

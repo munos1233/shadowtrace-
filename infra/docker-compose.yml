@@ -59,7 +59,7 @@ services:
       dockerfile: backend/Dockerfile
     command:
       [
-        "uvicorn",
+        "python", "-m", "uvicorn",
         "app.mock_xdr.api:app",
         "--host", "0.0.0.0",
         "--port", "8100",
@@ -177,7 +177,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
     command:
       [
-        "celery",
+        "python", "-m", "celery",
         "-A", "app.core.celery_app",
         "worker",
         "-Q", "investigation",
