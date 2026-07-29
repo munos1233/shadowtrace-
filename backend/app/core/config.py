@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     approval_timeout_minutes: int = Field(default=30, alias="APPROVAL_TIMEOUT_MINUTES")
 
     neo4j_enabled: bool = Field(default=False, alias="NEO4J_ENABLED")
-    neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
+    neo4j_uri: str = Field(default="bolt://neo4j:7687", alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", alias="NEO4J_USER")
     neo4j_password: str = Field(default="shadowtrace", alias="NEO4J_PASSWORD")
 
