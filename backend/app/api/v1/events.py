@@ -47,7 +47,11 @@ from app.core.auth import (
     require_roles,
 )
 from app.core.config import get_settings
-from app.core.errors import DependencyUnavailableError, InvestigationInProgressError, ValidationError
+from app.core.errors import (
+    DependencyUnavailableError,
+    InvestigationInProgressError,
+    ValidationError,
+)
 from app.db import models as orm
 from app.models.action import Action as ActionModel
 from app.models.disposition import SourceObjectLocator

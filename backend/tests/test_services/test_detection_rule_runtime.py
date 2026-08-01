@@ -27,7 +27,6 @@ from app.models.behavior_observation import (
 from app.models.detection_rule import (
     CandidateDetectionQuery,
     DetectionRuleDefinition,
-    DetectionRuleRuntimeState,
     MissingDataPolicy,
     RuleOperatorKind,
 )
@@ -198,7 +197,9 @@ async def _register_shadow_package(
         author="tester",
     )
     await service.validate_package(source_tenant_id=tenant_id, package_id=package.package_id)
-    activated = await service.activate_shadow(source_tenant_id=tenant_id, package_id=package.package_id)
+    activated = await service.activate_shadow(
+        source_tenant_id=tenant_id, package_id=package.package_id
+    )
     return activated.package_id
 
 

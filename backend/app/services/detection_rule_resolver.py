@@ -29,7 +29,9 @@ _ALLOWED_GROUP_FIELDS = frozenset({"entity_type", "entity_id", "category", "acti
 _ALLOWED_REQUIRED_FIELDS = frozenset(
     {"action", "category", "entity_type", "entity_id", "detection_score", "observation_count"}
 )
-_ALLOWED_VALUE_FIELDS = frozenset({"observation_count", "avg_detection_score", "max_detection_score"})
+_ALLOWED_VALUE_FIELDS = frozenset(
+    {"observation_count", "avg_detection_score", "max_detection_score"}
+)
 _ALLOWED_MATCH_CRITERIA_KEYS = frozenset({"action", "category", "entity_type", "entity_id"})
 
 
@@ -218,8 +220,7 @@ def build_candidate_idempotency_key(
     cutoff_iso = ensure_utc(cutoff_at).isoformat()
     group_material = "|".join(f"{key}={group_key[key]}" for key in sorted(group_key))
     return (
-        f"{source_tenant_id}:{package_id}:{rule_id}:v{rule_version}:"
-        f"{cutoff_iso}:{group_material}"
+        f"{source_tenant_id}:{package_id}:{rule_id}:v{rule_version}:{cutoff_iso}:{group_material}"
     )
 
 
@@ -314,8 +315,7 @@ def build_runtime_error_id(
 ) -> str:
     cutoff_iso = ensure_utc(cutoff_at).isoformat()
     material = (
-        f"{source_tenant_id}|{package_id}|{rule_id or '_package_'}|"
-        f"{error_category}|{cutoff_iso}"
+        f"{source_tenant_id}|{package_id}|{rule_id or '_package_'}|{error_category}|{cutoff_iso}"
     )
     digest = hashlib.sha256(material.encode()).hexdigest()[:12]
     return f"drerr-{digest}"

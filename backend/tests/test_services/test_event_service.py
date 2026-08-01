@@ -1521,7 +1521,7 @@ async def test_upsert_report_clears_stale_appendix_observability(
     event_service: EventService,
 ) -> None:
     """ISSUE-104: empty warnings must not leave stale appendix observability keys."""
-    from app.models.report import ReportSection, stamp_report_observability_in_sections
+    from app.models.report import stamp_report_observability_in_sections
 
     sfx = _sfx()
     created = await event_service.ingest_source_object(

@@ -15,6 +15,7 @@ from app.agents.report_agent import (
     ReportAgent,
     generate_report_action_fingerprint,
 )
+from app.agents.report_llm_failure import llm_failure_metadata
 from app.agents.report_section_builder import (
     PLACEHOLDER_LOW_RISK_NO_EVIDENCE,
     PLACEHOLDER_NO_ACTIONS,
@@ -57,7 +58,6 @@ from app.models.enums import (
 )
 from app.models.evidence import Evidence, EvidenceGap
 from app.models.ids import new_evidence_id, report_id_for_event
-from app.agents.report_llm_failure import llm_failure_metadata
 from app.services.agent_trace_service import TraceProjection
 
 
@@ -987,9 +987,7 @@ async def test_llm_failure_emits_structured_observability(
     assert report.generated_by == GENERATED_BY_TEMPLATE
     assert report.error_detail
     assert report.warnings == ["report_llm_fallback:llm_invalid_json"]
-    assert any(
-        "error_code=llm_invalid_json" in record.message for record in caplog.records
-    )
+    assert any("error_code=llm_invalid_json" in record.message for record in caplog.records)
 
     basis = TraceProjection.decision_basis(report.model_dump(mode="json"))
     assert basis["warnings"] == ["report_llm_fallback:llm_invalid_json"]
@@ -1164,7 +1162,6 @@ def test_llm_merge_preserves_investigation_limitation_lines() -> None:
 
 
 def test_llm_failure_metadata_timeout_code() -> None:
-    import asyncio
 
-    meta = llm_failure_metadata(asyncio.TimeoutError())
+    meta = llm_failure_metadata(TimeoutError())
     assert meta["error_code"] == "llm_timeout"

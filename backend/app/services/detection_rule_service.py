@@ -212,8 +212,7 @@ class DetectionRuleService:
 
                 if target_state is DetectionRuleRuntimeState.VALIDATED:
                     rules = [
-                        DetectionRuleDefinition.model_validate(item)
-                        for item in (row.rules or [])
+                        DetectionRuleDefinition.model_validate(item) for item in (row.rules or [])
                     ]
                     await _validate_active_scopes_for_rules(
                         session,

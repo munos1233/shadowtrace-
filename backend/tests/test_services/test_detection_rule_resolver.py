@@ -465,8 +465,7 @@ def test_compile_rejects_observation_count_required_field_on_event_match() -> No
 def test_event_count_cost_limit_fail_closed() -> None:
     base = datetime(2026, 8, 1, 15, 30, 0, tzinfo=UTC)
     observations = [
-        _observation(obs_id=f"o{i}", observed_at=base - timedelta(minutes=i + 1))
-        for i in range(5)
+        _observation(obs_id=f"o{i}", observed_at=base - timedelta(minutes=i + 1)) for i in range(5)
     ]
     rule = _rule(operator=RuleOperatorKind.EVENT_COUNT, threshold=1, match_criteria={})
     rule = rule.model_copy(update={"max_observation_scan": 3})

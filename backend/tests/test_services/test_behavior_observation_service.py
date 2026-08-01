@@ -279,9 +279,7 @@ async def test_tenant_isolation_for_same_source_object_id(
     assert obs_a is not None and obs_b is not None
     assert obs_a.observation_id != obs_b.observation_id
 
-    result = await service.query_observations(
-        BehaviorObservationQuery(source_tenant_id=tenant_a)
-    )
+    result = await service.query_observations(BehaviorObservationQuery(source_tenant_id=tenant_a))
     assert all(item.source_tenant_id == tenant_a for item in result.items)
 
 

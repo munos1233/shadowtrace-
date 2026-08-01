@@ -403,8 +403,7 @@ class DetectionScopeService:
             filters.append(orm.DetectionScopeRevision.source_product == query.source_product)
         if query.integration_instance_id is not None:
             filters.append(
-                orm.DetectionScopeRevision.integration_instance_id
-                == query.integration_instance_id
+                orm.DetectionScopeRevision.integration_instance_id == query.integration_instance_id
             )
         if query.detection_scope_id is not None:
             filters.append(

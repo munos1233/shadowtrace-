@@ -7,13 +7,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+
 from app.agents.verdict_resolver import VerdictResolver
-from app.models.agent_io import CollectionStatus, EvidenceOutput, RiskAssessment, ScoringMode, TriageResult
+from app.models.agent_io import (
+    CollectionStatus,
+    EvidenceOutput,
+    RiskAssessment,
+    ScoringMode,
+    TriageResult,
+)
 from app.models.entities import AccountEntity, EntitySet
 from app.models.enums import EventType, EvidenceSource, Severity
 from app.models.evidence import Evidence, EvidenceConflict
 from app.models.workflow import FP_HIGH_THRESHOLD, FP_LOW_THRESHOLD
-from app.services.change_window_baseline_loader import load_change_window_baseline, resolve_tenant_id
+from app.services.change_window_baseline_loader import (
+    load_change_window_baseline,
+    resolve_tenant_id,
+)
 from app.services.false_positive_matcher import _build_alert_text, _recommendation_for
 from app.services.fp_adjudication_service import PostEvidenceFpAdjudicator
 
@@ -462,8 +472,8 @@ def test_baseline_loader_indexes_tenants(tmp_path: Path) -> None:
 
 
 def test_resolve_tenant_id_from_creation_source_ref() -> None:
-    from app.services.event_service import _source_snapshot_from_row
     from app.db import models as orm
+    from app.services.event_service import _source_snapshot_from_row
 
     row = orm.SecurityEvent(
         event_id="evt-tenant-ref",

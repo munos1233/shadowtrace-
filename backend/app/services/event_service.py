@@ -37,7 +37,11 @@ from app.models.enums import (
     SourceObjectKind,
 )
 from app.models.ids import canonical_source_identity, new_action_id, new_event_id
-from app.models.report import InvestigationReport, observability_from_sections, stamp_report_observability_in_sections
+from app.models.report import (
+    InvestigationReport,
+    observability_from_sections,
+    stamp_report_observability_in_sections,
+)
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.models.tool_meta import TERMINAL_DISPOSITION_TOOL
@@ -1314,9 +1318,7 @@ class EventService:
                 # Heal incomplete snapshots that predate ISSUE-102 baseline fields.
                 if _snapshot_has_risk_baseline(snapshot):
                     existing = await self._store.get(row.event_id, "source_snapshot")
-                    if isinstance(existing, dict) and not _snapshot_has_risk_baseline(
-                        existing
-                    ):
+                    if isinstance(existing, dict) and not _snapshot_has_risk_baseline(existing):
                         repaired = {
                             **existing,
                             "normalized": dict(snapshot["normalized"]),

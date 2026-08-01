@@ -17,24 +17,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ValidationError
 from app.db import models as orm
 from app.models.behavior_observation import BehaviorObservation
-from app.services.behavior_observation_service import row_to_behavior_observation
 from app.models.feature_snapshot import (
+    BASELINE_SCHEMA_VERSION,
     DEFAULT_ALLOWED_LATENESS,
     FEATURE_CONTRACT_VERSION,
     FEATURE_SNAPSHOT_SCHEMA_VERSION,
-    BASELINE_SCHEMA_VERSION,
+    MIN_OBSERVATIONS_1H,
+    MIN_OBSERVATIONS_7D,
+    MIN_OBSERVATIONS_24H,
+    MIN_OBSERVATIONS_30D,
     DetectionBaselineStatus,
     DetectionFeatureBaseline,
     FeatureSnapshot,
     FeatureSnapshotProvenance,
     FeatureSnapshotStatus,
     FeatureWindowKind,
-    MIN_OBSERVATIONS_1H,
-    MIN_OBSERVATIONS_24H,
-    MIN_OBSERVATIONS_7D,
-    MIN_OBSERVATIONS_30D,
     SeasonalityProfile,
 )
+from app.services.behavior_observation_service import row_to_behavior_observation
 
 _WINDOW_DURATIONS: dict[FeatureWindowKind, timedelta] = {
     FeatureWindowKind.ONE_HOUR: timedelta(hours=1),
@@ -414,7 +414,9 @@ def dedupe_latest_snapshots_by_entity(snapshots: list[FeatureSnapshot]) -> list[
         current = latest.get(key)
         if current is None or snap.revision > current.revision:
             latest[key] = snap
-    return sorted(latest.values(), key=lambda item: (item.entity_type, item.entity_id, item.revision))
+    return sorted(
+        latest.values(), key=lambda item: (item.entity_type, item.entity_id, item.revision)
+    )
 
 
 def _build_seasonality_profile(snapshots: list[FeatureSnapshot]) -> SeasonalityProfile:
@@ -610,7 +612,6 @@ class FeatureSnapshotResolver:
             supersedes_snapshot_id=supersedes_snapshot_id,
             allowed_lateness=allowed_lateness,
         )
-
 
 
 def row_to_feature_snapshot(row: orm.FeatureSnapshot) -> FeatureSnapshot:

@@ -297,8 +297,7 @@ class BehaviorObservationService:
         rows = await session.scalars(
             select(orm.BehaviorObservationProjectionFailure).where(
                 and_(
-                    orm.BehaviorObservationProjectionFailure.source_record_id
-                    == source_record_id,
+                    orm.BehaviorObservationProjectionFailure.source_record_id == source_record_id,
                     orm.BehaviorObservationProjectionFailure.status.in_(
                         [
                             BehaviorObservationProjectionStatus.PENDING_RETRY.value,
@@ -377,24 +376,18 @@ class BehaviorObservationService:
     ) -> BehaviorObservationListResult:
         filters = [orm.BehaviorObservation.source_tenant_id == query.source_tenant_id]
         if query.detection_scope_id is not None:
-            filters.append(
-                orm.BehaviorObservation.detection_scope_id == query.detection_scope_id
-            )
+            filters.append(orm.BehaviorObservation.detection_scope_id == query.detection_scope_id)
         if query.connector_id is not None:
             filters.append(orm.BehaviorObservation.connector_id == query.connector_id)
         if query.source_kind is not None:
             filters.append(orm.BehaviorObservation.source_kind == query.source_kind)
         if query.source_object_id is not None:
-            filters.append(
-                orm.BehaviorObservation.source_object_id == query.source_object_id
-            )
+            filters.append(orm.BehaviorObservation.source_object_id == query.source_object_id)
 
         async with self._session_factory() as session:
             total = int(
                 await session.scalar(
-                    select(func.count())
-                    .select_from(orm.BehaviorObservation)
-                    .where(*filters)
+                    select(func.count()).select_from(orm.BehaviorObservation).where(*filters)
                 )
                 or 0
             )

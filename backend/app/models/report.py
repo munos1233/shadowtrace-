@@ -88,11 +88,7 @@ def observability_from_sections(
             continue
         data = section.data or {}
         raw_warnings = data.get(_APPENDIX_OBSERVABILITY_WARNINGS_KEY)
-        warnings = (
-            [str(item) for item in raw_warnings]
-            if isinstance(raw_warnings, list)
-            else []
-        )
+        warnings = [str(item) for item in raw_warnings] if isinstance(raw_warnings, list) else []
         raw_detail = data.get(_APPENDIX_OBSERVABILITY_ERROR_DETAIL_KEY)
         error_detail = str(raw_detail) if raw_detail not in (None, "") else None
         return warnings, error_detail

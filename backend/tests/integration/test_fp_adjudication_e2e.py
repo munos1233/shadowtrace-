@@ -18,8 +18,8 @@ from app.models.enums import (
     EventStatus,
     FinalVerdict,
     SourceDisposition,
+    SourceObjectKind,
 )
-from app.models.enums import SourceObjectKind
 from app.services.evidence_projection import bind_evidence_projection
 
 pytestmark = pytest.mark.e2e_basic

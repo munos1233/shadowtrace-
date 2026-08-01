@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,8 +24,8 @@ from app.models.detection_rule import (
     MissingDataPolicy,
     RuleOperatorKind,
 )
-from app.models.feature_snapshot import FEATURE_CONTRACT_VERSION, FeatureWindowKind
 from app.models.detection_scope import DetectionScopeIdentity, UpstreamConnectorMember
+from app.models.feature_snapshot import FEATURE_CONTRACT_VERSION, FeatureWindowKind
 from app.services.detection_rule_service import DetectionRuleService
 from app.services.detection_scope_service import DetectionScopeService
 
@@ -287,7 +286,9 @@ async def test_tenant_isolation_for_get_package(
         author="tester",
     )
     assert await service.get_package(source_tenant_id=tenant_a, package_id=package.package_id)
-    assert await service.get_package(source_tenant_id=tenant_b, package_id=package.package_id) is None
+    assert (
+        await service.get_package(source_tenant_id=tenant_b, package_id=package.package_id) is None
+    )
 
 
 @pytest.mark.asyncio

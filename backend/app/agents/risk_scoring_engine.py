@@ -280,9 +280,7 @@ def augment_factors_for_evidence_limited(
         return factors
 
     baseline_text = (
-        "null"
-        if adjustment.source_risk_baseline is None
-        else str(adjustment.source_risk_baseline)
+        "null" if adjustment.source_risk_baseline is None else str(adjustment.source_risk_baseline)
     )
     floor_note = (
         f"; severity_floor_applied=true, score={adjustment.risk_score}"

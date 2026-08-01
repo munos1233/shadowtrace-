@@ -353,4 +353,3 @@ def build_behavior_observation(
         schema_version=BEHAVIOR_OBSERVATION_SCHEMA_VERSION,
         projection_schema_version=BEHAVIOR_OBSERVATION_PROJECTION_SCHEMA_VERSION,
     )
-

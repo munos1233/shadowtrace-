@@ -717,7 +717,9 @@ class BehaviorObservation(Base):
     entity_refs: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     action: Mapped[str | None] = mapped_column(String, nullable=True)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
-    normalized_attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    normalized_attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, nullable=False
+    )
     detection_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     schema_version: Mapped[str] = mapped_column(String, nullable=False)
     projection_schema_version: Mapped[str] = mapped_column(String, nullable=False)

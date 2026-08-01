@@ -101,7 +101,6 @@ from app.services.event_disposition_service import (
 from app.services.event_service import EventService
 from app.services.state_machine_service import StateMachineService
 from app.services.terminal_disposition_resolver import TerminalDispositionResolver
-from app.services.working_memory import WorkingMemory
 from tests.helpers.decision_audit import seed_minimum_disposition_audit
 from tests.test_services._mock_xdr_test_helpers import (
     SCENARIO_INCIDENT_ID,

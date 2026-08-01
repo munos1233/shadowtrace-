@@ -564,12 +564,9 @@ class ReportSectionBuilder:
             if gap_lines:
                 lines.append("evidence_gaps:")
                 lines.extend(f"- {line}" for line in gap_lines)
-            elif (
-                risk_assessment is not None
-                and _use_low_risk_no_evidence_placeholder(
-                    risk_assessment=risk_assessment,
-                    evidence_output=evidence_output,
-                )
+            elif risk_assessment is not None and _use_low_risk_no_evidence_placeholder(
+                risk_assessment=risk_assessment,
+                evidence_output=evidence_output,
             ):
                 lines.append(PLACEHOLDER_LOW_RISK_NO_EVIDENCE)
             return "\n".join(lines)

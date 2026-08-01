@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from app.models.behavior_observation import (
     BehaviorEntityRef,
     BehaviorObservation,

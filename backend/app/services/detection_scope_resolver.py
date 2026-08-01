@@ -49,7 +49,10 @@ def normalize_upstream_connector_set(
         if key in deduped:
             raise ValidationError(
                 "duplicate upstream connector in scope set",
-                details={"connector_id": member.connector_id, "source_product": member.source_product},
+                details={
+                    "connector_id": member.connector_id,
+                    "source_product": member.source_product,
+                },
             )
         deduped[key] = member
 

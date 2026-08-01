@@ -12,10 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db import models as orm
 from app.ingestion.push_receiver import PushBatchEnvelope, PushReceiver
 from app.ingestion.source_ingester import SourceIngester
+from app.models.behavior_observation import BehaviorObservationQuery
 from app.models.enums import ConnectorStatus, SourceObjectKind
 from app.models.source import SourceIncident, SourceReference
-from app.models.behavior_observation import BehaviorObservationQuery
 from app.services.behavior_observation_service import BehaviorObservationService
+from app.services.event_service import EventService
 
 
 def _suffix() -> str:

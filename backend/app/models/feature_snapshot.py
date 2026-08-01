@@ -35,9 +35,7 @@ class FeatureWindowKind(StrEnum):
     THIRTY_DAYS = "30d"
 
 
-PHASE_A_WINDOW_KINDS = frozenset(
-    {FeatureWindowKind.ONE_HOUR, FeatureWindowKind.TWENTY_FOUR_HOURS}
-)
+PHASE_A_WINDOW_KINDS = frozenset({FeatureWindowKind.ONE_HOUR, FeatureWindowKind.TWENTY_FOUR_HOURS})
 PHASE_B_WINDOW_KINDS = frozenset({FeatureWindowKind.SEVEN_DAYS, FeatureWindowKind.THIRTY_DAYS})
 
 
@@ -84,7 +82,9 @@ class FeatureSnapshot(BaseModel):
     window_end: datetime
     cutoff_at: datetime = Field(
         ...,
-        description="As-of event-time watermark — observations with observed_at > cutoff are excluded.",
+        description=(
+            "As-of event-time watermark — observations with observed_at > cutoff are excluded."
+        ),
     )
     allowed_lateness_seconds: int = Field(default=900, ge=0)
     source_watermark: datetime = Field(

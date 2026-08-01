@@ -681,9 +681,7 @@ async def test_malicious_process_zero_evidence_applies_severity_floor(
     assert output.severity is Severity.HIGH
     assert output.confidence <= EVIDENCE_LIMITED_CONFIDENCE_CAP
     assert agent.last_verdict is FinalVerdict.NONE
-    evidence_factor = next(
-        f for f in output.risk_factors if f.factor_name == "evidence_confidence"
-    )
+    evidence_factor = next(f for f in output.risk_factors if f.factor_name == "evidence_confidence")
     assert "source_baseline=76" in evidence_factor.reasoning
     assert "evidence_limited=true" in evidence_factor.reasoning
 

@@ -406,7 +406,10 @@ class DetectionRuleRuntimeService:
                     if row is None or row.source_tenant_id != source_tenant_id:
                         raise ValidationError(
                             "detection rule package not found for tenant",
-                            details={"package_id": package_id, "source_tenant_id": source_tenant_id},
+                            details={
+                                "package_id": package_id,
+                                "source_tenant_id": source_tenant_id,
+                            },
                         )
                     package = row_to_detection_rule_package(row)
                     if package.runtime_state is not DetectionRuleRuntimeState.SHADOW_ACTIVE:

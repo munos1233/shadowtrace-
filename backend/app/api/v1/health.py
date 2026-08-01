@@ -178,8 +178,7 @@ async def health(
         "version": settings.app_version,
         "investigation": {
             "orchestration_mode": settings.orchestration_mode,
-            "full_loop_available": settings.orchestration_mode.strip().lower()
-            != "analysis_only",
+            "full_loop_available": settings.orchestration_mode.strip().lower() != "analysis_only",
             "task_mode": (settings.task_mode or "background").strip().lower(),
         },
     }

@@ -280,9 +280,7 @@ def _match_change_window(
             continue
 
         authorized_groups = {value.lower() for value in window.authorized_asset_groups}
-        if authorized_groups and (
-            not asset_groups or asset_groups.isdisjoint(authorized_groups)
-        ):
+        if authorized_groups and (not asset_groups or asset_groups.isdisjoint(authorized_groups)):
             continue
 
         return window
