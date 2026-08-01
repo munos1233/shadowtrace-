@@ -118,6 +118,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "storyline_not_ready": ErrorCategory.USER_INPUT,
     "context_not_ready": ErrorCategory.USER_INPUT,
     "evidence_not_ready": ErrorCategory.USER_INPUT,
+    "full_loop_unavailable": ErrorCategory.USER_INPUT,
     "qa_unavailable": ErrorCategory.TRANSIENT,
     "memory_review_not_found": ErrorCategory.USER_INPUT,
     "memory_review_conflict": ErrorCategory.PERMANENT,
