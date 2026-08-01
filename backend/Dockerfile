@@ -31,6 +31,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY backend/app ./app
 COPY backend/migrations ./migrations
+COPY backend/alembic.ini ./alembic.ini
 COPY backend/docker-entrypoint.sh /docker-entrypoint.sh
 COPY contracts /contracts
 # Nested tree for scripts/generate_mock_data.py path resolution.
