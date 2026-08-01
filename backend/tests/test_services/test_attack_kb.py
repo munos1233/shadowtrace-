@@ -63,7 +63,9 @@ async def session_factory(
 
 @pytest_asyncio.fixture
 def embed_service() -> EmbeddingService:
-    return EmbeddingService(Settings(embedding_mode="mock"))
+    return EmbeddingService(
+        Settings(EMBEDDING_MODE="mock", EMBEDDING_MAX_BATCH_SIZE=128)
+    )
 
 
 @pytest_asyncio.fixture
@@ -219,7 +221,11 @@ class TestSemanticSearchRemoteMode:
     @pytest_asyncio.fixture
     def semantic_embed_service(self) -> EmbeddingService:
         return EmbeddingService(
-            Settings(embedding_mode="remote", embedding_api_base_url="http://stub")
+            Settings(
+                EMBEDDING_MODE="remote",
+                EMBEDDING_API_BASE_URL="http://stub",
+                EMBEDDING_MAX_BATCH_SIZE=128,
+            )
         )
 
     @pytest_asyncio.fixture
@@ -254,7 +260,8 @@ class TestSemanticSearchRemoteMode:
         async def stub_remote(texts: list[str]) -> list[list[float]]:
             return await mock.embed(texts)
 
-        monkeypatch.setattr(semantic_embed_service, "_embed_remote", stub_remote)
+        assert semantic_embed_service._remote is not None
+        monkeypatch.setattr(semantic_embed_service._remote, "embed", stub_remote)
 
         await semantic_service.load_from_file(DATA_FILE)
 
@@ -298,7 +305,8 @@ class TestSemanticSearchRemoteMode:
         async def stub_remote(texts: list[str]) -> list[list[float]]:
             return await mock.embed(texts)
 
-        monkeypatch.setattr(semantic_embed_service, "_embed_remote", stub_remote)
+        assert semantic_embed_service._remote is not None
+        monkeypatch.setattr(semantic_embed_service._remote, "embed", stub_remote)
         await semantic_service.load_from_file(DATA_FILE)
 
         anchor = await semantic_service.get_technique(expected_technique_id)

@@ -22,6 +22,7 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
         "DISPOSITION_MODE": "live_xdr",
         "DISPOSITION_ADAPTER_KIND": "http",
         "LLM_MODE": "openai_compatible",
+        "EMBEDDING_MODE": "remote",
         "SIMULATION_ENABLED": False,
     }
     kwargs.update(overrides)
@@ -55,6 +56,7 @@ def test_development_allows_mock_and_simulation() -> None:
         {"DISPOSITION_MODE": "mock_xdr"},
         {"DISPOSITION_ADAPTER_KIND": "mock"},
         {"LLM_MODE": "mock"},
+        {"EMBEDDING_MODE": "mock"},
     ],
     ids=[
         "simulation_enabled",
@@ -63,6 +65,7 @@ def test_development_allows_mock_and_simulation() -> None:
         "disposition_mode_mock",
         "disposition_adapter_kind_mock",
         "llm_mode_mock",
+        "embedding_mode_mock",
     ],
 )
 def test_production_rejects_any_single_mock_or_simulation_mode(

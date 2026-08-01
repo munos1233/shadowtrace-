@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.api.v1 import deps
+from app.core.config import Settings
 
 
 class _SentinelBus:
@@ -34,11 +35,12 @@ async def test_build_investigation_agents_wires_event_bus(monkeypatch: pytest.Mo
     monkeypatch.setattr(
         deps,
         "get_settings",
-        lambda: MagicMock(
-            llm_provider="mock",
-            embedding_provider="mock",
-            orchestration_mode="graph",
-            react_enabled=False,
+        lambda: Settings(
+            APP_ENV="development",
+            LLM_MODE="mock",
+            EMBEDDING_MODE="mock",
+            ORCHESTRATION_MODE="graph",
+            REACT_ENABLED=False,
         ),
     )
     monkeypatch.setattr(deps, "get_event_service", AsyncMock(return_value=MagicMock()))
