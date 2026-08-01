@@ -337,7 +337,8 @@ async def test_fp_scenario_false_positive_via_rag_similarity() -> None:
         )
     )
     assert output.risk_score < 40
-    assert event_service.verdicts[-1] is FinalVerdict.FALSE_POSITIVE
+    # ISSUE-114: pre-evidence RAG high similarity is advisory only.
+    assert event_service.verdicts[-1] is FinalVerdict.POSSIBLE_FALSE_POSITIVE
 
 
 def test_close_as_fp_beats_high_rag_fp_similarity() -> None:
@@ -350,7 +351,8 @@ def test_close_as_fp_beats_high_rag_fp_similarity() -> None:
             confidence=0.8,
             scoring_mode=ScoringMode.RULE_ONLY,
         ),
-        false_positive_match={"recommendation": "close_as_fp", "max_score": 0.5},
+        # ISSUE-114: only post-evidence fp_adjudication can force false_positive.
+        fp_adjudication={"recommendation": "close_as_fp", "matched_window_id": "cw-test"},
         rag_output=rag,
     )
     assert verdict is FinalVerdict.FALSE_POSITIVE
@@ -462,9 +464,11 @@ async def test_pipeline_real_rag_agent_writes_wm_and_passes_output() -> None:
 async def test_pipeline_rag_fail_still_uses_false_positive_match() -> None:
     event_id = f"evt-rag-fp-pipe-{uuid4().hex[:8]}"
     wm = FakeWorkingMemory()
+    # Pre-evidence false_positive_match remains advisory under ISSUE-114.
     wm.values[(event_id, "false_positive_match")] = {
-        "recommendation": "close_as_fp",
+        "recommendation": "investigate_with_flag",
         "max_score": 0.96,
+        "phase": "pre_evidence",
     }
     event_service = FakeEventService()
     weak = EvidenceOutput(
@@ -513,8 +517,8 @@ async def test_pipeline_rag_fail_still_uses_false_positive_match() -> None:
     assert result.rag_output is None
     assert result.rag_degraded is True
     assert result.risk_assessment.risk_score < 40
-    assert result.final_verdict is FinalVerdict.FALSE_POSITIVE
-    assert event_service.final_verdict_by_event[event_id] is FinalVerdict.FALSE_POSITIVE
+    assert result.final_verdict is FinalVerdict.POSSIBLE_FALSE_POSITIVE
+    assert event_service.final_verdict_by_event[event_id] is FinalVerdict.POSSIBLE_FALSE_POSITIVE
 
 
 @pytest.mark.asyncio

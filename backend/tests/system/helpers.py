@@ -134,7 +134,11 @@ async def assert_main_chain_expectations(
     risk_ctx = await context_store.get(event_id, "risk_assessment")
     report_ctx = await context_store.get(event_id, "report")
     assert triage_ctx is not None
-    assert triage_ctx.get("degraded") is True
+    # ISSUE-099: LLM text extraction may fail, but source-enriched entities
+    # mean triage is not degraded=True.
+    assert triage_ctx.get("degraded") is False
+    degradation_reasons = triage_ctx.get("degradation_reasons") or []
+    assert "text_extraction_empty" in degradation_reasons
     triage_type = str(triage_ctx.get("event_type") or "")
     assert triage_type in {member.value for member in EventType}
     assert risk_ctx is not None

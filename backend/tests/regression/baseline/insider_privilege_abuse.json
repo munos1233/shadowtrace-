@@ -3,7 +3,7 @@
   "event_id": "evt-20240615-0020a6e7",
   "event_status": "reporting",
   "executed_actions": [],
-  "final_verdict": "none",
+  "final_verdict": "confirmed_threat",
   "insufficient_trace": false,
   "quality_scores": {
     "evidence": 0.45,
@@ -11,7 +11,7 @@
     "risk": 0.775,
     "triage": 0.865
   },
-  "risk_score": 58,
+  "risk_score": 71,
   "scenario_id": "insider_privilege_abuse",
   "schema_version": 1,
   "trajectory_metrics": {

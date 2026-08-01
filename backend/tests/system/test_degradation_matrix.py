@@ -84,7 +84,10 @@ async def test_degradation_llm_failure_rule_fallback(
     triage = await context_store.get(event_id, "triage_result")
     risk = await context_store.get(event_id, "risk_assessment")
     report = await context_store.get(event_id, "report")
-    assert triage and triage.get("degraded") is True
+    # ISSUE-099: failing LLM text extraction with successful source enrichment
+    # must not mark triage degraded=True.
+    assert triage and triage.get("degraded") is False
+    assert "text_extraction_empty" in (triage.get("degradation_reasons") or [])
     assert risk and risk.get("scoring_mode") == ScoringMode.RULE_ONLY.value
     assert report and report.get("generated_by") == GENERATED_BY_TEMPLATE
     event = await event_service.get_event(event_id)

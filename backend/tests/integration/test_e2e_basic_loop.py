@@ -475,7 +475,9 @@ async def test_llm_degradation_graph_mode_fallback_without_bypassing_gates(
     triage_ctx = await context_store.get(event_id, "triage_result")
     risk_ctx = await context_store.get(event_id, "risk_assessment")
     report_ctx = await context_store.get(event_id, "report")
-    assert triage_ctx and triage_ctx.get("degraded") is True
+    # ISSUE-099: source-enriched entities keep degraded=False under LLM failure.
+    assert triage_ctx and triage_ctx.get("degraded") is False
+    assert "text_extraction_empty" in (triage_ctx.get("degradation_reasons") or [])
     assert risk_ctx and risk_ctx.get("scoring_mode") == ScoringMode.RULE_ONLY.value
     assert report_ctx and report_ctx.get("generated_by") == GENERATED_BY_TEMPLATE
 
@@ -600,7 +602,9 @@ async def test_llm_degradation_fallback_without_bypassing_gates(
     with bind_evidence_projection(projection):
         result = await pipeline.run(event_id)
 
-    assert result.triage_result.degraded is True
+    # ISSUE-099: LLM failure with source enrichment → degraded=False.
+    assert result.triage_result.degraded is False
+    assert "text_extraction_empty" in result.triage_result.degradation_reasons
     assert result.risk_assessment is not None
     assert result.risk_assessment.scoring_mode is ScoringMode.RULE_ONLY
     assert result.report is not None

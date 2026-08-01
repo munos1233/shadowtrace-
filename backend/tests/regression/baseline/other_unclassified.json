@@ -3,7 +3,7 @@
   "event_id": "evt-20240615-fbd43ebe",
   "event_status": "closed",
   "executed_actions": [],
-  "final_verdict": "none",
+  "final_verdict": "confirmed_threat",
   "insufficient_trace": false,
   "quality_scores": {
     "evidence": 0.45,
@@ -11,7 +11,7 @@
     "risk": 0.775,
     "triage": 0.865
   },
-  "risk_score": 58,
+  "risk_score": 71,
   "scenario_id": "other_unclassified",
   "schema_version": 1,
   "trajectory_metrics": {

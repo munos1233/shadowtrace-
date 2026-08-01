@@ -119,7 +119,8 @@ async def test_regression_detects_verdict_drift(
     )
     recorder = SnapshotRecorder(session_factory, context_store=context_store)
     current = await recorder.record(event_id, scenario_id)
-    current["final_verdict"] = "confirmed_threat"
+    # Force a deliberate mismatch against the ISSUE-099/114 baseline verdict.
+    current["final_verdict"] = "false_positive"
 
     drifts = SnapshotDiffer().diff(baseline, current)
     blocking = SnapshotDiffer.blocking_drifts(drifts)
@@ -263,26 +264,24 @@ async def test_regression_fails_when_agent_verdict_changes(
     context_store: EventContextStore,
     run_graph_investigation: object,
 ) -> None:
-    from app.services.fp_adjudication_service import PostEvidenceFpAdjudicator
+    from app.agents.verdict_resolver import VerdictResolver
+    from app.models.enums import FinalVerdict
 
-    def _disable_fp_adjudication(
-        self: PostEvidenceFpAdjudicator,
+    def _force_false_positive(
+        self: VerdictResolver,
+        *args: object,
         **kwargs: object,
-    ) -> object:
-        del self, kwargs
-        from app.models.fp_adjudication import FpAdjudicationResult
+    ) -> FinalVerdict:
+        del self, args, kwargs
+        return FinalVerdict.FALSE_POSITIVE
 
-        return FpAdjudicationResult(
-            recommendation="no_fp_signal",
-            missing_conditions=["disabled_for_regression"],
-        )
-
-    monkeypatch.setattr(PostEvidenceFpAdjudicator, "adjudicate", _disable_fp_adjudication)
+    monkeypatch.setattr(VerdictResolver, "resolve", _force_false_positive)
 
     scenario_id = "account_anomaly_fp"
     baseline = load_baseline(scenario_id)
     assert baseline is not None
-    assert baseline["final_verdict"] == "false_positive"
+    # ISSUE-099/114 golden path: source enrichment + advisory FP → confirmed_threat.
+    assert baseline["final_verdict"] == "confirmed_threat"
 
     event_id = await ingest_and_run_golden_chain(
         scenario_id=scenario_id,
