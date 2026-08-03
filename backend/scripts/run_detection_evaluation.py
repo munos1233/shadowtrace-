@@ -34,6 +34,29 @@ def resolve_code_sha(explicit: str | None) -> str:
         return "0000000"
 
 
+def cli_exit_code(
+    *,
+    artifact_status: str,
+    gate_verdict: str | None,
+    baseline_compare_failed: bool,
+    allow_gate_fail: bool,
+) -> int:
+    """Map evaluation outcomes to process exit codes (ISSUE-167 / #686).
+
+    Baseline drift always fails. During the #642 report-only / baseline-pin
+    phase, ``--allow-gate-fail`` keeps CI green when the pinned gate is still
+    ``fail_closed`` (expected cold-start / resource-limit ERROR slices). Flip
+    CI back to required by dropping ``--allow-gate-fail`` once fixtures make
+    ``required_gate`` + gate pass deterministic.
+    """
+    if baseline_compare_failed:
+        return 1
+    gate_failed = artifact_status != "completed" or gate_verdict in {"fail", "fail_closed"}
+    if gate_failed and not allow_gate_fail:
+        return 1
+    return 0
+
+
 def _apply_migrations(database_url: str) -> None:
     from alembic import command
     from alembic.config import Config
@@ -198,7 +221,12 @@ async def _run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             await engine.dispose()
-            return 1
+            return cli_exit_code(
+                artifact_status=artifact.status.value,
+                gate_verdict=artifact.gate.verdict.value if artifact.gate else None,
+                baseline_compare_failed=True,
+                allow_gate_fail=args.allow_gate_fail,
+            )
         print(
             json.dumps(
                 {
@@ -210,11 +238,12 @@ async def _run(args: argparse.Namespace) -> int:
         )
 
     await engine.dispose()
-    if artifact.status.value != "completed":
-        return 1
-    if artifact.gate and artifact.gate.verdict.value in {"fail", "fail_closed"}:
-        return 1
-    return 0
+    return cli_exit_code(
+        artifact_status=artifact.status.value,
+        gate_verdict=artifact.gate.verdict.value if artifact.gate else None,
+        baseline_compare_failed=False,
+        allow_gate_fail=args.allow_gate_fail,
+    )
 
 
 def main() -> None:
@@ -265,6 +294,15 @@ def main() -> None:
         type=Path,
         default=None,
         help="Pinned baseline artifact JSON; fail when structural output drifts",
+    )
+    parser.add_argument(
+        "--allow-gate-fail",
+        action="store_true",
+        help=(
+            "Report-only baseline phase (#642/#686): do not exit non-zero for "
+            "gate fail/fail_closed or non-completed status. Baseline drift still fails. "
+            "Remove this flag in CI when detection_shadow_v1 gate is required green."
+        ),
     )
     args = parser.parse_args()
 

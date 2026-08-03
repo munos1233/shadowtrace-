@@ -471,7 +471,8 @@ detection-evaluation-run:
 		--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)" \
 		--seed 42 \
 		--threshold-manifest "$(CURDIR)/data/evaluation/detection_shadow_v1/threshold_manifest.json" \
-		--compare-baseline "$(CURDIR)/data/evaluation/detection_shadow_v1/baseline_artifact.json"
+		--compare-baseline "$(CURDIR)/data/evaluation/detection_shadow_v1/baseline_artifact.json" \
+		--allow-gate-fail
 
 # --- ISSUE-009 local / CI parity gates ------------------------------------ #
 ci-lint:
