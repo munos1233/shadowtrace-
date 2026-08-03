@@ -29,7 +29,6 @@ from app.models.enums import (
     WritebackStatus,
 )
 from app.models.execution import ActionExecutionJob, ExecutionActionView, ExecutionSummary
-from app.services.playbook_approval_binding import validate_approval_binding
 from app.models.ids import new_disposition_id, new_job_id
 from app.models.workflow import validate_action_status_transition
 from app.services.context_service import EventContextStore
@@ -38,6 +37,7 @@ from app.services.disposition_command_factory import (
     entity_action_code_for,
 )
 from app.services.disposition_sync_service import DispositionSyncService
+from app.services.playbook_approval_binding import validate_approval_binding
 from app.services.state_machine_service import StateMachineService
 from app.tools.executor import ToolExecutor
 

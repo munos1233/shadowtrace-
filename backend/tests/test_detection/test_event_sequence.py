@@ -12,7 +12,11 @@ from app.detection.operators.event_sequence import (
     EventSequenceOperator,
     find_ordered_sequence_match,
 )
-from app.detection.sequences.releases import GEO_SENSITIVE_SEQUENCE_V1, IDENTITY_EXFIL_SEQUENCE_V1, sequence_match_threshold
+from app.detection.sequences.releases import (
+    GEO_SENSITIVE_SEQUENCE_V1,
+    IDENTITY_EXFIL_SEQUENCE_V1,
+    sequence_match_threshold,
+)
 from app.models.behavior_observation import (
     BehaviorEntityRef,
     BehaviorObservation,
@@ -215,12 +219,8 @@ def test_find_ordered_sequence_match_respects_max_step_gap() -> None:
             category="identity",
         ),
     ]
-    assert (
-        find_ordered_sequence_match(observations, steps, max_step_gap_seconds=600) is None
-    )
-    assert (
-        find_ordered_sequence_match(observations, steps, max_step_gap_seconds=3600) is not None
-    )
+    assert find_ordered_sequence_match(observations, steps, max_step_gap_seconds=600) is None
+    assert find_ordered_sequence_match(observations, steps, max_step_gap_seconds=3600) is not None
 
 
 def test_event_sequence_operator_emits_typed_provenance() -> None:
@@ -270,7 +270,9 @@ def test_event_sequence_operator_emits_typed_provenance() -> None:
     assert match.sequence_provenance["sequence_hash"] == IDENTITY_EXFIL_SEQUENCE_V1.sequence_hash
     assert match.sequence_provenance["ordered_observation_ids"] == ["o1", "o2", "o3", "o4"]
     assert len(match.sequence_provenance["sequence_step_matches"]) == 4
-    assert "login→privilege_change→bulk_read→egress" in match.sequence_provenance["match_explanation"]
+    assert (
+        "login→privilege_change→bulk_read→egress" in match.sequence_provenance["match_explanation"]
+    )
 
 
 def test_event_sequence_operator_hash_mismatch_fail_closed() -> None:

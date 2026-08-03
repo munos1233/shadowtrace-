@@ -68,7 +68,6 @@ async def test_react_factory_idempotent_replay_uses_trusted_load() -> None:
         BoundExecutionPrincipal,
         ToolCallGrant,
         ToolCallGrantScope,
-        ToolCallMode,
     )
     from app.orchestration.react_engine import ReadOnlyReActExecutor
 
@@ -121,7 +120,6 @@ async def test_react_factory_grant_scope_matches_plan_step() -> None:
         ToolCallGrant,
         ToolCallGrantCreateRequest,
         ToolCallGrantScope,
-        ToolCallMode,
     )
     from app.orchestration.react_engine import ReadOnlyReActExecutor
 
@@ -191,7 +189,6 @@ async def test_react_factory_reuses_grant_on_step_retry() -> None:
         ToolCallGrant,
         ToolCallGrantCreateRequest,
         ToolCallGrantScope,
-        ToolCallMode,
     )
     from app.orchestration.react_engine import DEFAULT_TOOL_CALL_BUDGET, ReadOnlyReActExecutor
     from app.services.tool_call_grant_service import build_react_grant_request
@@ -265,4 +262,3 @@ async def test_react_factory_reuses_grant_on_step_retry() -> None:
     assert isinstance(second, ReadOnlyReActExecutor)
     assert idempotency_keys == [expected_key, expected_key]
     grant_service.load_grant_trusted.assert_awaited_once_with("tcg-retry01")
-

@@ -1919,4 +1919,3 @@ async def test_event_sequence_max_observation_scan_raises(
     assert result.candidates == []
     assert len(result.errors) == 1
     assert result.errors[0].error_category == "validation_error"
-

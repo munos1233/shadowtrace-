@@ -39,7 +39,9 @@ class Citation(BaseModel):
     kb_name: str
     quoted_text: str = Field(..., description="Relevant excerpt, max 200 chars")
     relevance_score: float
-    corpus_id: str | None = Field(default=None, description="Knowledge corpus id when release-scoped")
+    corpus_id: str | None = Field(
+        default=None, description="Knowledge corpus id when release-scoped"
+    )
     release_id: str | None = Field(default=None, description="Pinned knowledge release id")
     object_id: str | None = Field(default=None, description="Stable object id within release")
 

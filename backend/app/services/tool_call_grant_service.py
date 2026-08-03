@@ -436,8 +436,11 @@ def build_react_grant_request(
     plan_step_id: str | None = None,
     task_id: str | None = None,
 ) -> ToolCallGrantCreateRequest:
+    from app.models.tool_call_grant import (
+        DEFAULT_TOOL_CALL_GRANT_POLICY_VERSION,
+        BoundExecutionPrincipal,
+    )
     from app.services.tool_call_grant_resolver import build_principal_id
-    from app.models.tool_call_grant import BoundExecutionPrincipal, DEFAULT_TOOL_CALL_GRANT_POLICY_VERSION
 
     principal_id = build_principal_id()
     return ToolCallGrantCreateRequest(

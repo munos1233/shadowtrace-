@@ -34,7 +34,7 @@ from app.services.knowledge_release_resolver import (
     corpus_advisory_lock_key,
 )
 from app.services.knowledge_store import KnowledgeStore
-from app.services.stix_bundle_validator import StixBundleValidationResult, validate_stix_bundle
+from app.services.stix_bundle_validator import validate_stix_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,7 @@ class KnowledgeReleaseService:
                     raise ValidationError(
                         "knowledge release already exists",
                         details={"idempotency_key": idempotency_key},
-                    )
+                    ) from None
                 await session.refresh(row)
                 return _row_to_release(row)
 

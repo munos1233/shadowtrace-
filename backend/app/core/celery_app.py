@@ -106,9 +106,7 @@ celery_app.conf.update(
         "shadowtrace.dispatch_investigation_intents": {"queue": "investigation"},
         "shadowtrace.reconcile_investigation_intents": {"queue": "investigation"},
         "shadowtrace.behavior_observation.retry_pending": {"queue": "ingestion"},
-        "shadowtrace.detection_governance.expire_active_approvals": {
-            "queue": "investigation"
-        },
+        "shadowtrace.detection_governance.expire_active_approvals": {"queue": "investigation"},
     },
     task_acks_late=True,
     task_reject_on_worker_lost=True,

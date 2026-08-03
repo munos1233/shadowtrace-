@@ -42,12 +42,12 @@ from app.services.action_approval_policy import (
     action_level_rank,
     resolve_runtime_max_auto_level,
 )
+from app.services.action_mapper import action_from_orm as _action_from_orm
 from app.services.playbook_approval_binding import (
     build_approval_binding_detail,
     manifest_supports_template_capabilities,
     validate_approval_binding,
 )
-from app.services.action_mapper import action_from_orm as _action_from_orm
 from app.services.state_machine_service import StateMachineService
 
 if TYPE_CHECKING:
@@ -164,8 +164,7 @@ def evaluate_level_rules(
                 decision=ApprovalDecisionKind.REQUIRE_APPROVAL,
                 rule_applied="level_exceeds_auto_cap",
                 reason=(
-                    f"{level.value} exceeds configured auto-approve cap "
-                    f"{cap.value} (ISSUE-109)"
+                    f"{level.value} exceeds configured auto-approve cap {cap.value} (ISSUE-109)"
                 ),
             )
         return ApprovalDecision(

@@ -11,20 +11,20 @@ from app.core.config import Settings
 from app.core.errors import ToolCallGrantUnavailableError
 from app.models.agent_io import PlanStep
 from app.models.enums import ToolCategory
-from app.models.tool_meta import RoutingKind
 from app.models.tool_call_grant import ToolCallGrantScope, ToolCallMode
+from app.models.tool_meta import RoutingKind
 from app.orchestration.react_engine import (
     DEFAULT_TOOL_CALL_BUDGET,
     ReadOnlyAgentCallable,
     ReadOnlyReActExecutor,
 )
 from app.services.safe_tool_projection import SafeToolProjectionService
+from app.services.tenant_resolution import resolve_tenant_id
 from app.services.tool_call_grant_resolver import resolve_effective_query_tools
 from app.services.tool_call_grant_service import (
     ToolCallGrantService,
     build_react_grant_request,
 )
-from app.services.tenant_resolution import resolve_tenant_id
 from app.tools.bound_tool_executor import BoundToolExecutor
 from app.tools.compatibility_query_path import CompatibilityQueryToolPath
 from app.tools.executor import ToolExecutor
@@ -73,7 +73,8 @@ def resolve_react_grant_tools(
         if narrowed:
             return narrowed
         logger.warning(
-            "react plan required_tools produced empty grant scope; falling back to registry query tools"
+            "react plan required_tools produced empty grant scope; "
+            "falling back to registry query tools"
         )
     return sorted(
         resolve_effective_query_tools(

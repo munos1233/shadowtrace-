@@ -54,13 +54,15 @@ from app.models.detection_evaluation import (
 from app.models.evaluation_quality import EvaluationQualityReport
 from app.models.evaluation_run import (
     EvaluationAggregateMetrics,
-    EvaluationCaseResult as AgentEvaluationCaseResult,
     EvaluationReleaseRefs,
     EvaluationRunStatus,
     EvaluationScorerResult,
     EvaluationThresholdManifest,
     GateVerdict,
     ScorerOutcome,
+)
+from app.models.evaluation_run import (
+    EvaluationCaseResult as AgentEvaluationCaseResult,
 )
 from app.models.evaluation_truth import (
     EvaluationCaseTruth,

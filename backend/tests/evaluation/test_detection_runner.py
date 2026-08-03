@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,10 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.evaluation.detection.artifact import compute_detection_artifact_hash, finalize_detection_artifact
+from app.evaluation.detection.artifact import (
+    compute_detection_artifact_hash,
+    finalize_detection_artifact,
+)
 from app.evaluation.detection.diff import diff_detection_against_baseline, diff_detection_artifacts
 from app.evaluation.detection.fixture_loader import load_detection_fixture_index
 from app.evaluation.detection.fixture_seeder import (
@@ -23,10 +26,12 @@ from app.evaluation.detection.fixture_seeder import (
     derive_all_candidate_refs,
     derive_candidate_refs,
 )
-from app.evaluation.detection.runner import DetectionEvaluationRunner, run_fixture_detection_evaluation
+from app.evaluation.detection.runner import (
+    DetectionEvaluationRunner,
+    run_fixture_detection_evaluation,
+)
 from app.evaluation.detection.scorers.registry import default_detection_scorer_registry
 from app.evaluation.fixture_loader import load_fixture_dataset
-from app.models.detection_rule import MissingDataPolicy, RuleOperatorKind
 from app.models.evaluation_run import EvaluationRunStatus, GateVerdict, ScorerOutcome
 from app.models.evaluation_truth import SliceType
 from app.models.feature_snapshot import FEATURE_CONTRACT_VERSION, FeatureWindowKind
@@ -177,9 +182,7 @@ async def test_detection_shadow_v1_full_dataset(
     assert cold_start.observation.runtime_errors
 
     resource_case = next(
-        case
-        for case in artifact.case_results
-        if case.case_id == "threat_resource_budget_exceeded"
+        case for case in artifact.case_results if case.case_id == "threat_resource_budget_exceeded"
     )
     assert resource_case.case_status == EvaluationRunStatus.FAILED
     budget = next(r for r in resource_case.scorer_results if r.scorer_id == "resource_budget")
@@ -220,7 +223,9 @@ async def test_threat_case_produces_candidates(
         truth_service,
         loaded_detection_dataset,
     )
-    threat_case = next(case for case in artifact.case_results if case.case_id == "threat_event_match")
+    threat_case = next(
+        case for case in artifact.case_results if case.case_id == "threat_event_match"
+    )
     assert threat_case.slice_type == SliceType.THREAT
     assert len(threat_case.observation.candidates) >= 1
     assert all(result.outcome != ScorerOutcome.FAIL for result in threat_case.scorer_results)
@@ -340,13 +345,13 @@ async def test_resource_failure_fail_closed(
         loaded_detection_dataset,
     )
     case = next(
-        item
-        for item in artifact.case_results
-        if item.case_id == "threat_resource_budget_exceeded"
+        item for item in artifact.case_results if item.case_id == "threat_resource_budget_exceeded"
     )
     assert case.case_status == EvaluationRunStatus.FAILED
     assert case.observation.runtime_errors
-    threat = next(result for result in case.scorer_results if result.scorer_id == "threat_detection")
+    threat = next(
+        result for result in case.scorer_results if result.scorer_id == "threat_detection"
+    )
     assert threat.outcome == ScorerOutcome.ERROR
     budget = next(result for result in case.scorer_results if result.scorer_id == "resource_budget")
     assert budget.outcome == ScorerOutcome.FAIL
@@ -360,7 +365,6 @@ async def test_gate_fail_closed_on_missing_scorer(
     loaded_detection_dataset: tuple[object, object],
 ) -> None:
     from app.evaluation.detection.runner import DetectionEvaluationRunRequest
-    from app.evaluation.threshold import load_threshold_manifest
     from app.models.evaluation_run import EvaluationThresholdManifest
 
     manifest, fixture_index = loaded_detection_dataset
@@ -413,7 +417,6 @@ async def test_diff_against_baseline_aligns_code_sha(
     truth_service: EvaluationTruthService,
     loaded_detection_dataset: tuple[object, object],
 ) -> None:
-    cutoff = datetime(2026, 8, 1, 15, 30, 0, tzinfo=UTC)
     baseline = await _run_loaded_dataset(
         session_factory,
         truth_service,
@@ -498,7 +501,9 @@ async def test_cold_start_insufficient_history_fail_closed(
     )
     assert case.case_status == EvaluationRunStatus.FAILED
     assert case.observation.runtime_errors
-    threat = next(result for result in case.scorer_results if result.scorer_id == "threat_detection")
+    threat = next(
+        result for result in case.scorer_results if result.scorer_id == "threat_detection"
+    )
     assert threat.outcome == ScorerOutcome.ERROR
 
 

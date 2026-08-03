@@ -11,8 +11,8 @@ from app.core.errors import ToolCallGrantUnavailableError
 from app.models.enums import ToolCategory
 from app.models.tool_meta import RoutingKind, ToolMeta
 from app.providers.tools.mock_provider import MockToolProvider, bind_mock_tool_provider
-from app.tools.compatibility_query_path import COMPATIBILITY_PATH_NAME, CompatibilityQueryToolPath
 from app.tools.circuit_breaker import CircuitBreakerRegistry
+from app.tools.compatibility_query_path import COMPATIBILITY_PATH_NAME, CompatibilityQueryToolPath
 from app.tools.executor import ToolExecutor
 from app.tools.mock_state import MockEnvironmentState
 from app.tools.registry import ToolRegistry
@@ -56,7 +56,9 @@ def mock_provider() -> MockToolProvider:
 
 
 @pytest.fixture
-def compat_path(registry: ToolRegistry, mock_provider: MockToolProvider) -> CompatibilityQueryToolPath:
+def compat_path(
+    registry: ToolRegistry, mock_provider: MockToolProvider
+) -> CompatibilityQueryToolPath:
     settings = Settings(
         TOOL_CALL_COMPATIBILITY_PATH_ENABLED=True,
         TOOL_CALL_GRANT_REQUIRED=True,
@@ -70,7 +72,9 @@ def compat_path(registry: ToolRegistry, mock_provider: MockToolProvider) -> Comp
 
 
 @pytest.mark.asyncio
-async def test_compatibility_path_allows_evidence_query(compat_path: CompatibilityQueryToolPath) -> None:
+async def test_compatibility_path_allows_evidence_query(
+    compat_path: CompatibilityQueryToolPath,
+) -> None:
     result = await compat_path.call(
         "query_dns",
         {"domain": "example.com", "time_range": WINDOW},
@@ -111,7 +115,9 @@ async def test_compatibility_path_disabled_fail_closed(
         await path.call("query_dns", {}, "evt-compat-x")
 
 
-def test_compatibility_path_is_named_and_observable(compat_path: CompatibilityQueryToolPath) -> None:
+def test_compatibility_path_is_named_and_observable(
+    compat_path: CompatibilityQueryToolPath,
+) -> None:
     assert compat_path.path_name == COMPATIBILITY_PATH_NAME
     assert compat_path.policy_version
 

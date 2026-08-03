@@ -137,16 +137,20 @@ async def test_loaded_resources_health_probes_warmup_when_pipeline_missing(
         )
 
     monkeypatch.setattr("app.rag.resources.warmup_retrieval_resources", _warmup)
-    with patch(
-        "app.rag.resources.peek_session_provider",
-        return_value=mock_provider,
-    ), patch(
-        "app.rag.resources._probe_corpus_status",
-        new_callable=AsyncMock,
-        return_value="ok",
-    ), patch(
-        "app.core.embedding.factory.get_embedding_client",
-    ) as mock_embed:
+    with (
+        patch(
+            "app.rag.resources.peek_session_provider",
+            return_value=mock_provider,
+        ),
+        patch(
+            "app.rag.resources._probe_corpus_status",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ),
+        patch(
+            "app.core.embedding.factory.get_embedding_client",
+        ) as mock_embed,
+    ):
         mock_embed.return_value.health_probe = AsyncMock(
             return_value=MagicMock(
                 model_dump=lambda *, mode: {
@@ -168,19 +172,24 @@ async def test_loaded_resources_degraded_on_embedding_release_mismatch() -> None
     mock_provider.pool_policy = "pooled"
     mock_provider.ping_postgres = AsyncMock(return_value=True)
 
-    with patch(
-        "app.rag.resources.peek_loaded_retrieval_resources",
-        return_value=None,
-    ), patch(
-        "app.rag.resources.peek_session_provider",
-        return_value=mock_provider,
-    ), patch(
-        "app.rag.resources._probe_corpus_status",
-        new_callable=AsyncMock,
-        return_value="ok",
-    ), patch(
-        "app.core.embedding.factory.get_embedding_client",
-    ) as mock_embed:
+    with (
+        patch(
+            "app.rag.resources.peek_loaded_retrieval_resources",
+            return_value=None,
+        ),
+        patch(
+            "app.rag.resources.peek_session_provider",
+            return_value=mock_provider,
+        ),
+        patch(
+            "app.rag.resources._probe_corpus_status",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ),
+        patch(
+            "app.core.embedding.factory.get_embedding_client",
+        ) as mock_embed,
+    ):
         mock_embed.return_value.health_probe = AsyncMock(
             return_value=MagicMock(
                 model_dump=lambda *, mode: {
@@ -190,9 +199,7 @@ async def test_loaded_resources_degraded_on_embedding_release_mismatch() -> None
                 }
             )
         )
-        payload = await check_loaded_resources(
-            Settings(embedding_release_id="configured-release")
-        )
+        payload = await check_loaded_resources(Settings(embedding_release_id="configured-release"))
     assert payload["embedding_release_mismatch"] is True
     assert payload["status"] == "degraded"
     assert "embedding_release_mismatch" in payload["reasons"]
@@ -204,19 +211,24 @@ async def test_loaded_resources_reports_corpus_status() -> None:
     mock_provider.pool_policy = "pooled"
     mock_provider.ping_postgres = AsyncMock(return_value=True)
 
-    with patch(
-        "app.rag.resources.peek_loaded_retrieval_resources",
-        return_value=None,
-    ), patch(
-        "app.rag.resources.peek_session_provider",
-        return_value=mock_provider,
-    ), patch(
-        "app.rag.resources._probe_corpus_status",
-        new_callable=AsyncMock,
-        return_value="empty",
-    ), patch(
-        "app.core.embedding.factory.get_embedding_client",
-    ) as mock_embed:
+    with (
+        patch(
+            "app.rag.resources.peek_loaded_retrieval_resources",
+            return_value=None,
+        ),
+        patch(
+            "app.rag.resources.peek_session_provider",
+            return_value=mock_provider,
+        ),
+        patch(
+            "app.rag.resources._probe_corpus_status",
+            new_callable=AsyncMock,
+            return_value="empty",
+        ),
+        patch(
+            "app.core.embedding.factory.get_embedding_client",
+        ) as mock_embed,
+    ):
         mock_embed.return_value.health_probe = AsyncMock(
             return_value=MagicMock(
                 model_dump=lambda *, mode: {

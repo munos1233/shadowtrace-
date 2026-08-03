@@ -6,11 +6,11 @@ import json
 
 from app.models import MODEL_REGISTRY
 from app.models.knowledge_release import (
+    KnowledgeFilterKind,
     KnowledgeQueryBudget,
     KnowledgeQueryPlan,
     KnowledgeQueryPlanHints,
     KnowledgeTypedFilter,
-    KnowledgeFilterKind,
 )
 
 

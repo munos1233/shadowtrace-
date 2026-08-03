@@ -1666,8 +1666,7 @@ async def test_auto_response_broker_failure_sets_degraded_flag(
         event = await session.get(orm.SecurityEvent, event_id)
     assert event is not None
     assert any(
-        flag.startswith("auto_response_dispatch_unavailable=")
-        for flag in event.degraded_flags
+        flag.startswith("auto_response_dispatch_unavailable=") for flag in event.degraded_flags
     )
 
 
@@ -1876,6 +1875,5 @@ async def test_auto_response_unexpected_publish_failure_sets_degraded_flag(
     assert row is not None
     assert row.status == InvestigationIntentStatus.DEAD.value
     assert any(
-        flag.startswith("auto_response_dispatch_unavailable=")
-        for flag in event.degraded_flags
+        flag.startswith("auto_response_dispatch_unavailable=") for flag in event.degraded_flags
     )

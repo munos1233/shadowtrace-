@@ -122,8 +122,15 @@ class TestKnowledgeStoreTenantIsolation:
         await store.upsert_chunks(
             "attack_kb",
             [
-                _chunk("chk-tenant-a", "attack_kb", "alpha tenant secret document", tenant_id="tenant-a"),
-                _chunk("chk-tenant-b", "attack_kb", "beta tenant secret document", tenant_id="tenant-b"),
+                _chunk(
+                    "chk-tenant-a",
+                    "attack_kb",
+                    "alpha tenant secret document",
+                    tenant_id="tenant-a",
+                ),
+                _chunk(
+                    "chk-tenant-b", "attack_kb", "beta tenant secret document", tenant_id="tenant-b"
+                ),
             ],
         )
 
@@ -213,8 +220,15 @@ class TestKnowledgeStoreTenantIsolation:
             "attack_kb",
             [
                 _chunk("chk-global", "attack_kb", "shared global playbook guidance"),
-                _chunk("chk-tenant-a", "attack_kb", "tenant scoped alpha guidance", tenant_id="tenant-a"),
-                _chunk("chk-tenant-b", "attack_kb", "tenant scoped beta guidance", tenant_id="tenant-b"),
+                _chunk(
+                    "chk-tenant-a",
+                    "attack_kb",
+                    "tenant scoped alpha guidance",
+                    tenant_id="tenant-a",
+                ),
+                _chunk(
+                    "chk-tenant-b", "attack_kb", "tenant scoped beta guidance", tenant_id="tenant-b"
+                ),
             ],
         )
 

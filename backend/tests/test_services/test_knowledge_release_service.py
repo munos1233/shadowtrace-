@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
-from app.core.embedding.mock_embedder import MockEmbedder
 from app.core.embedding.service import EmbeddingService
 from app.core.errors import ValidationError
 from app.db import models as orm
@@ -159,8 +158,7 @@ async def test_activate_materializes_release_scoped_chunks(
         result = await session.execute(
             select(KnowledgeChunkORM).where(
                 KnowledgeChunkORM.kb_name == "attack_kb",
-                KnowledgeChunkORM.chunk_metadata["release_id"].as_string()
-                == activated.release_id,
+                KnowledgeChunkORM.chunk_metadata["release_id"].as_string() == activated.release_id,
             )
         )
         rows = list(result.scalars())

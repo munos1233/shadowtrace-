@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agents.base import BaseAgent
 from app.agents.prompts.response_prompt import build_response_plan_messages
 from app.agents.rules.default_response_rules import ResponseRuleAction, get_rule_actions
-from app.core.errors import LLMError, ValidationError as ShadowValidationError
+from app.core.errors import LLMError
+from app.core.errors import ValidationError as ShadowValidationError
 from app.db import models as orm
 from app.models.action import Action
 from app.models.agent_io import (
@@ -46,11 +47,6 @@ from app.models.enums import (
 )
 from app.models.playbook import Playbook
 from app.models.playbook_release import PlaybookActionTemplateSnapshot, PlaybookRef
-from app.services.playbook_approval_binding import (
-    compute_playbook_binding_hash,
-    manifest_supports_template_capabilities,
-)
-from app.services.playbook_release_resolver import build_action_template_snapshot
 from app.models.tool_meta import (
     TERMINAL_DISPOSITION_TOOL as VIRTUAL_DISPOSITION_TOOL,
 )
@@ -59,6 +55,11 @@ from app.models.tool_meta import (
 )
 from app.models.workflow import FP_HIGH_THRESHOLD
 from app.services.context_service import append_context_journal_in_session
+from app.services.playbook_approval_binding import (
+    compute_playbook_binding_hash,
+    manifest_supports_template_capabilities,
+)
+from app.services.playbook_release_resolver import build_action_template_snapshot
 from app.services.source_policy_resolver import SourcePolicyResolver
 from app.tools.inputs import TOOL_INPUT_MODELS
 from app.tools.specs import baseline_tool_index

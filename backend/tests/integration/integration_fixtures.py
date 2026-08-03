@@ -45,8 +45,8 @@ from app.services.event_audit_log_service import EventAuditLogService
 from app.services.event_service import EventService
 from app.services.evidence_projection import EvidenceProjection, bind_evidence_projection
 from app.services.false_positive_matcher import FalsePositiveMatcher
-from app.services.knowledge_store import KnowledgeStore
 from app.services.knowledge_release_service import KnowledgeReleaseService
+from app.services.knowledge_store import KnowledgeStore
 from app.services.state_machine_service import StateMachineService
 from app.services.working_memory import WorkingMemory
 from tests.test_tools.tool_system_fixtures import new_sfx

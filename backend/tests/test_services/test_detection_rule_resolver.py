@@ -123,8 +123,7 @@ def _statistical_anomaly_rule(
         threshold=threshold,
         severity="medium",
         missing_data_policy=MissingDataPolicy.SKIP,
-        match_criteria=match_criteria
-        or {"model_release_id": MOCK_ACCOUNT_MAD_RELEASE_ID},
+        match_criteria=match_criteria or {"model_release_id": MOCK_ACCOUNT_MAD_RELEASE_ID},
     )
 
 
@@ -369,7 +368,9 @@ def test_compile_event_sequence_rejects_mismatched_max_step_gap() -> None:
     criteria = IDENTITY_EXFIL_SEQUENCE_V1.as_match_criteria()
     criteria["max_step_gap_seconds"] = 3600
     rule = _event_sequence_rule(match_criteria=criteria)
-    with pytest.raises(ValidationError, match="max_step_gap_seconds must match frozen sequence release"):
+    with pytest.raises(
+        ValidationError, match="max_step_gap_seconds must match frozen sequence release"
+    ):
         compile_rule_definition(rule)
 
 

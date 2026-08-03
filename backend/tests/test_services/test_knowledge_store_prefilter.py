@@ -5,13 +5,12 @@ from __future__ import annotations
 import pytest
 
 from app.core.embedding.base import EmbeddingPrefilterError
+from app.models.knowledge_release import KnowledgeFilterKind, KnowledgeTypedFilter
 from app.services.knowledge_store_prefilter import (
     assert_knowledge_chunk_prefilter_in_sql,
     build_knowledge_chunk_vector_sql,
-    embedding_release_filter_clause,
     typed_filter_clause,
 )
-from app.models.knowledge_release import KnowledgeFilterKind, KnowledgeTypedFilter
 
 
 def test_build_knowledge_chunk_vector_sql_has_prefilter_before_order() -> None:
@@ -71,7 +70,9 @@ def test_knowledge_store_compose_vector_search_sql_passes_prefilter_proof() -> N
 
 def test_knowledge_store_compose_keyword_search_sql_passes_prefilter_proof() -> None:
     from app.services.knowledge_store import KnowledgeStore
-    from app.services.knowledge_store_prefilter import assert_knowledge_chunk_keyword_prefilter_in_sql
+    from app.services.knowledge_store_prefilter import (
+        assert_knowledge_chunk_keyword_prefilter_in_sql,
+    )
 
     sql = KnowledgeStore.compose_keyword_search_sql(
         tenant_id="tenant-a",

@@ -98,21 +98,25 @@ def test_celery_retry_pending_resolves_transient_failure(
 
     asyncio.run(truncate_behavior_observation_tables(session_factory))
     try:
-        record_id = asyncio.run(_prepare_celery_retry_failure(
-            session_factory,
-            suffix=suffix,
-            tenant_id=tenant_id,
-            connector_id=connector_id,
-        ))
+        record_id = asyncio.run(
+            _prepare_celery_retry_failure(
+                session_factory,
+                suffix=suffix,
+                tenant_id=tenant_id,
+                connector_id=connector_id,
+            )
+        )
 
         result = retry_behavior_observation_pending.apply(args=[10]).result
         assert result["retried"] >= 1
 
-        asyncio.run(_verify_celery_retry_resolved(
-            session_factory,
-            tenant_id=tenant_id,
-            record_id=record_id,
-        ))
+        asyncio.run(
+            _verify_celery_retry_resolved(
+                session_factory,
+                tenant_id=tenant_id,
+                record_id=record_id,
+            )
+        )
     finally:
         asyncio.run(truncate_behavior_observation_tables(session_factory))
 

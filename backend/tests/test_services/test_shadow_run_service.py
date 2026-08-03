@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,6 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.db import models as orm
 from app.db.orm.shadow_run import (
     ShadowDecisionRecordORM,
     ShadowQueryArtifactORM,
@@ -192,14 +190,10 @@ async def test_shadow_decision_record_idempotent_replay(
         record_hash="hash-a",
     )
     first_id = await service.persist_decision_record(run, record)
-    replay = record.model_copy(
-        update={"record_id": f"sdr-{sfx}-b", "record_hash": "hash-a"}
-    )
+    replay = record.model_copy(update={"record_id": f"sdr-{sfx}-b", "record_hash": "hash-a"})
     second_id = await service.persist_decision_record(run, replay)
     assert second_id == first_id
 
-    mismatch = record.model_copy(
-        update={"record_id": f"sdr-{sfx}-c", "record_hash": "hash-b"}
-    )
+    mismatch = record.model_copy(update={"record_id": f"sdr-{sfx}-c", "record_hash": "hash-b"})
     third_id = await service.persist_decision_record(run, mismatch)
     assert third_id == first_id

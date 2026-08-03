@@ -707,7 +707,9 @@ class TestPipelineDegradation:
             reranker=MockReranker(),
             settings=settings,
         )
-        result = await pipeline.retrieve("exfiltration", [PLAYBOOK_KB_NAME], top_k=1, context=context)
+        result = await pipeline.retrieve(
+            "exfiltration", [PLAYBOOK_KB_NAME], top_k=1, context=context
+        )
         assert result.knowledge_query_plan is not None
         assert result.knowledge_query_plan["active_release_id"] == "pbrel-plan-test"
         assert result.knowledge_query_plan["plan_hash"]

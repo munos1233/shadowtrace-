@@ -187,7 +187,9 @@ class DetectionEvaluationArtifact(BaseModel):
     gate: EvaluationGateResult | None = None
     quality_report: EvaluationQualityReport | None = None
     resource_summary: DetectionResourceSummary = Field(default_factory=DetectionResourceSummary)
-    tenant_safety: DetectionTenantSafetySummary = Field(default_factory=DetectionTenantSafetySummary)
+    tenant_safety: DetectionTenantSafetySummary = Field(
+        default_factory=DetectionTenantSafetySummary
+    )
     errors: list[str] = Field(default_factory=list)
     artifact_hash: str = Field(default="", min_length=0, max_length=64)
     approval_note: str = Field(

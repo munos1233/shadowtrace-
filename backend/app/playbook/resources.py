@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -136,7 +136,9 @@ def get_loaded_playbook_resources(
             session_pool=provider.pool_policy if provider is not None else "unknown",
         )
 
-    cache_key = _resources_cache_key(cfg, session_factory=session_factory, embed_service=embed_service)
+    cache_key = _resources_cache_key(
+        cfg, session_factory=session_factory, embed_service=embed_service
+    )
     if _resources is not None and _resources_key == cache_key:
         return _resources
 
@@ -153,7 +155,9 @@ def get_loaded_playbook_resources(
             playbook_kb_service=playbook_kb,
             playbook_release_service=release_service,
             reasons=("playbook_fixture_fallback_enabled",),
-            session_pool=peek_session_provider().pool_policy if peek_session_provider() else "unknown",
+            session_pool=peek_session_provider().pool_policy
+            if peek_session_provider()
+            else "unknown",
         )
         _resources = loaded
         _resources_key = cache_key

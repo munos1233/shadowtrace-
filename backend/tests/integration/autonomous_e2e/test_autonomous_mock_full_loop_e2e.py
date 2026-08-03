@@ -350,9 +350,7 @@ async def test_scenario_a_publish_skips_intent_when_event_not_new(
 ) -> None:
     """Public claim_and_publish_batch marks intent SKIPPED when event left NEW."""
     events, intent_service, _store = build_autonomous_stack(session_factory, redis_client)
-    ingest = await events.ingest_source_object(
-        incident_source(object_id=unique_id("inc-a-skip"))
-    )
+    ingest = await events.ingest_source_object(incident_source(object_id=unique_id("inc-a-skip")))
     async with session_factory() as session:
         intent_row = await session.scalar(
             select(orm.InvestigationIntent).where(
@@ -469,9 +467,7 @@ async def test_scenario_a_worker_completes_enqueued_intent(
 ) -> None:
     require_celery_worker()
     events, intent_service, _store = build_autonomous_stack(session_factory, redis_client)
-    ingest = await events.ingest_source_object(
-        incident_source(object_id=unique_id("inc-worker-a"))
-    )
+    ingest = await events.ingest_source_object(incident_source(object_id=unique_id("inc-worker-a")))
     async with session_factory() as session:
         intent_row = await session.scalar(
             select(orm.InvestigationIntent).where(
@@ -592,9 +588,7 @@ async def test_scenario_b_investigation_produces_l2_pending_then_human_executes_
 
         async def _engine() -> Any:
             if "engine" not in engine_holder:
-                engine_holder["engine"] = await build_approval_engine(
-                    session_factory, redis_client
-                )
+                engine_holder["engine"] = await build_approval_engine(session_factory, redis_client)
             return engine_holder["engine"]
 
         app.dependency_overrides[get_approval_engine] = _engine
@@ -618,9 +612,7 @@ async def test_scenario_b_investigation_produces_l2_pending_then_human_executes_
             assert row is not None
             from app.services.context_service import event_summary_from_security_event
 
-            await stack.store.init_context(
-                ingest.event_id, event_summary_from_security_event(row)
-            )
+            await stack.store.init_context(ingest.event_id, event_summary_from_security_event(row))
 
         if target.execution_phase == ActionExecutionPhase.IMMEDIATE.value:
             await stack.service.execute_action(action_id)
@@ -727,9 +719,7 @@ async def test_scenario_b_ingest_creates_intent_then_l2_pending_human_approve_ex
     stack = mock_execution_stack
     events, _intent_service, _store = build_autonomous_stack(session_factory, redis_client)
 
-    ingest = await events.ingest_source_object(
-        incident_source(object_id=unique_id("inc-b-ingest"))
-    )
+    ingest = await events.ingest_source_object(incident_source(object_id=unique_id("inc-b-ingest")))
     async with session_factory() as session:
         intent_row = await session.scalar(
             select(orm.InvestigationIntent).where(
@@ -1544,8 +1534,7 @@ async def test_scenario_d_broker_down_publish_marks_retry_and_degraded(
     assert row.status == InvestigationIntentStatus.RETRY.value
     assert row.last_error is not None
     assert any(
-        flag.startswith("auto_investigate_dispatch_unavailable=")
-        for flag in event.degraded_flags
+        flag.startswith("auto_investigate_dispatch_unavailable=") for flag in event.degraded_flags
     )
 
 
@@ -1618,9 +1607,7 @@ async def test_scenario_d_worker_recovery_completes_queued_task(
     """
     require_celery_worker()
     events, intent_service, _store = build_autonomous_stack(session_factory, redis_client)
-    ingest = await events.ingest_source_object(
-        incident_source(object_id=unique_id("inc-worker-d"))
-    )
+    ingest = await events.ingest_source_object(incident_source(object_id=unique_id("inc-worker-d")))
     async with session_factory() as session:
         intent_row = await session.scalar(
             select(orm.InvestigationIntent).where(
@@ -1675,9 +1662,7 @@ async def test_scenario_d_auto_response_disabled_intent_flag_false(
         redis_client,
         settings=settings,
     )
-    ingest = await events.ingest_source_object(
-        incident_source(object_id=unique_id("inc-d-off"))
-    )
+    ingest = await events.ingest_source_object(incident_source(object_id=unique_id("inc-d-off")))
     async with session_factory() as session:
         row = await session.scalar(
             select(orm.InvestigationIntent).where(

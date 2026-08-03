@@ -63,9 +63,7 @@ def allowlisted_query_tools_from_manifest(
     """Return query tools allowed for evidence collection."""
     if allowed_operations is not None:
         return frozenset(
-            name
-            for name in allowed_operations
-            if name in _ALLOWED_EVIDENCE_QUERY_TOOLS
+            name for name in allowed_operations if name in _ALLOWED_EVIDENCE_QUERY_TOOLS
         )
     index = baseline_tool_index()
     return frozenset(
@@ -219,14 +217,10 @@ def build_query_dedupe_key(
     """Normalized dedupe key across tool, params, window, tenant scope, snapshot."""
     scope_part = ""
     if scope is not None:
-        scope_part = (
-            f"{scope.source_tenant_id}|{','.join(sorted(scope.connector_ids))}"
-        )
+        scope_part = f"{scope.source_tenant_id}|{','.join(sorted(scope.connector_ids))}"
     canonical_params = json.dumps(params, sort_keys=True, separators=(",", ":"), default=str)
     window = f"{time_range.get('start', '')}|{time_range.get('end', '')}"
-    material = (
-        f"{tool_name}|{canonical_params}|{window}|{scope_part}|{snapshot_cutoff.strip()}"
-    )
+    material = f"{tool_name}|{canonical_params}|{window}|{scope_part}|{snapshot_cutoff.strip()}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 

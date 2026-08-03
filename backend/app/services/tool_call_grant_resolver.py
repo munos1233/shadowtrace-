@@ -14,7 +14,6 @@ import orjson
 
 from app.models.enums import ToolCategory
 from app.models.tool_call_grant import (
-    TOOL_CALL_GRANT_SCHEMA_VERSION,
     BoundExecutionPrincipal,
     ToolCallGrant,
     ToolCallGrantScope,

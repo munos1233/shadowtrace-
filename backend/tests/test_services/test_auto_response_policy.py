@@ -214,7 +214,6 @@ def test_settings_reject_l2_max_auto_level_when_auto_response_enabled() -> None:
 
 
 def test_resolve_runtime_max_auto_level_none_when_disabled() -> None:
-    from app.models.enums import ActionLevel
     from app.services.action_approval_policy import resolve_runtime_max_auto_level
 
     settings = Settings(AUTO_RESPONSE_ENABLED=False)

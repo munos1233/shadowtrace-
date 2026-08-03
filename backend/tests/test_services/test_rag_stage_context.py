@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.models.agent_io import CollectionStatus, EvidenceOutput, RAGAgentInput, RAGOutput, TriageResult
+from app.models.agent_io import (
+    CollectionStatus,
+    EvidenceOutput,
+    RAGAgentInput,
+    RAGOutput,
+    TriageResult,
+)
 from app.models.enums import EventType, Severity
 from app.services.analysis_only_pipeline import run_rag_stage
 

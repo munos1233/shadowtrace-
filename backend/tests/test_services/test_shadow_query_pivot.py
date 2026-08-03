@@ -18,9 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
-from app.core.llm.base import LLMProviderError
 from app.core.embedding.release import build_embedding_release
-from app.core.llm.base import LLMMessage, LLMResponse
+from app.core.llm.base import LLMMessage, LLMProviderError, LLMResponse
 from app.db import models as orm
 from app.db.orm.shadow_run import (
     ShadowDecisionRecordORM,
@@ -82,7 +81,11 @@ class _ScriptedLLM:
         payload = queue.pop(0)
         if isinstance(payload, Exception):
             raise payload
-        parsed = payload if response_model is None else response_model.model_validate(payload.model_dump())
+        parsed = (
+            payload
+            if response_model is None
+            else response_model.model_validate(payload.model_dump())
+        )
         return LLMResponse(content="{}", parsed=parsed, model_name="scripted-model")
 
 
@@ -190,7 +193,9 @@ async def test_shadow_pivot_produces_artifacts_without_production_mutation(
     )
 
     release_service = MagicMock()
-    release_service.get_active_release = AsyncMock(return_value=MagicMock(release_id="krel-pivot-test"))
+    release_service.get_active_release = AsyncMock(
+        return_value=MagicMock(release_id="krel-pivot-test")
+    )
     base_plan = _active_attack_plan(settings, trace_id)
     monkeypatch.setattr(
         "app.services.react_mock_query_adapter.resolve_active_knowledge_query_plan",
@@ -243,9 +248,9 @@ async def test_shadow_pivot_produces_artifacts_without_production_mutation(
     async with session_factory() as session:
         prod_before = int(
             await session.scalar(
-                select(func.count()).select_from(orm.DecisionRecord).where(
-                    orm.DecisionRecord.event_id == event_id
-                )
+                select(func.count())
+                .select_from(orm.DecisionRecord)
+                .where(orm.DecisionRecord.event_id == event_id)
             )
             or 0
         )
@@ -272,9 +277,7 @@ async def test_shadow_pivot_produces_artifacts_without_production_mutation(
     assert result.status is ShadowRunStatus.COMPLETED
     assert result.artifacts
     retrieval_artifacts = [
-        artifact
-        for artifact in result.artifacts
-        if artifact.kind.value == "retrieval_hit"
+        artifact for artifact in result.artifacts if artifact.kind.value == "retrieval_hit"
     ]
     assert retrieval_artifacts
     assert retrieval_artifacts[0].payload.get("chunk_count") == 1
@@ -285,17 +288,17 @@ async def test_shadow_pivot_produces_artifacts_without_production_mutation(
     async with session_factory() as session:
         prod_after = int(
             await session.scalar(
-                select(func.count()).select_from(orm.DecisionRecord).where(
-                    orm.DecisionRecord.event_id == event_id
-                )
+                select(func.count())
+                .select_from(orm.DecisionRecord)
+                .where(orm.DecisionRecord.event_id == event_id)
             )
             or 0
         )
         shadow_runs = int(
             await session.scalar(
-                select(func.count()).select_from(ShadowRunORM).where(
-                    ShadowRunORM.shadow_run_id == result.shadow_run_id
-                )
+                select(func.count())
+                .select_from(ShadowRunORM)
+                .where(ShadowRunORM.shadow_run_id == result.shadow_run_id)
             )
             or 0
         )
@@ -379,7 +382,9 @@ async def test_shadow_pivot_respects_max_steps(
     )
 
     release_service = MagicMock()
-    release_service.get_active_release = AsyncMock(return_value=MagicMock(release_id="krel-pivot-test"))
+    release_service.get_active_release = AsyncMock(
+        return_value=MagicMock(release_id="krel-pivot-test")
+    )
     monkeypatch.setattr(
         "app.services.react_mock_query_adapter.resolve_active_knowledge_query_plan",
         AsyncMock(return_value=_active_attack_plan(settings, trace_id)),
@@ -602,7 +607,9 @@ async def test_shadow_pivot_preserves_partial_step_count_on_late_failure(
     )
 
     release_service = MagicMock()
-    release_service.get_active_release = AsyncMock(return_value=MagicMock(release_id="krel-partial"))
+    release_service.get_active_release = AsyncMock(
+        return_value=MagicMock(release_id="krel-partial")
+    )
     monkeypatch.setattr(
         "app.services.react_mock_query_adapter.resolve_active_knowledge_query_plan",
         AsyncMock(return_value=_active_attack_plan(settings, trace_id)),
@@ -627,9 +634,7 @@ async def test_shadow_pivot_preserves_partial_step_count_on_late_failure(
             uncertainty_code=ReActUncertaintyCode.INCOMPLETE_COVERAGE,
         ),
     )
-    llm.think_queue.append(
-        LLMProviderError("llm failed on round 2", retryable=False)
-    )
+    llm.think_queue.append(LLMProviderError("llm failed on round 2", retryable=False))
 
     pipeline = MagicMock()
     pipeline.retrieve = AsyncMock(
@@ -822,7 +827,9 @@ async def test_shadow_pivot_end_to_end_with_real_pipeline_stub(
     )
 
     release_service = MagicMock()
-    release_service.get_active_release = AsyncMock(return_value=MagicMock(release_id="krel-real-pipeline"))
+    release_service.get_active_release = AsyncMock(
+        return_value=MagicMock(release_id="krel-real-pipeline")
+    )
     monkeypatch.setattr(
         "app.services.react_mock_query_adapter.resolve_active_knowledge_query_plan",
         AsyncMock(return_value=_active_attack_plan(settings, trace_id)),

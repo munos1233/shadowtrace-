@@ -847,9 +847,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             alert_text=_alert_text_from_event_context(ec),
             plan_step_goal=step.step_goal,
             required_tools=step.required_tools,
-            execution_plan=(
-                ec.execution_plan if isinstance(ec.execution_plan, dict) else None
-            ),
+            execution_plan=(ec.execution_plan if isinstance(ec.execution_plan, dict) else None),
         )
         evidence_output = await self._execute_with_agent_retries(
             event_id,

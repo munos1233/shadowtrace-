@@ -49,7 +49,9 @@ class ReactMockQueryAdapter:
         self._knowledge_release_service = knowledge_release_service
         self._settings = settings
 
-    async def execute(self, params: dict[str, Any], *, ctx: ReactMockQueryContext) -> dict[str, Any]:
+    async def execute(
+        self, params: dict[str, Any], *, ctx: ReactMockQueryContext
+    ) -> dict[str, Any]:
         query = str(params.get("query", "")).strip()
         if not query:
             return {"status": "denied", "reason": "missing_query", "data": {}}
@@ -137,9 +139,7 @@ class ReactMockQueryAdapter:
             }
         if "knowledge_query_plan_rejected" in result.degraded_steps:
             rejected = [
-                step
-                for step in result.degraded_steps
-                if step != "knowledge_query_plan_rejected"
+                step for step in result.degraded_steps if step != "knowledge_query_plan_rejected"
             ]
             return {
                 "status": "denied",

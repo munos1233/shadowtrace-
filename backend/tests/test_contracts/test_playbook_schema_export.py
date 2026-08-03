@@ -6,12 +6,12 @@ import json
 
 from app.models import MODEL_REGISTRY
 from app.models.enums import ActionLevel
+from app.models.knowledge_release import KnowledgeReleaseLifecycleState
 from app.models.playbook_release import (
     PlaybookActionTemplateSnapshot,
     PlaybookRef,
     ResolvedPlaybook,
 )
-from app.models.knowledge_release import KnowledgeReleaseLifecycleState
 
 
 def test_playbook_contract_models_are_registered() -> None:

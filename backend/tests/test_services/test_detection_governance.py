@@ -53,7 +53,9 @@ from app.services.detection_governance_service import DetectionGovernanceService
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
-THRESHOLD_PATH = REPO_ROOT / "data" / "evaluation" / "detection_shadow_v1" / "threshold_manifest.json"
+THRESHOLD_PATH = (
+    REPO_ROOT / "data" / "evaluation" / "detection_shadow_v1" / "threshold_manifest.json"
+)
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace",
@@ -643,7 +645,9 @@ async def test_eligibility_fail_closed_without_threshold_path() -> None:
 async def test_baseline_artifact_never_eligible_for_approve() -> None:
     import json
 
-    baseline_path = REPO_ROOT / "data" / "evaluation" / "detection_shadow_v1" / "baseline_artifact.json"
+    baseline_path = (
+        REPO_ROOT / "data" / "evaluation" / "detection_shadow_v1" / "baseline_artifact.json"
+    )
     artifact = DetectionEvaluationArtifact.model_validate(
         json.loads(baseline_path.read_text(encoding="utf-8"))
     )

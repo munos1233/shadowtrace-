@@ -36,8 +36,7 @@ def _derive_case_nonce(case_id: str, seed: int) -> int:
 
 def _replay_cache_key(replay: DetectionReplayFixture) -> str:
     return (
-        f"{replay.source_tenant_id}:{replay.scope_seed.integration_instance_id}:"
-        f"{replay.package_id}"
+        f"{replay.source_tenant_id}:{replay.scope_seed.integration_instance_id}:{replay.package_id}"
     )
 
 

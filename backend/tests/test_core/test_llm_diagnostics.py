@@ -195,7 +195,9 @@ async def test_probe_timeout_classified(respx_mock: respx.MockRouter) -> None:
 @pytest.mark.asyncio
 async def test_probe_chat_classifies_transport_error(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://llm.example/v1/chat/completions").mock(
-        side_effect=httpx.ConnectError("connection refused", request=httpx.Request("POST", "http://x"))
+        side_effect=httpx.ConnectError(
+            "connection refused", request=httpx.Request("POST", "http://x")
+        )
     )
     settings = Settings(
         LLM_MODE="openai_compatible",

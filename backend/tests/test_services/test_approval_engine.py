@@ -390,7 +390,6 @@ def test_evaluate_hard_gates_rejects_unknown_tool() -> None:
 def test_evaluate_hard_gates_rejects_unsupported_playbook_capability() -> None:
     from app.models.enums import CapabilityState
     from app.models.playbook_release import PlaybookActionTemplateSnapshot, PlaybookRef
-    from app.models.tool_meta import CapabilityManifest
 
     manifest = build_mock_capability_manifest()
     unsupported = manifest.model_copy(update={"entity_response": CapabilityState.UNSUPPORTED})

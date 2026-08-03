@@ -268,8 +268,7 @@ class BehaviorObservationService:
             ),
             "scope_binding_unverified": True,
             "runbook": (
-                "Add connector to ACTIVE DetectionScope connector_set, "
-                "then retry projection"
+                "Add connector to ACTIVE DetectionScope connector_set, then retry projection"
             ),
         }
         existing = await session.scalar(

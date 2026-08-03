@@ -99,12 +99,10 @@ from app.models.detection_evaluation import (
 from app.models.detection_governance import (
     DetectionGovernanceCandidateBinding,
     DetectionGovernanceDecision,
-    DetectionGovernanceDecisionKind,
     DetectionGovernanceDecisionRequest,
     DetectionGovernanceEligibilityAssessment,
     DetectionGovernanceEvaluationBinding,
     DetectionGovernancePromotionGateResult,
-    DetectionGovernanceReasonCode,
     DetectionGovernanceRevokeRequest,
     DetectionGovernanceThresholdBinding,
 )
@@ -159,7 +157,6 @@ from app.models.embedding import (
     VectorRecordIdentity,
 )
 from app.models.knowledge_release import (
-    KnowledgeFilterKind,
     KnowledgeQueryBudget,
     KnowledgeQueryPlan,
     KnowledgeQueryPlanHints,

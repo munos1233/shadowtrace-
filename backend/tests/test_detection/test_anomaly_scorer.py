@@ -267,7 +267,11 @@ def test_mad_zero_feature_uses_quantile_fallback_not_silent_normal() -> None:
     )
     methods = {item.feature_name: item.scoring_method for item in result.contributing_features}
     assert methods["unique_action_count"] == "quantile_iqr"
-    assert any(item.robust_z > 0 for item in result.contributing_features if item.feature_name == "unique_action_count")
+    assert any(
+        item.robust_z > 0
+        for item in result.contributing_features
+        if item.feature_name == "unique_action_count"
+    )
 
 
 def test_snapshot_baseline_cutoff_mismatch_fail_closed() -> None:

@@ -259,9 +259,9 @@ async def check_loaded_resources(settings: Settings | None = None) -> dict[str, 
     from app.core.embedding.factory import get_embedding_client
 
     try:
-        embedding_provider = (
-            await get_embedding_client(settings=cfg).health_probe()
-        ).model_dump(mode="json")
+        embedding_provider = (await get_embedding_client(settings=cfg).health_probe()).model_dump(
+            mode="json"
+        )
     except Exception:  # noqa: BLE001 — health must never raise
         embedding_provider = {
             "status": "error",
@@ -273,9 +273,7 @@ async def check_loaded_resources(settings: Settings | None = None) -> dict[str, 
     configured_release = (cfg.embedding_release_id or "").strip()
     actual_release = str(embedding_provider.get("release_id") or "").strip()
     release_mismatch = (
-        bool(configured_release)
-        and bool(actual_release)
-        and configured_release != actual_release
+        bool(configured_release) and bool(actual_release) and configured_release != actual_release
     )
 
     corpus_status = await _probe_corpus_status()

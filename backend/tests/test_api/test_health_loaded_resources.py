@@ -40,23 +40,28 @@ async def test_check_loaded_resources_reports_pipeline_attached() -> None:
     mock_provider.pool_policy = "pooled"
     mock_provider.ping_postgres = AsyncMock(return_value=True)
 
-    with patch(
-        "app.rag.resources.peek_loaded_retrieval_resources",
-        return_value=LoadedRetrievalResources(
-            status="ready",
-            mode="mock",
-            pipeline=mock_pipeline,
+    with (
+        patch(
+            "app.rag.resources.peek_loaded_retrieval_resources",
+            return_value=LoadedRetrievalResources(
+                status="ready",
+                mode="mock",
+                pipeline=mock_pipeline,
+            ),
         ),
-    ), patch(
-        "app.rag.resources.peek_session_provider",
-        return_value=mock_provider,
-    ), patch(
-        "app.rag.resources._probe_corpus_status",
-        new_callable=AsyncMock,
-        return_value="ok",
-    ), patch(
-        "app.core.embedding.factory.get_embedding_client",
-    ) as mock_embed:
+        patch(
+            "app.rag.resources.peek_session_provider",
+            return_value=mock_provider,
+        ),
+        patch(
+            "app.rag.resources._probe_corpus_status",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ),
+        patch(
+            "app.core.embedding.factory.get_embedding_client",
+        ) as mock_embed,
+    ):
         mock_embed.return_value.health_probe = AsyncMock(
             return_value=MagicMock(
                 model_dump=lambda *, mode: {
@@ -73,43 +78,51 @@ async def test_check_loaded_resources_reports_pipeline_attached() -> None:
 
 @pytest.mark.asyncio
 async def test_health_response_includes_loaded_resources(client: AsyncClient) -> None:
-    with patch(
-        "app.api.v1.health.check_postgres",
-        new_callable=AsyncMock,
-        return_value="ok",
-    ), patch(
-        "app.api.v1.health.check_redis",
-        new_callable=AsyncMock,
-        return_value="ok",
-    ), patch(
-        "app.api.v1.health.check_embedding_provider",
-        new_callable=AsyncMock,
-        return_value={"status": "ok", "mode": "mock", "release_id": "mock-v1"},
-    ), patch(
-        "app.api.v1.health.check_llm_provider",
-        new_callable=AsyncMock,
-        return_value={"status": "ok", "mode": "mock"},
-    ), patch(
-        "app.api.v1.health._check_loaded_resources",
-        new_callable=AsyncMock,
-        return_value={"status": "ready", "pipeline_attached": True, "reasons": []},
-    ), patch(
-        "app.api.v1.health._check_playbook_resources",
-        new_callable=AsyncMock,
-        return_value={
-            "status": "ready",
-            "mode": "production",
-            "active_release_id": "krel-playbook-test01",
-            "reasons": [],
-        },
-    ), patch(
-        "app.api.v1.health.build_celery_health",
-        new_callable=AsyncMock,
-        return_value={
-            "task_mode": "background",
-            "broker": "ok",
-            "worker": {"status": "not_applicable", "workers": 0, "worker_ids": []},
-        },
+    with (
+        patch(
+            "app.api.v1.health.check_postgres",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ),
+        patch(
+            "app.api.v1.health.check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ),
+        patch(
+            "app.api.v1.health.check_embedding_provider",
+            new_callable=AsyncMock,
+            return_value={"status": "ok", "mode": "mock", "release_id": "mock-v1"},
+        ),
+        patch(
+            "app.api.v1.health.check_llm_provider",
+            new_callable=AsyncMock,
+            return_value={"status": "ok", "mode": "mock"},
+        ),
+        patch(
+            "app.api.v1.health._check_loaded_resources",
+            new_callable=AsyncMock,
+            return_value={"status": "ready", "pipeline_attached": True, "reasons": []},
+        ),
+        patch(
+            "app.api.v1.health._check_playbook_resources",
+            new_callable=AsyncMock,
+            return_value={
+                "status": "ready",
+                "mode": "production",
+                "active_release_id": "krel-playbook-test01",
+                "reasons": [],
+            },
+        ),
+        patch(
+            "app.api.v1.health.build_celery_health",
+            new_callable=AsyncMock,
+            return_value={
+                "task_mode": "background",
+                "broker": "ok",
+                "worker": {"status": "not_applicable", "workers": 0, "worker_ids": []},
+            },
+        ),
     ):
         response = await client.get("/api/v1/health")
     assert response.status_code == 200
@@ -181,13 +194,16 @@ async def test_health_pipeline_stable_across_multiple_requests(
     first_loaded = peek_loaded_retrieval_resources()
     assert first_loaded is not None and first_loaded.pipeline is not None
 
-    with patch(
-        "app.rag.resources._probe_corpus_status",
-        new_callable=AsyncMock,
-        return_value="ok",
-    ), patch(
-        "app.core.embedding.factory.get_embedding_client",
-    ) as mock_embed:
+    with (
+        patch(
+            "app.rag.resources._probe_corpus_status",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ),
+        patch(
+            "app.core.embedding.factory.get_embedding_client",
+        ) as mock_embed,
+    ):
         mock_embed.return_value.health_probe = AsyncMock(
             return_value=MagicMock(
                 model_dump=lambda *, mode: {

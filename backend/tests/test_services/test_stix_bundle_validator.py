@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import copy
 
-import pytest
-
 from app.services.stix_bundle_builder import build_attack_pattern, build_bundle_from_techniques_json
 from app.services.stix_bundle_validator import validate_stix_bundle
 
@@ -76,7 +74,9 @@ def test_validate_rejects_duplicate_external_id() -> None:
 def test_builder_bundle_from_repo_json() -> None:
     from pathlib import Path
 
-    data_file = Path(__file__).resolve().parents[2].parent / "data" / "knowledge" / "attack_techniques.json"
+    data_file = (
+        Path(__file__).resolve().parents[2].parent / "data" / "knowledge" / "attack_techniques.json"
+    )
     bundle = build_bundle_from_techniques_json(data_file)
     result = validate_stix_bundle(bundle)
     assert result.ok

@@ -39,9 +39,7 @@ from app.tools.tool_call_runtime import ReactToolExecutorFactory
 
 logger = logging.getLogger(__name__)
 
-_QUERY_INVOCATION_TYPES = frozenset(
-    {ReActActionType.CALL_TOOL, ReActActionType.CALL_AGENT}
-)
+_QUERY_INVOCATION_TYPES = frozenset({ReActActionType.CALL_TOOL, ReActActionType.CALL_AGENT})
 
 
 def _record_hash(record: DecisionRecord) -> str:
@@ -60,8 +58,7 @@ def _count_query_invocations(rounds: list[ReActRound]) -> int:
         if round_.action is not None
         and round_.action.action_type in _QUERY_INVOCATION_TYPES
         and round_.action_result is not None
-        and str(round_.action_result.get("status", "")).strip().lower()
-        in _QUERY_SUCCESS_STATUSES
+        and str(round_.action_result.get("status", "")).strip().lower() in _QUERY_SUCCESS_STATUSES
     )
 
 
@@ -397,9 +394,7 @@ class ShadowQueryPivotService:
             reflect_record = reflect_record.model_copy(
                 update={"record_hash": _record_hash(reflect_record)}
             )
-            record_ids.append(
-                await self._shadow_runs.persist_decision_record(run, reflect_record)
-            )
+            record_ids.append(await self._shadow_runs.persist_decision_record(run, reflect_record))
         return record_ids
 
 

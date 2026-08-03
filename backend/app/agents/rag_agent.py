@@ -13,12 +13,12 @@ from typing import Any, cast
 
 from app.agents.base import BaseAgent
 from app.agents.rag_query_builder import RAGQueryBuilder
+from app.core.config import Settings, get_settings
 from app.core.errors import (
     DependencyUnavailableError,
     GuardrailViolationError,
     ShadowTraceError,
 )
-from app.core.config import Settings, get_settings
 from app.models.agent_io import (
     AttackTechniqueMatch,
     Citation,
@@ -104,9 +104,7 @@ class RAGAgent(BaseAgent[RAGAgentInput, RAGOutput]):
         attack_plan = await self._resolve_attack_query_plan(input)
         playbook_plan = await self._resolve_playbook_query_plan(input)
         base_context = RetrievalContext.from_rag_input(input, settings=cfg, query_plan=attack_plan)
-        attack_kb_blocked = (
-            self._knowledge_release_service is not None and attack_plan is None
-        )
+        attack_kb_blocked = self._knowledge_release_service is not None and attack_plan is None
         playbook_kb_blocked = self._playbook_kb_blocked(cfg, playbook_plan)
         retrieve_outcomes = await asyncio.gather(
             *(
@@ -202,14 +200,14 @@ class RAGAgent(BaseAgent[RAGAgentInput, RAGOutput]):
         blocked: bool = False,
     ) -> RetrievalResult | None:
         if blocked:
-            degraded = [_NO_ACTIVE_RELEASE if kb_name == "attack_kb" else _NO_ACTIVE_PLAYBOOK_RELEASE]
+            degraded = [
+                _NO_ACTIVE_RELEASE if kb_name == "attack_kb" else _NO_ACTIVE_PLAYBOOK_RELEASE
+            ]
             plan = attack_plan if kb_name == "attack_kb" else playbook_plan
             return RetrievalResult(
                 query=query,
                 degraded_steps=degraded,
-                knowledge_query_plan=(
-                    plan.model_dump(mode="json") if plan is not None else None
-                ),
+                knowledge_query_plan=(plan.model_dump(mode="json") if plan is not None else None),
             )
         query_plan = None
         if kb_name == "attack_kb":

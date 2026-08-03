@@ -129,7 +129,9 @@ def _collect_input_refs(input_data: Any) -> tuple[list[dict[str, str]], list[str
     return refs, unresolved
 
 
-def _collect_enriched_input_refs(output_data: dict[str, Any]) -> tuple[list[dict[str, str]], list[str]]:
+def _collect_enriched_input_refs(
+    output_data: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[str]]:
     """Merge agent-enriched refs (e.g. playbook pins) into durable input_refs."""
     refs: list[dict[str, str]] = []
     unresolved: list[str] = []

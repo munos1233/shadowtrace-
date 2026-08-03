@@ -33,6 +33,7 @@ from app.models.entities import EntitySet, HostEntity, IPEntity, ProcessEntity
 from app.models.enums import EventType, EvidenceSource, Severity
 from app.models.evidence import Evidence
 from app.models.knowledge import RetrievalResult, RetrievedChunk
+from app.models.knowledge_release import KnowledgeRelease
 from app.models.workflow import FP_LOW_THRESHOLD
 
 # --------------------------------------------------------------------------- #
@@ -1175,7 +1176,7 @@ def _make_active_release(
     *,
     vector_ready: bool = False,
     embedding_release_id: str | None = None,
-) -> "KnowledgeRelease":
+) -> KnowledgeRelease:
     from datetime import UTC, datetime
 
     from app.models.knowledge_release import (
@@ -1233,7 +1234,9 @@ class TestRAGAgentReleasePinning:
 
         assert output.knowledge_query_plan is not None
         assert output.knowledge_query_plan["attack_kb"]["active_release_id"] == "krel-pin-test01"
-        assert output.knowledge_query_plan["attack_kb"]["embedding_release_id"] == "emb-test-release"
+        assert (
+            output.knowledge_query_plan["attack_kb"]["embedding_release_id"] == "emb-test-release"
+        )
         attack_calls = [c for c in pipeline.calls if c["kb_names"] == ["attack_kb"]]
         assert attack_calls
         assert attack_calls[0]["context"].query_plan is not None
@@ -1291,7 +1294,9 @@ class TestRAGAgentReleasePinning:
 
         assert output.knowledge_query_plan is not None
         assert output.knowledge_query_plan["attack_kb"]["active_release_id"] == "krel-dual-test01"
-        assert output.knowledge_query_plan["playbook_kb"]["active_release_id"] == "pbrel-dual-test01"
+        assert (
+            output.knowledge_query_plan["playbook_kb"]["active_release_id"] == "pbrel-dual-test01"
+        )
 
     @pytest.mark.asyncio
     async def test_playbook_query_plan_accepted_by_real_pipeline(self):
@@ -1306,7 +1311,11 @@ class TestRAGAgentReleasePinning:
             KnowledgeReleaseLifecycleState,
             KnowledgeReleaseProvenance,
         )
-        from app.models.playbook_release import PLAYBOOK_CORPUS_ID, PLAYBOOK_KB_NAME, PLAYBOOK_SOURCE_ID
+        from app.models.playbook_release import (
+            PLAYBOOK_CORPUS_ID,
+            PLAYBOOK_KB_NAME,
+            PLAYBOOK_SOURCE_ID,
+        )
         from app.rag.context import RetrievalContext
         from app.rag.pipeline import RetrievalPipeline
         from app.rag.query_rewriter import QueryRewriter
@@ -1439,7 +1448,6 @@ class TestRAGAgentReleasePinning:
 
     @pytest.mark.asyncio
     async def test_dev_allows_unpinned_attack_kb_without_release_service(self):
-        from unittest.mock import AsyncMock, MagicMock
 
         from app.core.config import Settings
 

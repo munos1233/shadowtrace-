@@ -132,9 +132,9 @@ async def test_citations_carry_pinned_release_id(
 ) -> None:
     from app.core.llm.base import InMemoryLLMCallAuditRecorder
     from app.core.llm.mock_client import MockLLMClient
+    from app.rag.hybrid_retriever import HybridRetriever
     from app.rag.pipeline import RetrievalPipeline
     from app.rag.query_rewriter import QueryRewriter
-    from app.rag.hybrid_retriever import HybridRetriever
     from app.rag.reranker import MockReranker
 
     settings = Settings(EMBEDDING_MODE="mock", EMBEDDING_MAX_BATCH_SIZE=128)

@@ -65,9 +65,7 @@ def build_knowledge_chunk_keyword_sql(
         if include_embedding_release
         else ""
     )
-    typed_clause = (
-        " AND metadata->>'source_id' = :source_id_0" if include_typed_filters else ""
-    )
+    typed_clause = " AND metadata->>'source_id' = :source_id_0" if include_typed_filters else ""
     return f"""
             SELECT chunk_id, kb_name, content, metadata,
                    GREATEST(
@@ -129,9 +127,7 @@ def build_knowledge_chunk_vector_sql(
         if include_embedding_release
         else ""
     )
-    typed_clause = (
-        " AND metadata->>'source_id' = :source_id_0" if include_typed_filters else ""
-    )
+    typed_clause = " AND metadata->>'source_id' = :source_id_0" if include_typed_filters else ""
     return f"""
             SELECT chunk_id, kb_name, content, metadata,
                    1.0 - (embedding <=> :q) AS score

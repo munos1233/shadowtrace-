@@ -16,13 +16,17 @@ class _FakeGovernance:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
 
-    async def assess_eligibility(self, artifact: Any, *, threshold_manifest_path: Any = None, principal: Any = None) -> Any:
+    async def assess_eligibility(
+        self, artifact: Any, *, threshold_manifest_path: Any = None, principal: Any = None
+    ) -> Any:
         from app.models.detection_governance import DetectionGovernanceEligibilityAssessment
 
         self.calls.append(("assess", artifact.evaluation_id))
         return DetectionGovernanceEligibilityAssessment(eligible=True)
 
-    async def record_decision(self, principal: Principal, artifact: Any, request: Any, **kwargs: Any) -> Any:
+    async def record_decision(
+        self, principal: Principal, artifact: Any, request: Any, **kwargs: Any
+    ) -> Any:
         from app.models.detection_governance import (
             DetectionGovernanceCandidateBinding,
             DetectionGovernanceDecision,
@@ -76,7 +80,9 @@ class _FakeGovernance:
     ) -> Any:
         raise AssertionError("not used in this test")
 
-    async def evaluate_promotion_gate(self, artifact: Any, *, binding_hash: str | None = None) -> Any:
+    async def evaluate_promotion_gate(
+        self, artifact: Any, *, binding_hash: str | None = None
+    ) -> Any:
         from app.models.detection_governance import DetectionGovernancePromotionGateResult
 
         return DetectionGovernancePromotionGateResult(allowed=False)
@@ -133,7 +139,9 @@ def _minimal_artifact_payload() -> dict[str, Any]:
     }
 
 
-def test_record_decision_requires_approver_role(governance_client: tuple[TestClient, _FakeGovernance]) -> None:
+def test_record_decision_requires_approver_role(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
     client, _ = governance_client
     from app.core.auth import get_principal
 
@@ -155,7 +163,9 @@ def test_record_decision_endpoint(governance_client: tuple[TestClient, _FakeGove
         json={
             "artifact": _minimal_artifact_payload(),
             "decision": "approve",
-            "threshold_manifest_path": "data/evaluation/detection_shadow_v1/threshold_manifest.json",
+            "threshold_manifest_path": (
+                "data/evaluation/detection_shadow_v1/threshold_manifest.json"
+            ),
             "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         },
     )
@@ -166,13 +176,17 @@ def test_record_decision_endpoint(governance_client: tuple[TestClient, _FakeGove
     assert fake.calls[0][0] == "record"
 
 
-def test_list_decisions_requires_tenant_id(governance_client: tuple[TestClient, _FakeGovernance]) -> None:
+def test_list_decisions_requires_tenant_id(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
     client, _ = governance_client
     response = client.get("/api/v1/detection/governance/decisions")
     assert response.status_code == 422
 
 
-def test_get_decision_requires_tenant_id(governance_client: tuple[TestClient, _FakeGovernance]) -> None:
+def test_get_decision_requires_tenant_id(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
     client, _ = governance_client
     response = client.get("/api/v1/detection/governance/decisions/dgov-test")
     assert response.status_code == 422

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.core.config import Settings
+from app.models.shadow_run import ShadowQueryPivotRequest, ShadowRunStatus
 from app.models.tool_call_grant import (
     BoundExecutionPrincipal,
     ToolCallGrant,
@@ -19,7 +20,6 @@ from app.orchestration.react_engine import ReadOnlyReActExecutor
 from app.services.safe_tool_projection import SafeToolProjectionService
 from app.services.shadow_query_pivot_service import ShadowQueryPivotService
 from app.services.shadow_run_service import ShadowRunService
-from app.models.shadow_run import ShadowQueryPivotRequest, ShadowRunStatus
 from app.tools.executor import ToolExecutor
 from app.tools.registry import ToolRegistry
 from app.tools.tool_call_runtime import ReactToolExecutorFactory

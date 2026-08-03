@@ -897,7 +897,11 @@ def reset_deps() -> None:
     global _impact_assessment_service
     global _opensearch_client, _search_service, _tool_call_log
     global _graph_sync_service, _neo4j_client
-    global _memory_governance, _detection_governance, _decision_record_service, _tool_call_grant_service
+    global \
+        _memory_governance, \
+        _detection_governance, \
+        _decision_record_service, \
+        _tool_call_grant_service
     reset_session_provider()
     from app.core.embedding.factory import reset_embedding_client
     from app.playbook.resources import reset_playbook_resources_cache
