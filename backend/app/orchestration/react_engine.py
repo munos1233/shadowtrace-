@@ -186,8 +186,16 @@ class ReadOnlyReActExecutor:
         if not event_id.strip():
             raise ValueError("event_id must not be empty")
         self._tool_executor = tool_executor
-        self._bound_executor = tool_executor if isinstance(tool_executor, BoundToolExecutor) else None
-        self._plain_executor = tool_executor if self._bound_executor is None else tool_executor.inner
+        bound: BoundToolExecutor | None
+        plain: ToolExecutor
+        if isinstance(tool_executor, BoundToolExecutor):
+            bound = tool_executor
+            plain = tool_executor.inner
+        else:
+            bound = None
+            plain = tool_executor
+        self._bound_executor = bound
+        self._plain_executor = plain
         self._event_id = event_id
         self._allowed_agents: dict[str, ReadOnlyAgentCallable] = dict(allowed_agents or {})
         self._agent_name = agent_name

@@ -101,34 +101,34 @@ class MockDeterministicReplayer:
             )
 
         if isinstance(truth.slice_expectation, SecuritySliceExpectation):
-            expectation = truth.slice_expectation
-            fail = expectation.replay_variant == "fail"
+            security_expectation = truth.slice_expectation
+            fail = security_expectation.replay_variant == "fail"
             return CaseObservation(
                 case_id=truth.case_id,
                 slice_type=slice_type,
                 observation_available=True,
-                security=replay_security_slice(expectation, fail=fail),
+                security=replay_security_slice(security_expectation, fail=fail),
                 replay_notes=(
-                    f"slice_adapter:security:{expectation.replay_variant};"
+                    f"slice_adapter:security:{security_expectation.replay_variant};"
                     f"seed={seed};n={nonce:x}"
                 ),
             )
 
         if isinstance(truth.slice_expectation, KnowledgeSliceExpectation):
-            expectation = truth.slice_expectation
-            fail = expectation.replay_variant == "fail"
+            knowledge_expectation = truth.slice_expectation
+            fail = knowledge_expectation.replay_variant == "fail"
             return CaseObservation(
                 case_id=truth.case_id,
                 slice_type=slice_type,
                 observation_available=True,
                 knowledge=replay_knowledge_slice(
-                    expectation,
+                    knowledge_expectation,
                     case_id=truth.case_id,
                     seed=seed,
                     fail=fail,
                 ),
                 replay_notes=(
-                    f"slice_adapter:knowledge:{expectation.replay_variant};"
+                    f"slice_adapter:knowledge:{knowledge_expectation.replay_variant};"
                     f"seed={seed};n={nonce:x}"
                 ),
             )

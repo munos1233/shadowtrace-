@@ -7,6 +7,7 @@ Routes authorized retrieval through ``RetrievalPipeline`` with a validated
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,7 +50,12 @@ class ReactMockQueryAdapter:
         self._knowledge_release_service = knowledge_release_service
         self._settings = settings
 
-    async def execute(self, params: dict[str, Any], *, ctx: ReactMockQueryContext) -> dict[str, Any]:
+    async def execute(
+        self,
+        params: dict[str, Any],
+        *,
+        ctx: ReactMockQueryContext,
+    ) -> dict[str, Any]:
         query = str(params.get("query", "")).strip()
         if not query:
             return {"status": "denied", "reason": "missing_query", "data": {}}
@@ -179,7 +185,7 @@ class ReactMockQueryAdapter:
 def build_mock_query_agent_callable(
     adapter: ReactMockQueryAdapter,
     ctx: ReactMockQueryContext,
-):
+) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
     async def _call(params: dict[str, Any]) -> dict[str, Any]:
         return await adapter.execute(params, ctx=ctx)
 

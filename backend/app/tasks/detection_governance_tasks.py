@@ -12,7 +12,9 @@ from app.services.detection_governance_service import DetectionGovernanceService
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="shadowtrace.detection_governance.expire_active_approvals")
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="shadowtrace.detection_governance.expire_active_approvals"
+)
 def expire_detection_governance_approvals() -> dict[str, object]:
     """Append EXPIRE records for approvals past ``expires_at``."""
     settings = get_settings()

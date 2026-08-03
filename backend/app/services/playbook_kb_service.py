@@ -109,9 +109,13 @@ def playbook_ref_from_metadata(metadata: dict[str, Any]) -> PlaybookRef | None:
     content_hash = metadata.get("playbook_object_hash") or metadata.get("content_hash")
     bundle_hash = metadata.get("bundle_content_hash") or metadata.get("release_content_hash")
     release_version = metadata.get("release_version")
-    if not all(
-        isinstance(value, str) and value
-        for value in (content_hash, bundle_hash, release_version)
+    if not (
+        isinstance(content_hash, str)
+        and content_hash
+        and isinstance(bundle_hash, str)
+        and bundle_hash
+        and isinstance(release_version, str)
+        and release_version
     ):
         return None
     revision_raw = metadata.get("revision", 1)
