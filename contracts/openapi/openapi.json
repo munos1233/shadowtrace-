@@ -4410,6 +4410,11 @@
             "type": "boolean",
             "title": "Eligible"
           },
+          "threshold_manifest_validated": {
+            "type": "boolean",
+            "title": "Threshold Manifest Validated",
+            "default": false
+          },
           "reason_codes": {
             "items": {
               "type": "string"
