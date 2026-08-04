@@ -1,5 +1,183 @@
 {
   "$defs": {
+    "AgenticExpectationKind": {
+      "description": "Typed ReAct shadow pivot expectations (#642 Phase B / #641).",
+      "enum": [
+        "shadow_isolation",
+        "bounded_pivot_success",
+        "evidence_fidelity",
+        "no_raw_cot",
+        "shadow_cross_tenant_denied",
+        "shadow_budget_race",
+        "shadow_degraded_fail_closed",
+        "shadow_unsupported_tool_denied"
+      ],
+      "title": "AgenticExpectationKind",
+      "type": "string"
+    },
+    "AgenticSliceExpectation": {
+      "additionalProperties": false,
+      "description": "ReAct shadow pivot expectations — isolation, bounded pivot, evidence fidelity.",
+      "properties": {
+        "slice_type": {
+          "const": "agentic",
+          "default": "agentic",
+          "title": "Slice Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "1.1",
+          "minLength": 1,
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "expectation_kind": {
+          "$ref": "#/$defs/AgenticExpectationKind"
+        },
+        "critical": {
+          "default": true,
+          "title": "Critical",
+          "type": "boolean"
+        },
+        "expected_production_store_mutated": {
+          "default": false,
+          "title": "Expected Production Store Mutated",
+          "type": "boolean"
+        },
+        "expected_shadow_namespace_used": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Shadow Namespace Used"
+        },
+        "expected_pivot_completed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Pivot Completed"
+        },
+        "expected_typed_artifact_produced": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Typed Artifact Produced"
+        },
+        "expected_step_count_within_bounds": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Step Count Within Bounds"
+        },
+        "expected_evidence_refs_valid": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Evidence Refs Valid"
+        },
+        "expected_raw_cot_persisted": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Raw Cot Persisted"
+        },
+        "expected_cross_tenant_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Cross Tenant Denied"
+        },
+        "expected_budget_race_rejected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Budget Race Rejected"
+        },
+        "expected_degraded_fail_closed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Degraded Fail Closed"
+        },
+        "expected_unsupported_tool_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Unsupported Tool Denied"
+        },
+        "replay_variant": {
+          "default": "pass",
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Replay Variant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectation_kind"
+      ],
+      "title": "AgenticSliceExpectation",
+      "type": "object"
+    },
     "BenignSliceExpectation": {
       "additionalProperties": false,
       "description": "Expectation for confirmed-benign / false-positive cases.",
@@ -71,6 +249,179 @@
       ],
       "title": "CaseLabel",
       "type": "string"
+    },
+    "CoordinationExpectationKind": {
+      "description": "Typed task/artifact coordination expectations (#642 Phase C / #639).",
+      "enum": [
+        "stale_fencing_denied",
+        "artifact_idempotent_replay",
+        "attempt_history_auditable",
+        "cross_tenant_task_denied",
+        "prompt_injection_projection_denied",
+        "forged_grant_denied",
+        "crash_retry_no_duplicate_terminal",
+        "side_effect_unknown_manual"
+      ],
+      "title": "CoordinationExpectationKind",
+      "type": "string"
+    },
+    "CoordinationSliceExpectation": {
+      "additionalProperties": false,
+      "description": "Task/artifact coordination expectations — fencing, replay, crash recovery.",
+      "properties": {
+        "slice_type": {
+          "const": "coordination",
+          "default": "coordination",
+          "title": "Slice Type",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "1.1",
+          "minLength": 1,
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "expectation_kind": {
+          "$ref": "#/$defs/CoordinationExpectationKind"
+        },
+        "critical": {
+          "default": true,
+          "title": "Critical",
+          "type": "boolean"
+        },
+        "expected_stale_fencing_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Stale Fencing Denied"
+        },
+        "expected_duplicate_logical_artifact": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Duplicate Logical Artifact"
+        },
+        "expected_content_hash_match": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Content Hash Match"
+        },
+        "expected_attempt_recorded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Attempt Recorded"
+        },
+        "expected_cross_tenant_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Cross Tenant Denied"
+        },
+        "expected_projection_rejected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Projection Rejected"
+        },
+        "expected_forged_grant_rejected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Forged Grant Rejected"
+        },
+        "expected_terminal_transition_idempotent": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Terminal Transition Idempotent"
+        },
+        "expected_manual_resolution_required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Manual Resolution Required"
+        },
+        "expected_blind_retry_blocked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Blind Retry Blocked"
+        },
+        "replay_variant": {
+          "default": "pass",
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Replay Variant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectation_kind"
+      ],
+      "title": "CoordinationSliceExpectation",
+      "type": "object"
     },
     "EvaluationCaseTruth": {
       "additionalProperties": false,
@@ -165,7 +516,9 @@
         "slice_expectation": {
           "discriminator": {
             "mapping": {
+              "agentic": "#/$defs/AgenticSliceExpectation",
               "benign": "#/$defs/BenignSliceExpectation",
+              "coordination": "#/$defs/CoordinationSliceExpectation",
               "knowledge": "#/$defs/KnowledgeSliceExpectation",
               "security": "#/$defs/SecuritySliceExpectation",
               "threat": "#/$defs/ThreatSliceExpectation",
@@ -188,6 +541,12 @@
             },
             {
               "$ref": "#/$defs/KnowledgeSliceExpectation"
+            },
+            {
+              "$ref": "#/$defs/AgenticSliceExpectation"
+            },
+            {
+              "$ref": "#/$defs/CoordinationSliceExpectation"
             }
           ],
           "title": "Slice Expectation"

@@ -3299,6 +3299,24 @@
           },
           "generated_by": {
             "$ref": "#/components/schemas/StorylineGeneratedBy"
+          },
+          "schema_version": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "claim_refs": {
+            "items": {
+              "$ref": "#/components/schemas/StorylineClaimRef"
+            },
+            "type": "array",
+            "title": "Claim Refs"
+          },
+          "grounding_status": {
+            "$ref": "#/components/schemas/StorylineGroundingStatus",
+            "default": "legacy_evidence_grounded"
           }
         },
         "additionalProperties": false,
@@ -4181,6 +4199,98 @@
         ],
         "title": "DecisionTraceResponse"
       },
+      "DetectionContextProjectionErrorSummary": {
+        "properties": {
+          "promotion_id": {
+            "type": "string",
+            "title": "Promotion Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "promotion_id",
+          "reason",
+          "message"
+        ],
+        "title": "DetectionContextProjectionErrorSummary",
+        "description": "Latest detection context projection failure for an event (#633)."
+      },
+      "DetectionContextSnapshotSummary": {
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "promotion_id": {
+            "type": "string",
+            "title": "Promotion Id"
+          },
+          "promotion_link_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Promotion Link Revision"
+          },
+          "event_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Event Revision"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "revision",
+          "content_hash",
+          "promotion_id",
+          "promotion_link_revision",
+          "event_revision"
+        ],
+        "title": "DetectionContextSnapshotSummary",
+        "description": "Read-only detection context provenance for event detail UI (#633)."
+      },
       "DetectionGovernanceDecisionCreateRequest": {
         "properties": {
           "artifact": {
@@ -4409,6 +4519,11 @@
           "eligible": {
             "type": "boolean",
             "title": "Eligible"
+          },
+          "threshold_manifest_validated": {
+            "type": "boolean",
+            "title": "Threshold Manifest Validated",
+            "default": false
           },
           "reason_codes": {
             "items": {
@@ -4930,6 +5045,26 @@
             "type": "integer",
             "title": "Pending Writeback Count",
             "default": 0
+          },
+          "detection_context_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DetectionContextSnapshotSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detection_context_projection_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DetectionContextProjectionErrorSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "analysis_only_complete": {
             "type": "boolean",
@@ -5790,6 +5925,33 @@
             },
             "type": "array",
             "title": "Cross Event Paths"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "degraded": {
+            "type": "boolean",
+            "title": "Degraded",
+            "default": false
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
           }
         },
         "additionalProperties": false,
@@ -5809,6 +5971,98 @@
           "uploaded_to"
         ],
         "title": "GraphRelationType"
+      },
+      "GraphSummary": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/GraphSummaryFeature"
+            },
+            "type": "array",
+            "title": "Features"
+          },
+          "degraded": {
+            "type": "boolean",
+            "title": "Degraded",
+            "default": false
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "GraphSummary",
+        "description": "Deterministic graph-derived features consumed by RiskAgent (ISSUE-116)."
+      },
+      "GraphSummaryFeature": {
+        "properties": {
+          "feature_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Feature Id"
+          },
+          "feature_kind": {
+            "type": "string",
+            "enum": [
+              "attack_path",
+              "central_entity",
+              "lateral_movement",
+              "attack_stage"
+            ],
+            "title": "Feature Kind"
+          },
+          "score_hint": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score Hint"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Evidence Ids"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "graph_edge",
+              "graph_path",
+              "graph_centrality"
+            ],
+            "title": "Provenance",
+            "default": "graph_edge"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "feature_id",
+          "feature_kind",
+          "score_hint"
+        ],
+        "title": "GraphSummaryFeature",
+        "description": "Evidence-bound structured graph feature for pre-risk scoring (ISSUE-116)."
       },
       "HTTPValidationError": {
         "properties": {
@@ -7613,6 +7867,53 @@
         "title": "StatsResponse",
         "description": "Platform statistics (ISSUE-085 SOC dashboard).\n\nLegacy summary counters (``open_events`` …) remain for pre-085 clients."
       },
+      "StorylineClaimRef": {
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Claim Id"
+          },
+          "proposition_kind": {
+            "type": "string",
+            "enum": [
+              "timeline_entry",
+              "phase_summary"
+            ],
+            "title": "Proposition Kind",
+            "default": "timeline_entry"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Evidence Ids"
+          },
+          "schema_version": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Ordinal",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "claim_id"
+        ],
+        "title": "StorylineClaimRef",
+        "description": "Stable navigation id for an evidence-grounded storyline proposition (ISSUE-116)."
+      },
       "StorylineGeneratedBy": {
         "type": "string",
         "enum": [
@@ -7620,6 +7921,16 @@
           "rule"
         ],
         "title": "StorylineGeneratedBy"
+      },
+      "StorylineGroundingStatus": {
+        "type": "string",
+        "enum": [
+          "evidence_grounded",
+          "legacy_evidence_grounded",
+          "claim_refs_unavailable"
+        ],
+        "title": "StorylineGroundingStatus",
+        "description": "How storyline claims are grounded to evidence (ISSUE-116 Phase B)."
       },
       "StorylinePhase": {
         "properties": {

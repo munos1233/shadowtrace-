@@ -110,7 +110,7 @@
     },
     "DetectionRulePackageProvenance": {
       "additionalProperties": false,
-      "description": "Authoring and review trace \u2014 not a substitute for #630 governance.",
+      "description": "Authoring and review trace — not a substitute for #630 governance.",
       "properties": {
         "author": {
           "maxLength": 128,
@@ -165,7 +165,7 @@
       "type": "object"
     },
     "DetectionRuleRuntimeState": {
-      "description": "Executable package state \u2014 not governance approval or production promotion.",
+      "description": "Executable package state — not governance approval or production promotion.",
       "enum": [
         "draft",
         "validated",

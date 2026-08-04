@@ -17,7 +17,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "ReAct shadow pivot expectations \u2014 isolation, bounded pivot, evidence fidelity.",
+  "description": "ReAct shadow pivot expectations — isolation, bounded pivot, evidence fidelity.",
   "properties": {
     "slice_type": {
       "const": "agentic",

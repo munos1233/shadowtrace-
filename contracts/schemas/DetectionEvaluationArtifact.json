@@ -1495,7 +1495,9 @@
         "benign",
         "unevaluable",
         "security",
-        "knowledge"
+        "knowledge",
+        "agentic",
+        "coordination"
       ],
       "title": "SliceType",
       "type": "string"

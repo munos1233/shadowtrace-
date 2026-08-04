@@ -1,5 +1,166 @@
 {
   "$defs": {
+    "AgenticCaseObservation": {
+      "additionalProperties": false,
+      "description": "Structured ReAct shadow replay observation for #642 Phase B scorers.",
+      "properties": {
+        "expectation_kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Expectation Kind",
+          "type": "string"
+        },
+        "production_store_mutated": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Production Store Mutated"
+        },
+        "shadow_namespace_used": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shadow Namespace Used"
+        },
+        "pivot_completed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pivot Completed"
+        },
+        "typed_artifact_produced": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Typed Artifact Produced"
+        },
+        "step_count_within_bounds": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step Count Within Bounds"
+        },
+        "evidence_refs_valid": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Refs Valid"
+        },
+        "raw_cot_persisted": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Cot Persisted"
+        },
+        "cross_tenant_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cross Tenant Denied"
+        },
+        "budget_race_rejected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Budget Race Rejected"
+        },
+        "degraded_fail_closed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Degraded Fail Closed"
+        },
+        "unsupported_tool_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unsupported Tool Denied"
+        },
+        "dependency_degraded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dependency Degraded"
+        }
+      },
+      "required": [
+        "expectation_kind"
+      ],
+      "title": "AgenticCaseObservation",
+      "type": "object"
+    },
     "CaseObservation": {
       "additionalProperties": false,
       "description": "Deterministic mock-replay observation for one evaluation case.",
@@ -102,6 +263,28 @@
             }
           ],
           "default": null
+        },
+        "agentic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgenticCaseObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "coordination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinationCaseObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -147,6 +330,155 @@
         "upper"
       ],
       "title": "ConfidenceInterval",
+      "type": "object"
+    },
+    "CoordinationCaseObservation": {
+      "additionalProperties": false,
+      "description": "Structured task/artifact replay observation for #642 Phase C scorers.",
+      "properties": {
+        "expectation_kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Expectation Kind",
+          "type": "string"
+        },
+        "stale_fencing_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stale Fencing Denied"
+        },
+        "duplicate_logical_artifact": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duplicate Logical Artifact"
+        },
+        "content_hash_match": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash Match"
+        },
+        "attempt_recorded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Recorded"
+        },
+        "cross_tenant_denied": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cross Tenant Denied"
+        },
+        "projection_rejected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projection Rejected"
+        },
+        "forged_grant_rejected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Forged Grant Rejected"
+        },
+        "terminal_transition_idempotent": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Transition Idempotent"
+        },
+        "manual_resolution_required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manual Resolution Required"
+        },
+        "blind_retry_blocked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blind Retry Blocked"
+        },
+        "dependency_degraded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dependency Degraded"
+        }
+      },
+      "required": [
+        "expectation_kind"
+      ],
+      "title": "CoordinationCaseObservation",
       "type": "object"
     },
     "EvaluationAggregateMetrics": {
@@ -970,7 +1302,9 @@
         "benign",
         "unevaluable",
         "security",
-        "knowledge"
+        "knowledge",
+        "agentic",
+        "coordination"
       ],
       "title": "SliceType",
       "type": "string"

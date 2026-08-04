@@ -17,7 +17,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Task/artifact coordination expectations \u2014 fencing, replay, crash recovery.",
+  "description": "Task/artifact coordination expectations — fencing, replay, crash recovery.",
   "properties": {
     "slice_type": {
       "const": "coordination",

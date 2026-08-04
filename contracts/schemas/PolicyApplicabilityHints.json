@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "description": "Untrusted agent/query hints — server profile always wins.",
+  "properties": {
+    "framework_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Framework Ids",
+      "type": "array"
+    },
+    "jurisdiction_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Jurisdiction Codes",
+      "type": "array"
+    },
+    "industry_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Industry Codes",
+      "type": "array"
+    }
+  },
+  "title": "PolicyApplicabilityHints",
+  "type": "object"
+}

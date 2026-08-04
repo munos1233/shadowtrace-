@@ -6,6 +6,7 @@
         "draft",
         "validated",
         "shadow_active",
+        "production_active",
         "disabled"
       ],
       "title": "DetectionRuleRuntimeState",
