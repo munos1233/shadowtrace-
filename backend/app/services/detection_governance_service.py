@@ -18,6 +18,7 @@ from app.models.detection_governance import (
     DetectionGovernanceDecision,
     DetectionGovernanceDecisionKind,
     DetectionGovernanceDecisionRequest,
+    DetectionGovernanceEligibilityAssessment,
     DetectionGovernancePromotionGateResult,
     DetectionGovernanceReasonCode,
 )
@@ -68,7 +69,7 @@ class DetectionGovernanceService:
         *,
         threshold_manifest_path: Path | None = None,
         principal: Principal | None = None,
-    ):
+    ) -> DetectionGovernanceEligibilityAssessment:
         if principal is not None:
             assert_governance_tenant_access(principal, artifact.tenant_id)
         return assess_governance_eligibility(

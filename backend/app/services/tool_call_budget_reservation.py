@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.models.tool_call_grant import ToolCallMode
 
@@ -151,7 +152,7 @@ class ToolCallBudgetReservationService:
             self._mark_redis_degraded("get_reserved_count", grant_id)
             return self._memory.counters.get(key, _GrantBudgetCounter()).reserved
 
-    async def _redis_client(self) -> object | None:
+    async def _redis_client(self) -> Any | None:
         if self._redis is None:
             return None
         try:

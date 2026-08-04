@@ -157,11 +157,11 @@ class AgentTaskService:
             updated_at=now,
         )
         try:
-            async with self._session_factory() as session:  # type: ignore[union-attr]
+            async with self._sessions()() as session:
                 async with session.begin():
                     session.add(row)
         except IntegrityError:
-            async with self._session_factory() as session:  # type: ignore[union-attr]
+            async with self._sessions()() as session:
                 existing = await session.scalar(
                     select(orm.AgentTaskORM).where(
                         orm.AgentTaskORM.tenant_id == request.tenant_id,
@@ -188,7 +188,7 @@ class AgentTaskService:
         next_attempt = 0
         revision = 1
 
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, request.task_id, with_for_update=True)
                 if row is None:
@@ -300,7 +300,7 @@ class AgentTaskService:
             )
         from app.services.playbook_approval_binding import STAGED_ARTIFACT_HASHES_KEY
 
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, claim.task_id, with_for_update=True)
                 if row is None:
@@ -379,7 +379,7 @@ class AgentTaskService:
         """Mark a lease-expired CLAIMED task as EXPIRED (coordinator sweeper)."""
         self._require_available()
         now = datetime.now(tz=UTC)
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, task_id, with_for_update=True)
                 if row is None:
@@ -418,7 +418,7 @@ class AgentTaskService:
         self._require_available()
         now = datetime.now(tz=UTC)
         cutoff = now - timedelta(seconds=stale_after_seconds)
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, task_id, with_for_update=True)
                 if row is None:
@@ -455,7 +455,7 @@ class AgentTaskService:
         """Repair COMPLETED tasks that never persisted a logical artifact (sweeper)."""
         self._require_available()
         now = datetime.now(tz=UTC)
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, task_id, with_for_update=True)
                 if row is None:
@@ -482,7 +482,7 @@ class AgentTaskService:
         """Re-queue a failed task when side effects are known-safe."""
         self._require_available()
         now = datetime.now(tz=UTC)
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, task_id, with_for_update=True)
                 if row is None:
@@ -513,7 +513,7 @@ class AgentTaskService:
 
     async def load_task(self, task_id: str, *, tenant_id: str) -> AgentTask:
         self._require_available()
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             row = await session.get(orm.AgentTaskORM, task_id)
             if row is None:
                 raise AgentTaskDeniedError("unknown task_id", details={"task_id": task_id})
@@ -535,7 +535,7 @@ class AgentTaskService:
         now = datetime.now(tz=UTC)
         token_hash = _hash_token(claim.fencing_token)
 
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             async with session.begin():
                 row = await session.get(orm.AgentTaskORM, claim.task_id, with_for_update=True)
                 if row is None:
@@ -656,6 +656,12 @@ class AgentTaskService:
     def _require_available(self) -> None:
         if not self._available:
             raise AgentTaskUnavailableError("task ledger persistence unavailable")
+
+    def _sessions(self) -> async_sessionmaker[AsyncSession]:
+        self._require_available()
+        if self._session_factory is None:
+            raise AgentTaskUnavailableError("task ledger persistence unavailable")
+        return self._session_factory
 
 
 __all__ = ["AgentTaskService", "new_attempt_id", "new_task_id"]

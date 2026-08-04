@@ -70,7 +70,13 @@ async def list_completed_promotions_by_candidate(
     by_candidate: dict[str, DetectionPromotionRecord] = {}
     for record in records:
         existing = by_candidate.get(record.candidate_detection_id)
-        if existing is None or record.updated_at > existing.updated_at:
+        record_updated_at = record.updated_at
+        existing_updated_at = existing.updated_at if existing is not None else None
+        if existing is None or (
+            record_updated_at is not None
+            and existing_updated_at is not None
+            and record_updated_at > existing_updated_at
+        ):
             by_candidate[record.candidate_detection_id] = record
     return by_candidate
 

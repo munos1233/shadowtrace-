@@ -355,10 +355,11 @@ class PlaybookReleaseService:
         content_hash = metadata.get("playbook_object_hash") or metadata.get("content_hash")
         bundle_hash = metadata.get("bundle_content_hash") or metadata.get("release_content_hash")
         release_version = metadata.get("release_version")
-        if not all(
-            isinstance(value, str) and value
-            for value in (content_hash, bundle_hash, release_version)
-        ):
+        if not isinstance(content_hash, str) or not content_hash:
+            return None
+        if not isinstance(bundle_hash, str) or not bundle_hash:
+            return None
+        if not isinstance(release_version, str) or not release_version:
             return None
         lifecycle_raw = metadata.get("release_lifecycle_state")
         lifecycle = None

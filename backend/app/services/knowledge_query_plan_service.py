@@ -16,6 +16,7 @@ from app.models.knowledge_release import (
 )
 from app.services.knowledge_release_resolver import corpus_to_kb_name
 from app.services.knowledge_release_service import KnowledgeReleaseService
+from app.services.knowledge_store import KnowledgeStore
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ async def resolve_active_knowledge_query_plan(
 def build_release_service(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    store=None,
+    store: KnowledgeStore | None = None,
     settings: Settings | None = None,
 ) -> KnowledgeReleaseService:
     return KnowledgeReleaseService(session_factory, store=store, settings=settings)

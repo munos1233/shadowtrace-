@@ -1,8 +1,8 @@
 """Detection offline/shadow evaluation package (ISSUE-126 / #631)."""
 
 from app.evaluation.detection.production_runner import (
-    DetectionProductionComparisonRunRequest,
     DetectionProductionComparisonRunner,
+    DetectionProductionComparisonRunRequest,
     run_production_comparison,
 )
 from app.evaluation.detection.runner import (

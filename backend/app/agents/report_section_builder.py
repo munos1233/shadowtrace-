@@ -640,7 +640,7 @@ class ReportSectionBuilder:
         detection_context_snapshot: DetectionContextSnapshot | None = None,
     ) -> str:
         if detection_context_snapshot is not None and detection_context_snapshot.attack_refs:
-            techniques = [
+            snapshot_techniques = [
                 (
                     f"{ref.technique_id} {ref.technique_name}".strip()
                     if ref.technique_name
@@ -648,7 +648,7 @@ class ReportSectionBuilder:
                 )
                 for ref in detection_context_snapshot.attack_refs
             ]
-            return _bullet(techniques, "暂无 ATT&CK 技术映射")
+            return _bullet(snapshot_techniques, "暂无 ATT&CK 技术映射")
 
         techniques: list[str] = []
         for item in evidence_output.evidence_list:

@@ -1317,3 +1317,17 @@ from app.db.orm.shadow_run import (  # noqa: E402,F401
     ShadowQueryArtifactORM,
     ShadowRunORM,
 )
+
+__all__ = [
+    "AgentArtifactORM",
+    "AgentTaskAttemptORM",
+    "AgentTaskORM",
+    "ApprovalRecordORM",
+    "DetectionContextSnapshotORM",
+    "DetectionGovernanceDecisionORM",
+    "EntityProfileORM",
+    "MemoryReviewORM",
+    "ShadowDecisionRecordORM",
+    "ShadowQueryArtifactORM",
+    "ShadowRunORM",
+]

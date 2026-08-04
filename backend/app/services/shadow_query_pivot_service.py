@@ -19,6 +19,7 @@ from app.core.llm.base import BaseLLMClient
 from app.models.decision_record import DecisionRecord, DecisionStage
 from app.models.react import ReActActionType, ReActRound, ReActStopReason
 from app.models.shadow_run import (
+    ShadowQueryArtifact,
     ShadowQueryArtifactKind,
     ShadowQueryPivotRequest,
     ShadowQueryPivotResult,
@@ -240,7 +241,7 @@ class ShadowQueryPivotService:
                 run.shadow_run_id,
             )
             rounds = react_result.rounds if react_result is not None else []
-            partial_artifacts: list = []
+            partial_artifacts: list[ShadowQueryArtifact] = []
             partial_record_ids: list[str] = []
             if rounds:
                 try:
@@ -283,9 +284,7 @@ class ShadowQueryPivotService:
         self,
         run: ShadowRun,
         rounds: list[ReActRound],
-    ) -> list:
-        from app.models.shadow_run import ShadowQueryArtifact
-
+    ) -> list[ShadowQueryArtifact]:
         artifacts: list[ShadowQueryArtifact] = []
         for round_ in rounds:
             action = round_.action

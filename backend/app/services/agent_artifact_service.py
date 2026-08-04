@@ -147,7 +147,7 @@ class AgentArtifactService:
         )
 
         try:
-            async with self._session_factory() as session:  # type: ignore[union-attr]
+            async with self._sessions()() as session:
                 async with session.begin():
                     task_row = await session.get(
                         orm.AgentTaskORM, claim.task_id, with_for_update=True
@@ -204,7 +204,7 @@ class AgentArtifactService:
 
                     session.add(row)
         except IntegrityError:
-            async with self._session_factory() as session:  # type: ignore[union-attr]
+            async with self._sessions()() as session:
                 existing = await _load_existing_artifact(
                     session,
                     task_id=claim.task_id,
@@ -227,7 +227,7 @@ class AgentArtifactService:
     ) -> AgentArtifact | None:
         """Return the newest artifact revision for a task/logical key."""
         self._require_available()
-        async with self._session_factory() as session:  # type: ignore[union-attr]
+        async with self._sessions()() as session:
             row = await session.scalar(
                 select(orm.AgentArtifactORM)
                 .where(
@@ -245,6 +245,12 @@ class AgentArtifactService:
     def _require_available(self) -> None:
         if not self._available:
             raise AgentTaskUnavailableError("artifact ledger persistence unavailable")
+
+    def _sessions(self) -> async_sessionmaker[AsyncSession]:
+        self._require_available()
+        if self._session_factory is None:
+            raise AgentTaskUnavailableError("artifact ledger persistence unavailable")
+        return self._session_factory
 
 
 __all__ = ["AgentArtifactService", "artifact_payload_content_hash", "new_artifact_id"]

@@ -374,16 +374,16 @@ class DetectionPromotionService:
             )
 
         if record.status is DetectionPromotionStatus.SOURCE_PERSISTED:
-            typed = record.ingest_result
-            if typed is None or typed.event_id is None:
+            ingest_result = record.ingest_result
+            if ingest_result is None or ingest_result.event_id is None:
                 raise ValidationError("promotion ledger missing ingest result at event_link step")
             link_revision = record.link_revision
-            if record.event_id is not None and record.event_id != typed.event_id:
+            if record.event_id is not None and record.event_id != ingest_result.event_id:
                 link_revision += 1
             record = await self._update_ledger(
                 record,
                 status=DetectionPromotionStatus.EVENT_LINKED,
-                event_id=typed.event_id,
+                event_id=ingest_result.event_id,
                 link_revision=link_revision,
             )
 

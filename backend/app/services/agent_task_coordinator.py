@@ -491,11 +491,11 @@ async def run_response_plan_with_ledger(
     worker_principal: str,
     idempotency_key: str,
     plan_revision: int,
-    execute: Callable[[], Awaitable[_T]],
+    execute: Callable[[], Awaitable[ResponsePlan]],
     parameters: dict[str, Any] | None = None,
     content_projection_service: ContentProjectionService | None = None,
     projection_fields: dict[str, Any] | None = None,
-) -> _T:
+) -> ResponsePlan:
     """Run ResponseAgent under claim→start→artifact→complete with immutable plan refs."""
     task = await enqueue_response_plan_task(
         agent_task_service,
@@ -521,7 +521,7 @@ async def run_response_plan_with_ledger(
         tenant_id=tenant_id,
     )
     if isinstance(prepared, ResponsePlan):
-        return prepared  # type: ignore[return-value]
+        return prepared
     task = prepared
 
     try:
@@ -582,13 +582,13 @@ async def run_response_plan_with_ledger(
 
     if replay_from_artifact:
         assert prior_artifact is not None
-        result = ResponsePlan.model_validate(prior_artifact.payload)
+        plan = ResponsePlan.model_validate(prior_artifact.payload)
         payload = prior_artifact.payload
         content_hash = prior_artifact.content_hash
     else:
         _build_response_projection(content_projection_service, projection_fields)
         try:
-            result = await execute()
+            plan = await execute()
         except Exception as exc:
             await _fail_claim_quietly(
                 agent_task_service,
@@ -597,7 +597,7 @@ async def run_response_plan_with_ledger(
             )
             raise
 
-        payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+        payload = plan.model_dump(mode="json")
         if not isinstance(payload, dict):
             await _fail_claim_manual(
                 agent_task_service,
@@ -692,7 +692,7 @@ async def run_response_plan_with_ledger(
         ) from exc
 
     await agent_task_service.complete(claim)
-    return result
+    return plan
 
 
 __all__ = [

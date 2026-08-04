@@ -35,6 +35,13 @@ _resources: LoadedPlaybookResources | None = None
 _resources_key: str | None = None
 
 
+def _session_pool_policy() -> str:
+    provider = peek_session_provider()
+    if provider is None:
+        return "unknown"
+    return provider.pool_policy
+
+
 def _resources_cache_key(
     settings: Settings,
     *,
@@ -155,9 +162,7 @@ def get_loaded_playbook_resources(
             playbook_kb_service=playbook_kb,
             playbook_release_service=release_service,
             reasons=("playbook_fixture_fallback_enabled",),
-            session_pool=peek_session_provider().pool_policy
-            if peek_session_provider()
-            else "unknown",
+            session_pool=_session_pool_policy(),
         )
         _resources = loaded
         _resources_key = cache_key
@@ -173,7 +178,7 @@ def get_loaded_playbook_resources(
         mode="production",
         playbook_kb_service=playbook_kb,
         playbook_release_service=release_service,
-        session_pool=peek_session_provider().pool_policy if peek_session_provider() else "unknown",
+        session_pool=_session_pool_policy(),
     )
     _resources = loaded
     _resources_key = cache_key

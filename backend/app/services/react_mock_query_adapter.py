@@ -7,6 +7,7 @@ Routes authorized retrieval through ``RetrievalPipeline`` with a validated
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -179,7 +180,7 @@ class ReactMockQueryAdapter:
 def build_mock_query_agent_callable(
     adapter: ReactMockQueryAdapter,
     ctx: ReactMockQueryContext,
-):
+) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
     async def _call(params: dict[str, Any]) -> dict[str, Any]:
         return await adapter.execute(params, ctx=ctx)
 

@@ -17,8 +17,12 @@ from app.models.detection_context_snapshot import (
     DetectionContextSnapshot,
     DetectionContextSnapshotRef,
 )
-from app.models.detection_promotion import DetectionPromotionStatus
-from app.models.detection_rule import DetectionRuleDefinition
+from app.models.detection_governance import DetectionGovernanceDecision
+from app.models.detection_promotion import (
+    DetectionPromotionRecord,
+    DetectionPromotionStatus,
+)
+from app.models.detection_rule import CandidateDetection, DetectionRuleDefinition
 from app.models.feature_snapshot import FeatureSnapshot
 from app.services.context_service import (
     append_context_journal_in_session,
@@ -48,7 +52,7 @@ def _event_projection_lock_key(*, tenant_id: str, event_id: str) -> int:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], byteorder="big", signed=True)
 
 
-def _promotion_record_from_row(row: DetectionPromotionORM):
+def _promotion_record_from_row(row: DetectionPromotionORM) -> DetectionPromotionRecord:
     from app.services.detection_promotion_service import _row_to_record
 
     return _row_to_record(row)
@@ -241,20 +245,26 @@ class DetectionContextProjector:
         self,
         session: AsyncSession,
         *,
-        promotion,
-        candidate,
-        decision,
+        promotion: DetectionPromotionRecord,
+        candidate: CandidateDetection,
+        decision: DetectionGovernanceDecision,
         event_revision: int,
         rule: DetectionRuleDefinition | None,
         feature_snapshots: list[FeatureSnapshot],
         projection_errors: list[str],
     ) -> DetectionContextSnapshot:
+        event_id = promotion.event_id
+        if event_id is None:
+            raise ValidationError(
+                "detection context projection blocked: promotion not event-linked",
+                details={"promotion_id": promotion.promotion_id},
+            )
         last_integrity_error: IntegrityError | None = None
         for attempt in range(_MAX_REVISION_ATTEMPTS):
             revision, supersedes = await self._snapshots.next_revision(
                 session,
                 tenant_id=promotion.tenant_id,
-                event_id=promotion.event_id,
+                event_id=event_id,
             )
             snapshot = build_detection_context_snapshot(
                 promotion=promotion,
@@ -275,7 +285,7 @@ class DetectionContextProjector:
             )
             if existing is not None:
                 stored = DetectionContextSnapshot.model_validate(existing.body)
-                await self._write_context_ref(session, promotion.event_id, stored, force=False)
+                await self._write_context_ref(session, event_id, stored, force=False)
                 return stored.model_copy(update={"created_at": existing.created_at})
 
             try:
@@ -286,7 +296,7 @@ class DetectionContextProjector:
                     break
                 continue
 
-            await self._write_context_ref(session, promotion.event_id, persisted, force=True)
+            await self._write_context_ref(session, event_id, persisted, force=True)
             return persisted
 
         raise ValidationError(

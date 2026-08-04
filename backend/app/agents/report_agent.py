@@ -31,6 +31,7 @@ from app.agents.report_section_builder import (
 )
 from app.core.errors import LLMError
 from app.models.agent_io import ReportAgentInput, TriageResult
+from app.models.detection_context_snapshot import DetectionContextSnapshot
 from app.models.enums import (
     ActionCategory,
     ActionLevel,
@@ -585,8 +586,12 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             logger.debug("optional WM read failed key=%s", key, exc_info=True)
             return None
 
-    async def _load_detection_context_snapshot(self, event_id: str):
-        from app.models.detection_context_snapshot import DetectionContextSnapshotRef
+    async def _load_detection_context_snapshot(
+        self, event_id: str
+    ) -> DetectionContextSnapshot | None:
+        from app.models.detection_context_snapshot import (
+            DetectionContextSnapshotRef,
+        )
 
         raw_ref = await self._read_optional(event_id, "detection_context_snapshot")
         if raw_ref is None:
@@ -623,6 +628,12 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         if snapshot is None:
             logger.debug(
                 "skip detection context snapshot load: snapshot not found snapshot_id=%s",
+                ref.snapshot_id,
+            )
+            return None
+        if not isinstance(snapshot, DetectionContextSnapshot):
+            logger.debug(
+                "skip detection context snapshot load: unexpected snapshot type snapshot_id=%s",
                 ref.snapshot_id,
             )
             return None
