@@ -528,6 +528,210 @@ async def test_get_event_surfaces_failed_writeback_status(
     assert data["writeback_overall_status"] == WritebackStatus.FAILED.value
 
 
+async def _seed_multi_revision_writeback_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    historical_outbox_status: WritebackStatus,
+    current_outbox_status: WritebackStatus,
+) -> str:
+    """Seed REQUIRED event with a revision-1 outbox and a revision-2 (current) outbox.
+
+    Historical-revision outboxes must not pollute the current-plan UI
+    aggregation (ISSUE-185).
+    """
+    import hashlib
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from app.models.enums import DispositionIntentKind
+
+    sfx = uuid4().hex[:8]
+    event_id = f"evt-{sfx}"
+    now = datetime.now(UTC)
+
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="data_exfiltration",
+                    title="Multi-revision writeback event",
+                    description="ISSUE-185 aggregation fixture",
+                    status=EventStatus.REPORTING.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict=FinalVerdict.CONFIRMED_THREAT.value,
+                    risk_score=85,
+                    entities={},
+                    creation_source_ref={
+                        "source_kind": "incident",
+                        "source_product": "mock_xdr",
+                        "source_tenant_id": "t1",
+                        "connector_id": f"conn-{sfx}",
+                        "source_object_id": f"INC-{sfx}",
+                        "raw_payload_hash": hashlib.sha256(b"wb").hexdigest(),
+                        "ingested_at": now.isoformat(),
+                    },
+                    source_reference_snapshots=[],
+                    disposition_policy=DispositionPolicy.REQUIRED.value,
+                    source_type="mock_xdr",
+                    occurred_at=now,
+                    row_version=1,
+                )
+            )
+            session.add(
+                orm.EventAuditLog(
+                    event_id=event_id,
+                    from_status="new",
+                    to_status=EventStatus.REPORTING.value,
+                    operator="test",
+                    reason="test_setup:multi_revision",
+                )
+            )
+            session.add(
+                orm.SourceConnector(
+                    connector_id=f"conn-{sfx}",
+                    source_product="mock_xdr",
+                    display_name="Writeback test connector",
+                )
+            )
+            session.add(
+                orm.SourceObject(
+                    source_record_id=f"src-{sfx}",
+                    source_product="mock_xdr",
+                    source_tenant_id="t1",
+                    connector_id=f"conn-{sfx}",
+                    source_kind="incident",
+                    source_object_id=f"INC-{sfx}",
+                )
+            )
+            await session.flush()
+
+            # Historical revision (must be ignored by the UI aggregation).
+            session.add(
+                orm.Action(
+                    action_id=f"act-hist-{sfx}",
+                    event_id=event_id,
+                    plan_revision=1,
+                    action_fingerprint=f"fp-hist-{sfx}",
+                    action_category="response",
+                    action_name="block ip",
+                    tool_name="block_ip",
+                    action_level="l2",
+                    execution_owner="direct_tool",
+                    writeback_required=True,
+                    writeback_applicable=True,
+                    writeback_readiness=WritebackReadiness.READY.value,
+                )
+            )
+            await session.flush()
+            session.add(
+                orm.DispositionOutbox(
+                    outbox_id=f"obx-hist-{sfx}",
+                    writeback_id=f"wbk-hist-{sfx}",
+                    disposition_id=f"disp-hist-{sfx}",
+                    action_id=f"act-hist-{sfx}",
+                    event_id=event_id,
+                    closure_cycle=1,
+                    source_record_id=f"src-{sfx}",
+                    source_locator_hash="h" * 64,
+                    source_sequence=1,
+                    intent_kind=DispositionIntentKind.ENTITY_ACTION_SUBMIT.value,
+                    logical_slot="slot-hist",
+                    idempotency_key=f"idem-hist-{sfx}",
+                    command_payload={},
+                    command_payload_sha256="a" * 64,
+                    delivery_status="delivered",
+                    latest_writeback_status=historical_outbox_status.value,
+                )
+            )
+
+            # Current revision (drives the UI aggregation).
+            session.add(
+                orm.Action(
+                    action_id=f"act-cur-{sfx}",
+                    event_id=event_id,
+                    plan_revision=2,
+                    action_fingerprint=f"fp-cur-{sfx}",
+                    action_category="response",
+                    action_name="block ip",
+                    tool_name="block_ip",
+                    action_level="l2",
+                    execution_owner="direct_tool",
+                    writeback_required=True,
+                    writeback_applicable=True,
+                    writeback_readiness=WritebackReadiness.READY.value,
+                )
+            )
+            await session.flush()
+            session.add(
+                orm.DispositionOutbox(
+                    outbox_id=f"obx-cur-{sfx}",
+                    writeback_id=f"wbk-cur-{sfx}",
+                    disposition_id=f"disp-cur-{sfx}",
+                    action_id=f"act-cur-{sfx}",
+                    event_id=event_id,
+                    closure_cycle=1,
+                    source_record_id=f"src-{sfx}",
+                    source_locator_hash="h" * 64,
+                    source_sequence=2,
+                    intent_kind=DispositionIntentKind.ENTITY_ACTION_SUBMIT.value,
+                    logical_slot="slot-cur",
+                    idempotency_key=f"idem-cur-{sfx}",
+                    command_payload={},
+                    command_payload_sha256="b" * 64,
+                    delivery_status="delivered",
+                    latest_writeback_status=current_outbox_status.value,
+                )
+            )
+            await session.flush()
+    return event_id
+
+
+@pytest.mark.asyncio
+async def test_get_event_ignores_historical_revision_failed_outbox(
+    client: TestClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Historical-revision FAILED outbox must not override current-plan success.
+
+    ISSUE-185: writeback_overall_status / pending_count only count outboxes of
+    the current plan_revision bound to non-superseded Actions.
+    """
+    event_id = await _seed_multi_revision_writeback_event(
+        session_factory,
+        historical_outbox_status=WritebackStatus.FAILED,
+        current_outbox_status=WritebackStatus.CONFIRMED,
+    )
+
+    resp = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["writeback_overall_status"] == WritebackStatus.CONFIRMED.value
+    assert data["pending_writeback_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_event_preserves_current_plan_failed_status(
+    client: TestClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A current-plan FAILED outbox must still surface as FAILED (fail-closed).
+
+    ISSUE-185 forbids silently clearing unconfirmed failures to make the UI
+    green.
+    """
+    event_id = await _seed_multi_revision_writeback_event(
+        session_factory,
+        historical_outbox_status=WritebackStatus.CONFIRMED,
+        current_outbox_status=WritebackStatus.FAILED,
+    )
+
+    resp = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["writeback_overall_status"] == WritebackStatus.FAILED.value
+
+
 @pytest.mark.asyncio
 async def test_get_event_returns_detail_without_detection_context_for_manual_event(
     client: TestClient,

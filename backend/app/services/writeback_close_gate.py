@@ -196,19 +196,16 @@ async def build_closed_gate_actions(
             except ValueError:
                 pass
 
-        outbox = await session.scalar(
-            select(orm.DispositionOutbox.outbox_id)
-            .where(orm.DispositionOutbox.action_id == action_row.action_id)
-            .limit(1)
-        )
-        has_command = outbox is not None
-        active_outboxes = (
-            await load_active_outboxes(session, action_row.action_id) if has_command else []
-        )
+        active_outboxes = await load_active_outboxes(session, action_row.action_id)
+        # ``has_command`` must mean an *active* command exists. A stale outbox
+        # whose only rows are superseded is not a live command: treating it as
+        # one would make ``all(active_outboxes)`` over an empty list evaluate to
+        # True (vacuum CONFIRMED) and wrongly satisfy the CLOSED gate (ISSUE-185).
+        has_command = bool(active_outboxes)
         all_confirmed = False
         worst_outbox: WritebackStatus | None = None
         if has_command:
-            all_confirmed = all(
+            all_confirmed = bool(active_outboxes) and all(
                 o.latest_writeback_status == WritebackStatus.CONFIRMED.value
                 for o in active_outboxes
             )

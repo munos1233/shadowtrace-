@@ -363,13 +363,21 @@ async def _build_writeback_info(
         return WritebackReadiness.NOT_REQUIRED, None, 0
 
     async with session_factory() as session:
-        # Count non-superseded response/rollback actions.
+        # The UI aggregation reflects the *current* plan only: outboxes owned by
+        # superseded plan revisions or superseded Actions must not pollute the
+        # overall status/pending (ISSUE-185).
+        current_revision = await session.scalar(
+            select(func.max(orm.Action.plan_revision)).where(orm.Action.event_id == event_id)
+        )
+
+        # Count non-superseded response/rollback actions of the current plan.
         counts = await session.execute(
             select(
                 func.count(orm.Action.action_id),
                 func.min(orm.Action.writeback_readiness),
             ).where(
                 orm.Action.event_id == event_id,
+                orm.Action.plan_revision == current_revision,
                 orm.Action.action_category.in_(("response", "rollback")),
                 orm.Action.superseded_by_revision.is_(None),
                 orm.Action.status.not_in(("rejected", "superseded")),
@@ -387,10 +395,19 @@ async def _build_writeback_info(
             except ValueError:
                 readiness = WritebackReadiness.CAPABILITY_UNKNOWN
 
+        # Only outboxes bound to current-plan, non-superseded Actions count.
+        current_plan_action_filter = (
+            orm.Action.plan_revision == current_revision,
+            orm.Action.superseded_by_revision.is_(None),
+        )
+
         # Count pending/active outbox records.
         pending_count = await session.scalar(
-            select(func.count(orm.DispositionOutbox.outbox_id)).where(
+            select(func.count(orm.DispositionOutbox.outbox_id))
+            .join(orm.Action, orm.Action.action_id == orm.DispositionOutbox.action_id)
+            .where(
                 orm.DispositionOutbox.event_id == event_id,
+                *current_plan_action_filter,
                 orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
                 orm.DispositionOutbox.latest_writeback_status.in_(
                     (
@@ -410,8 +427,11 @@ async def _build_writeback_info(
         wb_status: WritebackStatus | None = None
         status_rows = (
             await session.scalars(
-                select(orm.DispositionOutbox.latest_writeback_status).where(
+                select(orm.DispositionOutbox.latest_writeback_status)
+                .join(orm.Action, orm.Action.action_id == orm.DispositionOutbox.action_id)
+                .where(
                     orm.DispositionOutbox.event_id == event_id,
+                    *current_plan_action_filter,
                     orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
                 )
             )
