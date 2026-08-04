@@ -545,6 +545,29 @@ def _resolve_verify_writeback_status(
     return None
 
 
+def _resolve_verify_writeback_statuses(
+    verification_result: VerificationResult,
+) -> dict[str, str] | None:
+    """Build a per-writeback status map for all failed writebacks (ISSUE-170).
+
+    Replaces the per-cycle scalar for routing purposes: heterogeneous failures
+    (e.g. wbk-001 UNKNOWN + wbk-002 CONFLICT) must be recovered by their own
+    status instead of inheriting the first writeback's scalar value.
+    """
+    failed = verification_result.failed_writebacks
+    if not failed:
+        return None
+    failed_set = set(failed)
+    statuses: dict[str, str] = {}
+    for item in verification_result.results:
+        if item.writeback_status is None:
+            continue
+        for wb_id in item.writeback_ids:
+            if wb_id in failed_set:
+                statuses[wb_id] = item.writeback_status.value
+    return statuses or None
+
+
 def _plan_revision_from_state(state: InvestigationState) -> int:
     execution_plan = state.get("execution_plan") or {}
     revision = execution_plan.get("revision")
@@ -1435,6 +1458,9 @@ def build_investigation_graph(
             "verify_failed_actions": verification_result.failed_actions,
             "verify_failed_writebacks": verification_result.failed_writebacks,
             "verify_writeback_status": _resolve_verify_writeback_status(verification_result),
+            "verify_writeback_status_map": _resolve_verify_writeback_statuses(
+                verification_result
+            ),
             "verify_has_partial_success": verification_result.overall_status.value == "partial",
         }
 

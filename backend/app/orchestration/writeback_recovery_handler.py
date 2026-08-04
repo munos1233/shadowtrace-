@@ -728,27 +728,35 @@ async def writeback_recovery_graph_node(
     # Process the first failed writeback; others are handled in subsequent
     # verify cycles.
     wb_id = failed_writebacks[0]
-    # ISSUE-060 / TODO(ISSUE-092): data-model limitation —
-    # ``verify_writeback_status`` is a single scalar in InvestigationState,
-    # but ``verify_failed_writebacks`` is a list.  When multiple writebacks
-    # share the same status value the status of writeback N+1 may be
-    # misapplied to writeback N.  WritebackRecoveryHandler processes them
-    # one at a time across verify cycles, which mitigates but does not
-    # eliminate the risk.
-    # ISSUE-092 will replace the scalar with
-    # ``verify_writeback_status_map: dict[str, str]`` keyed by writeback_id.
-    if len(failed_writebacks) > 1:
+    # ISSUE-170: per-writeback status map takes precedence for routing — the
+    # scalar ``verify_writeback_status`` is a legacy single-writeback
+    # projection and must never be reused for a later writeback with a
+    # different status (heterogeneous UNKNOWN + CONFLICT would otherwise be
+    # misrouted).
+    status_map = state.get("verify_writeback_status_map")
+    mapped_status = status_map.get(wb_id) if isinstance(status_map, dict) else None
+    if mapped_status is not None:
+        wb_status: str | None = mapped_status
+    elif isinstance(status_map, dict):
+        # Map exists (new state) but this writeback has no entry — a data
+        # gap.  Never borrow another writeback's scalar status: route to a
+        # conservative LOOKUP (None → lookup) instead of misrouting.
         logger.warning(
-            "writeback_recovery_node: %d failed writebacks share "
-            "verify_writeback_status=%s — subsequent writebacks may be "
-            "misrouted; event=%s",
-            len(failed_writebacks),
-            state.get("verify_writeback_status"),
+            "writeback_recovery_node: no per-writeback status entry for %s "
+            "in verify_writeback_status_map — routing conservatively to "
+            "LOOKUP; event=%s",
+            wb_id,
             event_id,
         )
+        wb_status = None
+    else:
+        # Legacy state without a map: the scalar is the first-writeback
+        # projection and remains the compatible fallback for single-writeback
+        # states written before ISSUE-170.
+        wb_status = state.get("verify_writeback_status")
     wb_state = WritebackState(
         writeback_id=wb_id,
-        current_status=_parse_writeback_status(state.get("verify_writeback_status")),
+        current_status=_parse_writeback_status(wb_status),
         lookup_count=int(state.get("writeback_lookup_count") or 0),
         retry_count=int(state.get("writeback_retry_count") or 0),
     )
@@ -773,14 +781,10 @@ async def writeback_recovery_graph_node(
     if result.escalated:
         # NOTE: Resetting lookup/retry counters to 0 on escalate.  When
         # failed_writebacks has multiple entries the first escalate discards
-        # any accumulated counters for the remaining writebacks.  Impact is
-        # negligible because the current graph only passes a single scalar
-        # verify_writeback_status per cycle and counter precision across
-        # multiple heterogeneous writebacks is inherently approximate.
-        # TODO(ISSUE-092): persist per-writeback counters and per-writeback
-        # status tracking when the InvestigationState schema supports it
-        # (verify_writeback_status_map: dict[str, str]).  See also the
-        # data-model limitation comment in the node entry point.
+        # any accumulated counters for the remaining writebacks.  Per-writeback
+        # status routing is handled by ISSUE-170's
+        # ``verify_writeback_status_map``; lookup/retry counters remain
+        # per-cycle scalars (out of scope for ISSUE-170).
         return cast(
             InvestigationState,
             {

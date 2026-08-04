@@ -45,11 +45,12 @@ class InvestigationState(TypedDict, total=False):
     verify_failed_actions: list[str] | None
     verify_failed_writebacks: list[str] | None
     verify_writeback_status: str | None
-    # NOTE(ISSUE-062-FOLLOWUP): ``verify_writeback_status`` is a per-cycle
-    # scalar — when multiple writebacks fail within the same verification
-    # cycle and each has a distinct status (e.g. "UNKNOWN" + "CONFLICT"),
-    # the scalar may misroute the second writeback.  See the matching
-    # limitation logged in writeback_recovery_handler.py.
+    # ISSUE-170: per-writeback status map keyed by writeback_id.  The scalar
+    # ``verify_writeback_status`` above is kept for back-compat (single
+    # writeback projection); recovery routing MUST prefer the map entry for
+    # the current writeback_id so heterogeneous failures (e.g. UNKNOWN +
+    # CONFLICT) are not misrouted through a stale scalar.
+    verify_writeback_status_map: dict[str, str] | None
     writeback_lookup_count: int
     writeback_retry_count: int
     verify_has_partial_success: bool

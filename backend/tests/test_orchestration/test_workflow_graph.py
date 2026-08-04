@@ -82,6 +82,7 @@ from app.orchestration.workflow_graph import (
     ROUTE_WAIT,
     ROUTE_WRITEBACK,
     _resolve_verify_writeback_status,
+    _resolve_verify_writeback_statuses,
     build_investigation_graph,
     route_after_approval,
     route_after_fp_adjudication,
@@ -504,6 +505,49 @@ class TestResolveVerifyWritebackStatus:
             ],
         )
         assert _resolve_verify_writeback_status(result) is None
+
+    def test_status_map_covers_each_heterogeneous_writeback(self) -> None:
+        """ISSUE-170: every failed writeback gets its OWN status in the map."""
+        result = self._result(
+            failed_writebacks=["wbk-001", "wbk-002"],
+            results=[
+                self._action(
+                    writeback_ids=["wbk-001"],
+                    writeback_status=WritebackStatus.UNKNOWN,
+                ),
+                self._action(
+                    writeback_ids=["wbk-002"],
+                    writeback_status=WritebackStatus.CONFLICT,
+                ),
+            ],
+        )
+        statuses = _resolve_verify_writeback_statuses(result)
+        assert statuses == {"wbk-001": "unknown", "wbk-002": "conflict"}
+
+    def test_status_map_none_without_failed_writebacks(self) -> None:
+        result = self._result(
+            failed_writebacks=[],
+            results=[
+                self._action(
+                    writeback_ids=["wbk-001"],
+                    writeback_status=WritebackStatus.CONFLICT,
+                )
+            ],
+        )
+        assert _resolve_verify_writeback_statuses(result) is None
+
+    def test_status_map_skips_writebacks_without_status(self) -> None:
+        """Writebacks without a reported status are left out of the map."""
+        result = self._result(
+            failed_writebacks=["wbk-001"],
+            results=[
+                self._action(
+                    writeback_ids=["wbk-001"],
+                    writeback_status=None,
+                )
+            ],
+        )
+        assert _resolve_verify_writeback_statuses(result) is None
 
 
 class TestRouteAfterTriage:
