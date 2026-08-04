@@ -280,6 +280,15 @@ export default function EventListPage() {
           message.warning(`事件 ${eventId} 已在研判流程中，请勿重复触发。`);
         } else if (err instanceof ApiError && err.error_code === "full_loop_unavailable") {
           message.error("当前部署为 analysis_only 模式，无法发起完整调查。");
+        } else {
+          // Fallback: any other failure (503 task_unavailable, validation,
+          // 5xx, unexpected) must be visible — a silent failure looks like the
+          // button did nothing (ISSUE-187).
+          message.error(
+            err instanceof ApiError
+              ? err.message || err.error_code || "调查触发失败"
+              : "调查触发失败",
+          );
         }
       } finally {
         setTriggeringIds((prev) => {

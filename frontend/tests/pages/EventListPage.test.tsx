@@ -346,6 +346,107 @@ describe("EventListPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/已在研判流程中/)).toBeInTheDocument();
     });
+    // Dedicated branch only — the catch fallback must not fire a second toast.
+    expect(screen.queryByText("Already in progress")).not.toBeInTheDocument();
+  });
+
+  it("shows warning toast on 409 conflict", async () => {
+    const { ApiError } = await import("../../src/services/apiClient");
+    mockTriggerInvestigation.mockRejectedValueOnce(
+      new ApiError({ error_code: "conflict", error_message: "Conflict" }),
+    );
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    expect(await screen.findByTestId("investigate-mode-modal")).toBeInTheDocument();
+    await user.click(screen.getByText("开始调查"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/已在研判流程中/)).toBeInTheDocument();
+    });
+    // Dedicated branch only — the catch fallback must not fire a second toast.
+    expect(screen.queryByText("Conflict")).not.toBeInTheDocument();
+  });
+
+  it("shows dedicated error toast on full_loop_unavailable", async () => {
+    const { ApiError } = await import("../../src/services/apiClient");
+    mockTriggerInvestigation.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "full_loop_unavailable",
+        error_message: "analysis_only mode",
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    expect(await screen.findByTestId("investigate-mode-modal")).toBeInTheDocument();
+    await user.click(screen.getByText("开始调查"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/analysis_only 模式/)).toBeInTheDocument();
+    });
+  });
+
+  it("shows error toast with backend message on 503 task_unavailable", async () => {
+    const { ApiError } = await import("../../src/services/apiClient");
+    mockTriggerInvestigation.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "task_unavailable",
+        error_message: "Task unavailable",
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    expect(await screen.findByTestId("investigate-mode-modal")).toBeInTheDocument();
+    await user.click(screen.getByText("开始调查"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Task unavailable")).toBeInTheDocument();
+    });
+  });
+
+  it("shows fallback toast on unknown error_code", async () => {
+    const { ApiError } = await import("../../src/services/apiClient");
+    mockTriggerInvestigation.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "unknown_error",
+        error_message: "",
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    expect(await screen.findByTestId("investigate-mode-modal")).toBeInTheDocument();
+    await user.click(screen.getByText("开始调查"));
+
+    // Empty backend message -> falls back to error_code.
+    await waitFor(() => {
+      expect(screen.getByText("unknown_error")).toBeInTheDocument();
+    });
+  });
+
+  it("shows fallback toast on unexpected non-API error", async () => {
+    mockTriggerInvestigation.mockRejectedValueOnce(new Error("boom"));
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    expect(await screen.findByTestId("investigate-mode-modal")).toBeInTheDocument();
+    await user.click(screen.getByText("开始调查"));
+
+    await waitFor(() => {
+      expect(screen.getByText("调查触发失败")).toBeInTheDocument();
+    });
   });
 
   it("triggers full-loop investigation when selected", async () => {
