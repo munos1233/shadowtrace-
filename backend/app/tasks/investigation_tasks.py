@@ -104,8 +104,14 @@ async def execute_investigation(
     *,
     include_response_execution: bool = False,
     owner_id: str | None = None,
+    lease_acquired: bool = False,
 ) -> dict[str, str]:
-    """Run SuperAgent investigation (called from Celery worker via ``asyncio.run``)."""
+    """Run SuperAgent investigation (called from Celery worker via ``asyncio.run``).
+
+    When *lease_acquired* is True the HTTP layer already holds the lease for
+    *event_id* with *owner_id*; SuperAgent will skip its own acquire and only
+    start renewal (ISSUE-186).
+    """
     from app.api.v1.deps import _get_session_factory, get_super_agent
     from app.services.evidence_projection import EvidenceProjection, bind_evidence_projection
     from app.services.investigation_guidance import record_investigation_workflow_path
@@ -126,6 +132,7 @@ async def execute_investigation(
             await agent.investigate(
                 event_id,
                 owner_id=owner_id,
+                lease_acquired=lease_acquired,
                 include_response_execution=include_response_execution,
             )
         return {"status": "completed", "event_id": event_id}
@@ -145,14 +152,27 @@ async def dispatch_investigation(
     event_id: str,
     *,
     include_response_execution: bool = False,
+    owner_id: str | None = None,
+    lease_acquired: bool = False,
 ) -> str:
-    """Enqueue ``run_investigation`` and return the Celery task id."""
+    """Enqueue ``run_investigation`` and return the Celery task id.
+
+    When *owner_id* and *lease_acquired* are set the HTTP layer has already
+    acquired the lease; the worker will skip its own acquire (ISSUE-186).
+    """
     task_id = str(celery_uuid())
     await register_task_metadata(task_id, event_id)
     try:
+        kwargs: dict[str, object] = {
+            "include_response_execution": include_response_execution,
+        }
+        if owner_id is not None:
+            kwargs["owner_id"] = owner_id
+        if lease_acquired:
+            kwargs["lease_acquired"] = True
         run_investigation.apply_async(
             args=[event_id],
-            kwargs={"include_response_execution": include_response_execution},
+            kwargs=kwargs,
             task_id=task_id,
             queue=TASK_QUEUE,
         )
@@ -245,6 +265,7 @@ async def _run_investigation_body(
     include_response_execution: bool,
     owner_id: str,
     redelivered: bool,
+    lease_acquired: bool = False,
 ) -> dict[str, str]:
     if redelivered:
         skip, skip_reason = await evaluate_redelivered_investigation_skip(event_id)
@@ -263,6 +284,7 @@ async def _run_investigation_body(
         event_id,
         include_response_execution=include_response_execution,
         owner_id=owner_id,
+        lease_acquired=lease_acquired,
     )
 
 
@@ -280,16 +302,23 @@ def run_investigation(
     event_id: str,
     include_response_execution: bool = False,
     intent_id: str | None = None,
+    owner_id: str | None = None,
+    lease_acquired: bool = False,
 ) -> dict[str, str]:
-    """Execute SuperAgent investigation for *event_id* (idempotent when lease held)."""
-    owner_id = celery_task_owner_id(str(self.request.id))
+    """Execute SuperAgent investigation for *event_id* (idempotent when lease held).
+
+    When *owner_id* is set by the caller (HTTP-layer pre-lease, ISSUE-186) use it
+    directly; otherwise derive a stable owner from the Celery task id so redelivery
+    can reclaim the same lease.
+    """
+    resolved_owner = owner_id or celery_task_owner_id(str(self.request.id))
     redelivered = bool(getattr(self.request, "delivery_info", {}).get("redelivered"))
     if redelivered:
         logger.info(
             "run_investigation redelivery for event=%s task=%s owner=%s",
             event_id,
             self.request.id,
-            owner_id,
+            resolved_owner,
         )
     if intent_id:
         from app.models.investigation_intent import IntentDeliveryAdmission
@@ -314,8 +343,9 @@ def run_investigation(
                 _run_investigation_body(
                     event_id,
                     include_response_execution=bool(include_response_execution),
-                    owner_id=owner_id,
+                    owner_id=resolved_owner,
                     redelivered=redelivered,
+                    lease_acquired=lease_acquired,
                 )
             )
             if intent_id:

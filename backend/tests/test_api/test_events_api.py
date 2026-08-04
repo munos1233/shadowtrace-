@@ -1414,6 +1414,40 @@ async def test_investigate_duplicate_returns_409(
 
 
 @pytest.mark.asyncio
+async def test_investigate_duplicate_celery_mode_returns_409(
+    client: TestClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-186: repeated investigate in celery mode → 409 (align with background)."""
+    from app.api.v1 import events as events_module
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TASK_MODE", "celery")
+    get_settings.cache_clear()
+
+    event_id = await _create_test_event(event_service, title="Investigate celery duplicate 409")
+
+    class _BlockedLease:
+        async def acquire(self, _event_id: str, _owner_id: str, ttl_s: int = 600) -> bool:
+            return False
+
+        async def release(self, _event_id: str, _owner_id: str) -> bool:
+            return True
+
+    monkeypatch.setattr(events_module, "get_event_lease", lambda: _BlockedLease())
+
+    resp = client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=_hdr(),
+    )
+    assert resp.status_code == 409, resp.text
+    data = resp.json()
+    assert data["error_code"] == "investigation_in_progress"
+    assert data["details"]["event_id"] == event_id
+
+
+@pytest.mark.asyncio
 async def test_investigate_lease_unavailable_returns_503(
     client: TestClient,
     event_service: EventService,

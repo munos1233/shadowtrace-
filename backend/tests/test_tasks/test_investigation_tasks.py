@@ -228,6 +228,54 @@ async def test_dispatch_investigation_passes_include_response_flag(
     assert captured["kwargs"] == {"include_response_execution": True}
 
 
+@pytest.mark.asyncio
+async def test_dispatch_investigation_forwards_owner_id_and_lease_acquired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-186: dispatch_investigation threads owner_id + lease_acquired to the Celery task."""
+    monkeypatch.setattr(tasks, "register_task_metadata", _noop_register)
+    captured: dict[str, Any] = {}
+
+    def _fake_apply_async(*_args: Any, **kwargs: Any) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock(id=kwargs["task_id"])
+
+    monkeypatch.setattr(tasks.run_investigation, "apply_async", _fake_apply_async)
+
+    task_id = await tasks.dispatch_investigation(
+        "evt-dispatch-lease",
+        owner_id="owner-http-1",
+        lease_acquired=True,
+    )
+    assert task_id
+    assert captured["kwargs"] == {
+        "include_response_execution": False,
+        "owner_id": "owner-http-1",
+        "lease_acquired": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_investigation_omits_owner_id_when_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-186: backward compat — dispatch without owner_id emits only include_response."""
+    monkeypatch.setattr(tasks, "register_task_metadata", _noop_register)
+    captured: dict[str, Any] = {}
+
+    def _fake_apply_async(*_args: Any, **kwargs: Any) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock(id=kwargs["task_id"])
+
+    monkeypatch.setattr(tasks.run_investigation, "apply_async", _fake_apply_async)
+
+    task_id = await tasks.dispatch_investigation("evt-dispatch-no-owner")
+    assert task_id
+    assert captured["kwargs"] == {"include_response_execution": False}
+    assert "owner_id" not in captured["kwargs"]
+    assert "lease_acquired" not in captured["kwargs"]
+
+
 def test_publish_investigation_for_intent_forwards_include_response_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -642,3 +690,75 @@ def test_celery_retries_exhausted_marks_intent_retry(
             assert row.status == InvestigationIntentStatus.RETRY.value
 
     asyncio.run(_verify())
+
+
+@pytest.mark.asyncio
+async def test_execute_investigation_forwards_lease_acquired_to_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-186: execute_investigation passes lease_acquired through to agent.investigate."""
+    seen: dict[str, Any] = {}
+
+    async def _investigate(event_id: str, **kwargs: Any) -> None:
+        seen["event_id"] = event_id
+        seen["owner_id"] = kwargs.get("owner_id")
+        seen["lease_acquired"] = kwargs.get("lease_acquired")
+        seen["include_response_execution"] = kwargs.get("include_response_execution")
+
+    async def _fake_super_agent() -> Any:
+        agent = MagicMock()
+        agent.investigate = _investigate
+        return agent
+
+    monkeypatch.setattr("app.api.v1.deps.get_super_agent", _fake_super_agent)
+    monkeypatch.setattr(
+        "app.services.evidence_projection.bind_evidence_projection",
+        lambda _projection: _null_context(),
+    )
+    monkeypatch.setattr(
+        "app.services.evidence_projection.EvidenceProjection",
+        lambda _factory: MagicMock(),
+    )
+
+    result = await tasks.execute_investigation(
+        "evt-lease-acquired",
+        owner_id="owner-http-2",
+        lease_acquired=True,
+        include_response_execution=True,
+    )
+    assert result == {"status": "completed", "event_id": "evt-lease-acquired"}
+    assert seen == {
+        "event_id": "evt-lease-acquired",
+        "owner_id": "owner-http-2",
+        "lease_acquired": True,
+        "include_response_execution": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_investigation_defaults_lease_acquired_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-186: backward compat — execute_investigation without lease_acquired defaults False."""
+    seen: dict[str, Any] = {}
+
+    async def _investigate(event_id: str, **kwargs: Any) -> None:
+        seen["lease_acquired"] = kwargs.get("lease_acquired")
+
+    async def _fake_super_agent() -> Any:
+        agent = MagicMock()
+        agent.investigate = _investigate
+        return agent
+
+    monkeypatch.setattr("app.api.v1.deps.get_super_agent", _fake_super_agent)
+    monkeypatch.setattr(
+        "app.services.evidence_projection.bind_evidence_projection",
+        lambda _projection: _null_context(),
+    )
+    monkeypatch.setattr(
+        "app.services.evidence_projection.EvidenceProjection",
+        lambda _factory: MagicMock(),
+    )
+
+    await tasks.execute_investigation("evt-default-lease")
+    assert seen["lease_acquired"] is False

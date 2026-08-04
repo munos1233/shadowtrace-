@@ -812,12 +812,32 @@ async def investigate_event(
         background.add_task(_run_pipeline)
         task_id = event_id
     elif task_mode == "celery":
+        from app.orchestration.lease import generate_owner_id
         from app.tasks.investigation_tasks import dispatch_investigation
 
-        task_id = await dispatch_investigation(
-            event_id,
-            include_response_execution=include_response,
-        )
+        lease = get_event_lease()
+        owner_id = generate_owner_id()
+        try:
+            acquired = await lease.acquire(event_id, owner_id)
+        except DependencyUnavailableError:
+            raise
+        if not acquired:
+            raise InvestigationInProgressError(
+                message="investigation already in progress for this event",
+                error_code="investigation_in_progress",
+                details={"event_id": event_id},
+            )
+
+        try:
+            task_id = await dispatch_investigation(
+                event_id,
+                include_response_execution=include_response,
+                owner_id=owner_id,
+                lease_acquired=True,
+            )
+        except Exception:
+            await lease.release(event_id, owner_id)
+            raise
     else:
         lease = get_event_lease()
         from app.orchestration.lease import generate_owner_id
