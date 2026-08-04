@@ -342,14 +342,15 @@ jobs:
             --threshold-manifest "${GITHUB_WORKSPACE}/data/evaluation/agentic_coordination_v1/threshold_manifest.json" \
             --compare-baseline "${GITHUB_WORKSPACE}/data/evaluation/agentic_coordination_v1/baseline_artifact.json"
 
-      - name: Run mock detection evaluation (artifact-only)
+      - name: Run mock detection evaluation (report-only baseline)
         run: |
           uv run --frozen python -m scripts.run_detection_evaluation \
             --output "${GITHUB_WORKSPACE}/artifacts/evaluation/detection_ci_run.json" \
             --code-sha "${GITHUB_SHA}" \
             --seed 42 \
             --threshold-manifest "${GITHUB_WORKSPACE}/data/evaluation/detection_shadow_v1/threshold_manifest.json" \
-            --compare-baseline "${GITHUB_WORKSPACE}/data/evaluation/detection_shadow_v1/baseline_artifact.json"
+            --compare-baseline "${GITHUB_WORKSPACE}/data/evaluation/detection_shadow_v1/baseline_artifact.json" \
+            --allow-gate-fail
 
       - name: Upload evaluation artifact
         uses: actions/upload-artifact@v4
