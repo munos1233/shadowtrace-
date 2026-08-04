@@ -83,6 +83,25 @@ async def test_build_investigation_agents_wires_event_bus(monkeypatch: pytest.Mo
         "app.tools.executor.get_tool_executor",
         lambda: MagicMock(),
     )
+    # Probe of the (mock) playbook release runs a DB query on the stub
+    # session; short-circuit it like test_retrieval_pipeline_wiring does.
+    from app.playbook.resources import LoadedPlaybookResources
+
+    mock_playbook_resources = LoadedPlaybookResources(
+        status="ready",
+        mode="test",
+        playbook_kb_service=MagicMock(),
+        playbook_release_service=MagicMock(),
+        active_release_id="pbrel-test",
+    )
+    monkeypatch.setattr(
+        "app.playbook.resources.get_loaded_playbook_resources",
+        lambda **_kwargs: mock_playbook_resources,
+    )
+    monkeypatch.setattr(
+        "app.playbook.resources.probe_playbook_resources",
+        AsyncMock(return_value=mock_playbook_resources),
+    )
     monkeypatch.setattr(
         "app.core.embedding.service.EmbeddingService",
         lambda *_a, **_k: MagicMock(),
@@ -159,6 +178,7 @@ async def test_planner_and_response_receive_event_bus(monkeypatch: pytest.Monkey
         "settings": settings,
         "wm": MagicMock(for_writer=MagicMock(return_value=MagicMock())),
         "llm_client": MagicMock(),
+        "convergence_guard": MagicMock(),
         "budget_service": MagicMock(),
         "output_guard": MagicMock(),
         "trace_service": MagicMock(),
@@ -176,6 +196,7 @@ async def test_planner_and_response_receive_event_bus(monkeypatch: pytest.Monkey
         "session_factory": MagicMock(),
         "state_machine": MagicMock(),
         "degraded_flags": MagicMock(),
+        "react_executor_factory": MagicMock(),
     }
     monkeypatch.setattr(deps, "_get_investigation_stack", AsyncMock(return_value=fake_stack))
     monkeypatch.setattr(deps, "get_event_lease", lambda: MagicMock())

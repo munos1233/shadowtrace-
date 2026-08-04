@@ -198,6 +198,7 @@ class AnalysisOnlyPipeline:
         agent_task_service: Any | None = None,
         agent_artifact_service: Any | None = None,
         content_projection_service: Any | None = None,
+        convergence_guard: Any | None = None,
     ) -> None:
         self._triage = triage_agent
         self._evidence = evidence_agent
@@ -214,6 +215,7 @@ class AnalysisOnlyPipeline:
         self._agent_task_service = agent_task_service
         self._agent_artifact_service = agent_artifact_service
         self._content_projection_service = content_projection_service
+        self._convergence_guard = convergence_guard
 
         # Back-compat aliases for ISSUE-047 unit tests.
         self.triage_agent = triage_agent
@@ -226,6 +228,49 @@ class AnalysisOnlyPipeline:
         self.settings = settings
 
     async def run(
+        self,
+        event_id: str,
+        *,
+        raw_event_summary: str = "",
+        hint_entities: Any | None = None,
+    ) -> AnalysisOnlyPipelineResult:
+        """Execute the analysis-only pipeline for *event_id*.
+
+        ISSUE-168: the pipeline shares the production ConvergenceGuard with the
+        LLM client / ToolExecutor, so the counters are released when the run
+        finishes (success or failure) — matching the SuperAgent terminal-state
+        reset contract (ISSUE-052), otherwise a re-investigation of the same
+        event would start from stale counters and the in-process ``_states``
+        dict would grow unboundedly.
+        """
+        try:
+            return await self._run(
+                event_id,
+                raw_event_summary=raw_event_summary,
+                hint_entities=hint_entities,
+            )
+        finally:
+            self._reset_convergence_guard(event_id)
+
+    def _reset_convergence_guard(self, event_id: str) -> None:
+        """Release convergence counters for *event_id* after the run.
+
+        Mirrors ``SuperAgent._reset_convergence_guard``: guard internals must
+        never break the pipeline, so a failure here is only logged.
+        """
+        guard = self._convergence_guard
+        if guard is None:
+            return
+        try:
+            guard.reset(event_id)
+        except Exception:
+            logger.debug(
+                "AnalysisOnlyPipeline: convergence_guard.reset failed for event=%s",
+                event_id,
+                exc_info=True,
+            )
+
+    async def _run(
         self,
         event_id: str,
         *,

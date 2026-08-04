@@ -666,6 +666,7 @@ async def _build_investigation_agents() -> dict[str, Any]:
     from app.core.embedding.factory import get_embedding_client
     from app.core.guardrails import OutputGuard
     from app.core.llm.factory import get_llm_client
+    from app.orchestration.convergence_guard import ConvergenceGuard
     from app.services.agent_trace_service import AgentTraceService
     from app.services.budget_service import BudgetService
     from app.services.case_kb_service import CaseKBService
@@ -688,9 +689,29 @@ async def _build_investigation_agents() -> dict[str, Any]:
         decision_record_service=_get_decision_record_service(),
         degraded_flag_service=_get_degraded_flags(),
     )
-    llm_client = get_llm_client(settings=settings, budget_service=budget_service)
+    # ISSUE-168: construct ONE ConvergenceGuard for the whole investigation
+    # stack and share it across the SuperAgent graph, the LLM client and the
+    # ToolExecutor so MAX_* / stop conditions apply to tool and LLM traffic
+    # uniformly (production DI must not leave NoopConvergenceGuard in place).
+    convergence_guard = ConvergenceGuard(
+        working_memory=wm.for_writer("ConvergenceGuard"),
+    )
+    llm_client = get_llm_client(
+        settings=settings,
+        budget_service=budget_service,
+        # ConvergenceGuardHook declares a sync record_step while ConvergenceGuard
+        # is async — BaseLLMClient._check_convergence dispatches via
+        # _is_async_callable, so the mismatch is runtime-compatible.
+        convergence_guard=convergence_guard,  # type: ignore[arg-type]
+    )
     tool_executor = get_tool_executor()
     tool_executor.budget_service = budget_service
+    # Same instance on the executor singleton (replacing the default
+    # NoopConvergenceGuard), mirroring the budget_service swap above.
+    # ConvergenceGuard.should_stop returns StopDecision (bool-like via
+    # __bool__) while ConvergenceGuardPort declares bool — structurally
+    # compatible at runtime, so silence the static mismatch here.
+    tool_executor.convergence_guard = convergence_guard  # type: ignore[assignment]
     if isinstance(tool_executor.audit_service, NullAuditService):
         tool_executor.audit_service = _get_tool_call_log_service()
 
@@ -869,6 +890,7 @@ async def _build_investigation_agents() -> dict[str, Any]:
         "degraded_flags": _get_degraded_flags(),
         "budget_service": budget_service,
         "output_guard": output_guard,
+        "convergence_guard": convergence_guard,
         "llm_client": llm_client,
         "tool_executor": tool_executor,
         "evidence_tool_executor": evidence_tool_executor,
@@ -907,6 +929,11 @@ async def get_pipeline() -> Any:
             agent_task_service=_get_agent_task_service(),
             agent_artifact_service=_get_agent_artifact_service(),
             content_projection_service=_get_content_projection_service(),
+            # ISSUE-168: the pipeline runs the same LLM client / ToolExecutor
+            # as the investigation stack, so it must own the shared guard's
+            # lifecycle (reset after each run) instead of leaving counters
+            # behind for re-investigations of the same event.
+            convergence_guard=stack["convergence_guard"],
         )
     return _pipeline
 
@@ -927,7 +954,6 @@ async def get_super_agent() -> Any:
     if _super_agent is None:
         from app.agents.planner_agent import PlannerAgent
         from app.agents.super_agent import SuperAgent
-        from app.orchestration.convergence_guard import ConvergenceGuard
 
         stack = await _get_investigation_stack()
         settings = stack["settings"]
@@ -941,9 +967,10 @@ async def get_super_agent() -> Any:
             trace_service=stack["trace_service"],
             event_bus=_get_event_bus(),
         )
-        convergence_guard = ConvergenceGuard(
-            working_memory=wm.for_writer("ConvergenceGuard"),
-        )
+        # ISSUE-168: reuse the single guard wired during stack assembly so the
+        # LLM client / ToolExecutor / investigation graph all share one counter
+        # set instead of a second, disconnected instance.
+        convergence_guard = stack["convergence_guard"]
         investigation_graph = await _build_production_investigation_graph(
             planner_agent=planner,
             convergence_guard=convergence_guard,

@@ -789,6 +789,10 @@ def get_tool_executor() -> ToolExecutor:
 
     Production wiring must replace ``NullAuditService`` with a real
     ``ToolCallLogService`` (and inject EventBus / job store as needed).
+    The default ``NoopConvergenceGuard`` must also be replaced with the
+    shared ``ConvergenceGuard`` from the investigation stack (ISSUE-168)
+    so tool traffic counts against the same MAX_* / stop thresholds as the
+    LLM client and the SuperAgent graph.
     """
     global tool_executor
     if tool_executor is None:
