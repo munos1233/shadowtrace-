@@ -84,12 +84,15 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
     "account_anomaly_fp": ScenarioExpectation(
         scenario_id="account_anomaly_fp",
         event_type=EventType.ACCOUNT_ANOMALY,
-        # Demo pack is an ops-change FP in narrative; golden/rule paths lack post-evidence
-        # close_as_fp (ISSUE-114), so automated verdict is threat or advisory FP only.
+        # Demo pack is an ops-change FP in narrative; golden path may land threat/advisory FP.
+        # Rule-fallback (LLM fail): score bands stay <70 without post-evidence close_as_fp
+        # (ISSUE-114), so VerdictResolver → NONE. #675 also downgrades
+        # evidence_limited+CONFIRMED_THREAT → NONE when that path applies.
         verdict=FinalVerdict.CONFIRMED_THREAT,
         acceptable_verdicts=(
             FinalVerdict.CONFIRMED_THREAT,
             FinalVerdict.POSSIBLE_FALSE_POSITIVE,
+            FinalVerdict.NONE,
         ),
         # Regression golden baseline: confirmed_threat @ 71 (ISSUE-099 enrichment).
         risk_min=65,
@@ -108,8 +111,10 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
         acceptable_verdicts=(
             FinalVerdict.CONFIRMED_THREAT,
             FinalVerdict.POSSIBLE_FALSE_POSITIVE,
+            FinalVerdict.NONE,
         ),
         # Regression golden baseline: confirmed_threat @ 70.
+        # Rule-fallback band is <70 → NONE is expected (same as host_compromise pack).
         risk_min=65,
         risk_max=75,
         rule_fallback_risk_min=40,
@@ -188,8 +193,10 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
         acceptable_verdicts=(
             FinalVerdict.CONFIRMED_THREAT,
             FinalVerdict.POSSIBLE_FALSE_POSITIVE,
+            FinalVerdict.NONE,
         ),
         # Regression golden baseline: confirmed_threat @ 71.
+        # Rule-fallback band is <70 → NONE is expected under ISSUE-035 score gate.
         risk_min=65,
         risk_max=75,
         rule_fallback_risk_min=45,

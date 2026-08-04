@@ -159,7 +159,12 @@ async def assert_main_chain_expectations(
 
     if event.final_verdict is not None:
         assert event.final_verdict in spec.acceptable_verdicts, (
-            f"unexpected verdict {event.final_verdict} for {spec.scenario_id}"
+            f"unexpected verdict {event.final_verdict} for {spec.scenario_id}; "
+            f"risk_score={event.risk_score} ctx_score={risk_score_ctx} "
+            f"scoring_mode={scoring_mode} "
+            f"evidence_limited={risk_ctx.get('evidence_limited')} "
+            f"high_source_evidence_limited={risk_ctx.get('high_source_evidence_limited')} "
+            f"acceptable={tuple(v.value for v in spec.acceptable_verdicts)}"
         )
 
     if event.risk_score is not None:
