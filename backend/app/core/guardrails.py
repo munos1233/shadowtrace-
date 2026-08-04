@@ -720,6 +720,39 @@ def _scan_analysis_content(
     return findings
 
 
+# ISSUE-188: outbound message_code is a short code / enum only. Free-form
+# provider messages must stay internal (job / audit). Anything that is not a
+# short safe code phrase is replaced with a deterministic placeholder so
+# narrative / over-length text can never reach the outbound envelope. The Mock
+# main path emits short lowercase phrases (e.g. "isolate success"), which must
+# pass unchanged.
+_MESSAGE_CODE_MAX_LENGTH = 64
+_MESSAGE_CODE_PATTERN = re.compile(r"^[a-z0-9_\- .]+$")
+_MESSAGE_CODE_FALLBACK = "message_truncated"
+
+
+def allowlisted_message_code(value: str | None) -> str | None:
+    """Constrain an outbound ``message_code`` to a short safe code (ISSUE-188).
+
+    Returns ``None`` for absent values, the trimmed value when it is a short
+    safe code phrase, and ``message_truncated`` when the value is over-length,
+    contains analysis/secret markers, or carries characters that are not valid
+    in a code. Long text remains in the internal job / audit trail.
+    """
+    if not value:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if (
+        len(stripped) > _MESSAGE_CODE_MAX_LENGTH
+        or not _MESSAGE_CODE_PATTERN.match(stripped)
+        or bool(_scan_analysis_content(stripped))
+    ):
+        return _MESSAGE_CODE_FALLBACK
+    return stripped
+
+
 class OutboundDispositionGuard:
     """Fail-closed outbound disposition / outbox guard (never warn-only)."""
 
@@ -836,6 +869,23 @@ class OutboundDispositionGuard:
                     )
                 )
 
+        if command is not None:
+            for index, target in enumerate(command.target_results):
+                if target.message_code is None:
+                    continue
+                if allowlisted_message_code(target.message_code) != target.message_code:
+                    violations.append(
+                        GuardViolation(
+                            dimension=GuardRailDimension.SANITIZATION,
+                            rule_name="outbound_message_code_allowlist",
+                            severity="block",
+                            detail=(
+                                f"target_results[{index}].message_code is not a "
+                                "short allowlisted code"
+                            ),
+                        )
+                    )
+
         analysis_hits = _scan_analysis_content(
             raw,
             skip_key_check_for=_DISPOSITION_ALLOWED_TOP_LEVEL,
@@ -878,5 +928,6 @@ __all__ = [
     "OutboundDispositionGuard",
     "OutputGuard",
     "WorkingMemoryGuardViolationWriter",
+    "allowlisted_message_code",
     "entity_identity_values",
 ]

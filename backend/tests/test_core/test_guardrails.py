@@ -30,7 +30,11 @@ from app.models.agent_io import (
     VerificationPhase,
     VerificationResult,
 )
-from app.models.disposition import DispositionCommand, SourceObjectLocator
+from app.models.disposition import (
+    DispositionCommand,
+    SourceObjectLocator,
+    TargetDispositionResult,
+)
 from app.models.entities import EntitySet, IPEntity
 from app.models.enums import (
     ActionCategory,
@@ -40,6 +44,7 @@ from app.models.enums import (
     ExecutionOwner,
     Severity,
     SourceObjectKind,
+    TargetExecutionStatus,
     WritebackReadiness,
 )
 from app.models.report import InvestigationReport, ReportSection
@@ -329,6 +334,62 @@ async def test_outbound_guard_accepts_clean_command() -> None:
     outbound = OutboundDispositionGuard()
     result = await outbound.validate(
         _command(),
+        {
+            "source_locator": _locator(),
+            "approved_action_ids": {"act-1"},
+        },
+    )
+    assert result.passed is True
+
+
+def _result_record_command(message_code: str | None) -> DispositionCommand:
+    return _command(
+        intent_kind=DispositionIntentKind.EXECUTION_RESULT_RECORD,
+        operation_code="record_execution_result",
+        operation_params={
+            "operation_code": "record_execution_result",
+            "summary_code": "isolate_success",
+        },
+        execution_owner=ExecutionOwner.DIRECT_TOOL,
+        target_results=[
+            TargetDispositionResult(
+                canonical_target="host:host-1",
+                status=TargetExecutionStatus.SUCCESS,
+                provider_code="isolate_success",
+                message_code=message_code,
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_guard_blocks_narrative_message_code() -> None:
+    # Long narrative WITHOUT analysis markers is exactly the gap the analysis
+    # scan misses; the message_code allowlist must still block it (ISSUE-188).
+    narrative = (
+        "the host was compromised by a sophisticated attacker who exfiltrated "
+        "credentials and moved laterally to a second internal network segment"
+    )
+    outbound = OutboundDispositionGuard()
+    with pytest.raises(GuardrailViolationError) as exc_info:
+        await outbound.validate(
+            _result_record_command(narrative),
+            {
+                "event_id": "evt-out",
+                "source_locator": _locator(),
+                "approved_action_ids": {"act-1"},
+            },
+        )
+    names = {item["rule_name"] for item in exc_info.value.details["violations"]}
+    assert "outbound_message_code_allowlist" in names
+    assert "no_analysis_content_outbound" not in names
+
+
+@pytest.mark.asyncio
+async def test_outbound_guard_accepts_short_message_code() -> None:
+    outbound = OutboundDispositionGuard()
+    result = await outbound.validate(
+        _result_record_command("isolate success"),
         {
             "source_locator": _locator(),
             "approved_action_ids": {"act-1"},

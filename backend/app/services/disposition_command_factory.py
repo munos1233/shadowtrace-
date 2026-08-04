@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.agents.response_agent import compute_source_locator_hash
+from app.core.guardrails import allowlisted_message_code
 from app.models.action import Action
 from app.models.disposition import (
     DispositionCommand,
@@ -26,7 +27,9 @@ class DispositionCommandFactory:
     """Rebuild outbound commands from approved Action fields only.
 
     Never copies ``Action.reason``, free-form ``parameters``, or Provider
-    ``raw_result`` into outbound payloads.
+    ``raw_result`` into outbound payloads. Provider ``message`` text is only
+    forwarded as a short allowlisted ``message_code`` (ISSUE-188); long /
+    narrative text stays in the internal job and audit trail.
     """
 
     def build_entity_action_submit(
@@ -111,7 +114,7 @@ class DispositionCommandFactory:
                     else TargetExecutionStatus.FAILED
                 ),
                 provider_code=result.code,
-                message_code=result.message,
+                message_code=allowlisted_message_code(result.message),
                 artifact_ref=result.artifact_id,
             )
             for result in job.target_results
