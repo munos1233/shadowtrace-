@@ -337,8 +337,9 @@ async def _validate_writeback_gate(
 
     from app.api.v1.deps import _get_session_factory
 
+    session_factory = _get_session_factory()
     readiness, wb_status, _pending = await _build_writeback_info(
-        event_id, event.disposition_policy, _get_session_factory()
+        event_id, event.disposition_policy, session_factory
     )
     if readiness == WritebackReadiness.NOT_CONFIGURED:
         raise WritebackUnsupportedError(
@@ -364,6 +365,20 @@ async def _validate_writeback_gate(
         raise WritebackConflictError(
             "writeback conflict",
             details={"event_id": event_id},
+        )
+
+    # ISSUE-171: the event-level aggregate above can pass while a per-action
+    # gap remains (an applicable Action without a disposition command, or
+    # outbox rows that are not all CONFIRMED / have NULL status).  Pre-check
+    # with the same predicate the StateMachine CLOSED gate applies so the
+    # failure is early and the error surface matches the authoritative gate.
+    from app.services.state_machine_service import event_closed_gate_blockers
+
+    blockers = await event_closed_gate_blockers(session_factory, event_id)
+    if blockers:
+        raise WritebackPendingError(
+            "required writeback intents are not all confirmed",
+            details={"event_id": event_id, "blockers": blockers},
         )
 
 

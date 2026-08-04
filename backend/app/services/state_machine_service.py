@@ -29,6 +29,7 @@ from app.core.errors import (
 from app.core.event_bus import EventBus
 from app.db import models as orm
 from app.models.enums import (
+    TERMINAL_SOURCE_DISPOSITIONS,
     ActionCategory,
     ActionExecutionPhase,
     ActionStatus,
@@ -278,6 +279,118 @@ async def _all_intents_confirmed_for_action(session: AsyncSession, action_id: st
     if not outboxes:
         return False
     return all(o.latest_writeback_status == WritebackStatus.CONFIRMED.value for o in outboxes)
+
+
+def closed_gate_blockers_for_views(
+    views: list[ClosedGateActionView],
+) -> list[str]:
+    """Return per-action blocking reasons for the required CLOSED writeback gate.
+
+    ISSUE-171: shared predicate — the Close API pre-check and the
+    StateMachine CLOSED gate (``models/workflow.py validate_closed_gate``)
+    must agree on which required writeback Actions block CLOSED.  Keep this
+    in sync with the authoritative gate conditions.
+    """
+    reasons: list[str] = []
+    for action in views:
+        if not (
+            action.writeback_required
+            and action.writeback_applicable
+            and action.action_category in (ActionCategory.RESPONSE, ActionCategory.ROLLBACK)
+            and not action.superseded
+            and not action.rejected
+        ):
+            continue
+        if action.writeback_readiness is not WritebackReadiness.READY:
+            reasons.append(
+                f"action {action.action_id} readiness is not READY "
+                f"({action.writeback_readiness.value})"
+            )
+            continue
+        if not action.has_command:
+            reasons.append(f"action {action.action_id} has no disposition command")
+            continue
+        if not action.all_required_intents_confirmed:
+            reasons.append(
+                f"action {action.action_id} required intents are not all CONFIRMED"
+            )
+            continue
+        if action.writeback_status is not WritebackStatus.CONFIRMED:
+            reasons.append(
+                f"action {action.action_id} writeback status is "
+                f"{getattr(action.writeback_status, 'value', 'none')}"
+            )
+    return reasons
+
+
+def terminal_gate_blockers(
+    terminal: TerminalEventWritebackView | None,
+    *,
+    current_revision: int | None,
+    current_closure_cycle: int | None,
+) -> list[str]:
+    """Return blocking reasons for the terminal EVENT_STATUS_UPDATE checks,
+    aligned with ``validate_closed_gate`` (models/workflow.py).
+
+    ISSUE-171: keeps the Close API pre-check on the same rejection set as the
+    authoritative StateMachine gate — including the terminal writeback that
+    must close a required cycle.
+    """
+    if terminal is None:
+        return ["missing terminal EVENT_STATUS_UPDATE writeback"]
+    reasons: list[str] = []
+    if terminal.intent_kind is not DispositionIntentKind.EVENT_STATUS_UPDATE:
+        reasons.append(
+            f"terminal writeback intent is {terminal.intent_kind.value} "
+            "(not EVENT_STATUS_UPDATE)"
+        )
+    if current_revision is not None and terminal.plan_revision != current_revision:
+        reasons.append("terminal writeback does not bind current plan_revision")
+    if current_closure_cycle is not None and terminal.closure_cycle != current_closure_cycle:
+        reasons.append("terminal writeback closure_cycle mismatch")
+    if terminal.approved_disposition not in TERMINAL_SOURCE_DISPOSITIONS:
+        reasons.append(
+            f"terminal approved disposition {terminal.approved_disposition.value} is not terminal"
+        )
+    if terminal.actual_disposition not in TERMINAL_SOURCE_DISPOSITIONS:
+        reasons.append(
+            f"terminal actual disposition {terminal.actual_disposition.value} is not terminal"
+        )
+    if terminal.receipt_status is not WritebackStatus.CONFIRMED:
+        reasons.append(
+            f"terminal receipt status is {terminal.receipt_status.value} (not CONFIRMED)"
+        )
+    return reasons
+
+
+async def event_closed_gate_blockers(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_id: str,
+) -> list[str]:
+    """Build the same applicable-action projection the StateMachine CLOSED
+    gate consumes and return blocking reasons (empty list = gate passes).
+
+    ISSUE-171: lets the Close API pre-check fail early with the same
+    semantics as the authoritative transition gate, instead of a later,
+    differently-shaped error.
+    """
+    async with session_factory() as session:
+        current_revision = await session.scalar(
+            select(func.max(orm.Action.plan_revision)).where(orm.Action.event_id == event_id)
+        )
+        views = await _build_closed_gate_actions(session, event_id, current_revision)
+        reasons = closed_gate_blockers_for_views(views)
+
+        terminal = await _build_terminal_writeback_view(session, event_id, current_revision)
+        current_closure_cycle = await _read_closure_cycle(session, event_id)
+        reasons.extend(
+            terminal_gate_blockers(
+                terminal,
+                current_revision=current_revision,
+                current_closure_cycle=current_closure_cycle,
+            )
+        )
+        return reasons
 
 
 async def _action_has_job_or_outbox(session: AsyncSession, action_id: str) -> bool:
