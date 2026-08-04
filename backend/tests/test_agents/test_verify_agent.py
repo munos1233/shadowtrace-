@@ -38,6 +38,7 @@ from app.models.agent_io import (
     ResponsePlanGeneratedBy,
     VerificationOverallStatus,
     VerificationPhase,
+    VerificationResult,
     VerifyAgentInput,
 )
 from app.models.enums import (
@@ -4612,3 +4613,34 @@ def _mock_executor(results: dict[str, ToolResult]) -> Any:
         )
 
     return MagicMock(call=AsyncMock(side_effect=call))
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-169: shared OutputGuard contract
+# --------------------------------------------------------------------------- #
+
+
+async def test_apply_guardrails_passes_structured_verification_result() -> None:
+    """A well-formed VerificationResult passes the shared OutputGuard."""
+    from app.core.guardrails import GuardrailMode, OutputGuard
+
+    guard = OutputGuard(mode=GuardrailMode.ENFORCE)
+    agent = VerifyAgent(output_guard=guard)
+    ok = VerificationResult(
+        overall_status=VerificationOverallStatus.SUCCESS,
+        verification_phase=VerificationPhase.EFFECT,
+    )
+    # _apply_guardrails re-validates the model after sanitization, so the
+    # result is an equal-but-not-identical instance.
+    assert await agent._apply_guardrails(ok) == ok
+
+
+async def test_apply_guardrails_blocks_unstructured_verification_output() -> None:
+    """Unstructured verification output is blocked like the other agents."""
+    from app.core.errors import GuardrailViolationError
+    from app.core.guardrails import GuardrailMode, OutputGuard
+
+    guard = OutputGuard(mode=GuardrailMode.ENFORCE)
+    agent = VerifyAgent(output_guard=guard)
+    with pytest.raises(GuardrailViolationError, match="output guard blocked"):
+        await agent._apply_guardrails({"overall_status": "SUCCESS"})

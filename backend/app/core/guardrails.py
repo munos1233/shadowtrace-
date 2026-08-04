@@ -505,6 +505,10 @@ GUARD_RULES: dict[str, list[GuardRule]] = {
         "no_pii_leak",
     ),
     "rag_agent": _quality_rules("schema", "citation_present", "no_pii_leak"),
+    # ISSUE-169: VerifyAgent joined the shared OutputGuard contract. Schema
+    # keeps verification output structured; grounding / PII rules do not apply
+    # to VerificationResult fields, so they are intentionally not enabled.
+    "verify_agent": _quality_rules("schema"),
 }
 
 

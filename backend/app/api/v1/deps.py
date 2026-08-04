@@ -477,6 +477,9 @@ async def _build_production_investigation_graph(
         session_factory=stack["session_factory"],
         event_disposition_service=await get_event_disposition_service(),
         disposition_sync_service=await get_disposition_sync(),
+        # ISSUE-169: align with ResponseAgent and the other production agents —
+        # verification structured output must run through the same OutputGuard.
+        output_guard=stack["output_guard"],
     )
     agents = {
         "triage_agent": stack["triage"],

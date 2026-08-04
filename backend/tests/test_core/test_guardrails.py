@@ -25,6 +25,9 @@ from app.models.agent_io import (
     RiskAssessment,
     RiskFactor,
     ScoringMode,
+    VerificationOverallStatus,
+    VerificationPhase,
+    VerificationResult,
 )
 from app.models.disposition import DispositionCommand, SourceObjectLocator
 from app.models.entities import EntitySet, IPEntity
@@ -441,3 +444,24 @@ async def test_citation_present_for_rag_output() -> None:
     )
     result = await guard.validate("rag_agent", ok, {"event_id": "evt-cite-ok"})
     assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_verify_agent_schema_rule_passes_structured_result() -> None:
+    """VerifyAgent (ISSUE-169) must pass a well-formed VerificationResult."""
+    guard = OutputGuard(mode=GuardrailMode.ENFORCE)
+    ok = VerificationResult(
+        overall_status=VerificationOverallStatus.SUCCESS,
+        verification_phase=VerificationPhase.EFFECT,
+    )
+    result = await guard.validate("verify_agent", ok, {"event_id": "evt-verify-ok"})
+    assert result.passed is True
+    assert result.violations == []
+
+
+@pytest.mark.asyncio
+async def test_verify_agent_schema_rule_blocks_unstructured_output() -> None:
+    """VerifyAgent must be blocked when its output is not a structured model."""
+    guard = OutputGuard(mode=GuardrailMode.ENFORCE)
+    with pytest.raises(GuardrailViolationError, match="output guard blocked"):
+        await guard.validate("verify_agent", {"overall_status": "SUCCESS"}, {"event_id": "evt-bad"})
