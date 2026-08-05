@@ -15,7 +15,7 @@ import {
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ReloadOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { canPromoteKnowledgeReviews } from "../config/auth";
@@ -94,6 +94,8 @@ function isForbiddenError(err: unknown): boolean {
 }
 
 export default function KnowledgeReviewPage() {
+  const [searchParams] = useSearchParams();
+  const eventIdFilter = searchParams.get("event_id")?.trim() || undefined;
   const [items, setItems] = useState<MemoryReviewItem[]>([]);
   const [total, setTotal] = useState(0);
   const [kbFilterInput, setKbFilterInput] = useState("");
@@ -196,6 +198,11 @@ export default function KnowledgeReviewPage() {
       setActionReviewId(null);
     }
   };
+
+  const visibleItems = useMemo(() => {
+    if (!eventIdFilter) return items;
+    return items.filter((item) => readSourceEventId(item) === eventIdFilter);
+  }, [eventIdFilter, items]);
 
   const columns: ColumnsType<MemoryReviewItem> = useMemo(() => {
     const base: ColumnsType<MemoryReviewItem> = [
@@ -301,11 +308,12 @@ export default function KnowledgeReviewPage() {
     return base;
   }, [actionReviewId, canDecide, handlePromote, openRejectModal]);
 
-  const hasClosedLoopTypes = items.some(
+  const hasClosedLoopTypes = visibleItems.some(
     (item) => item.candidate_type === "fp_rule" || item.candidate_type === "history_case",
   );
   const hasProfileOnly =
-    items.length > 0 && items.every((item) => item.candidate_type === "profile");
+    visibleItems.length > 0 &&
+    visibleItems.every((item) => item.candidate_type === "profile");
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -336,6 +344,20 @@ export default function KnowledgeReviewPage() {
           type="warning"
           showIcon
           message="当前账号仅可查看待审核列表，入库/拒绝需 approver 角色。"
+        />
+      )}
+
+      {eventIdFilter && (
+        <Alert
+          type="info"
+          showIcon
+          message={`按事件筛选：${eventIdFilter}`}
+          description={
+            visibleItems.length === 0
+              ? "该事件暂无 pending 候选（或 API 未返回相关记录）。"
+              : `显示 ${visibleItems.length} / ${total} 条候选。`
+          }
+          data-testid="knowledge-review-event-filter"
         />
       )}
 
@@ -381,7 +403,7 @@ export default function KnowledgeReviewPage() {
         <Table
           rowKey="review_id"
           columns={columns}
-          dataSource={items}
+          dataSource={visibleItems}
           loading={loading}
           pagination={false}
           scroll={{ x: 1100 }}

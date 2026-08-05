@@ -20,6 +20,8 @@ import { triageContextFromSnapshot } from "../utils/evidenceContext";
 import ReportViewer from "../components/report/ReportViewer";
 import { coerceInvestigationReport } from "../types/report";
 import EventOverviewCard from "../components/event/EventOverviewCard";
+import EventOperationalInsights from "../components/event/EventOperationalInsights";
+import EventTodoBar from "../components/event/EventTodoBar";
 import InvestigationPhaseBanner from "../components/event/InvestigationPhaseBanner";
 import EntityList from "../components/event/EntityList";
 import EvidenceList from "../components/event/EvidenceList";
@@ -30,7 +32,8 @@ import StorylineTimeline from "../components/storyline/StorylineTimeline";
 import EventAuditPanel from "../components/audit/EventAuditPanel";
 import EventChatPanel from "../components/chat/EventChatPanel";
 import { isEventChatEnabled } from "../config/features";
-import { useEffect, useMemo } from "react";
+import { listMemoryReviews } from "../services/knowledgeApi";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEventDetail, type EventWriteback } from "../hooks/useEventDetail";
 import type { Action } from "../types/action";
 import type {
@@ -444,6 +447,43 @@ export default function EventDetailPage() {
     refresh,
   } = useEventDetail(eventId);
   const selectedTab = activeTab(location.hash);
+  const [pendingMemoryReviewCount, setPendingMemoryReviewCount] = useState(0);
+
+  const navigateTab = useCallback(
+    (tabKey: string) => {
+      navigate(
+        { pathname: location.pathname, search: location.search, hash: tabKey },
+        { replace: true },
+      );
+    },
+    [location.pathname, location.search, navigate],
+  );
+
+  // Pending memory reviews: API has no event_id filter yet; client-side match only.
+  useEffect(() => {
+    if (!eventId) return;
+    let cancelled = false;
+    void listMemoryReviews()
+      .then((response) => {
+        if (cancelled) return;
+        const count = response.data.items.filter((item) => {
+          if (item.status !== "pending") return false;
+          const payload = item.payload;
+          const sourceEventId =
+            (typeof payload.event_id === "string" && payload.event_id) ||
+            (typeof payload.source_event_id === "string" && payload.source_event_id) ||
+            "";
+          return sourceEventId === eventId;
+        }).length;
+        setPendingMemoryReviewCount(count);
+      })
+      .catch(() => {
+        if (!cancelled) setPendingMemoryReviewCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, event?.event.updated_at]);
 
   useEffect(() => {
     const raw = location.hash.replace(/^#/, "");
@@ -678,6 +718,22 @@ export default function EventDetailPage() {
       </Space>
       <EventOverviewCard detail={event} />
       <InvestigationPhaseBanner detail={event} />
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={14}>
+          <EventTodoBar
+            detail={event}
+            actions={actions}
+            writebacks={writebacks}
+            evidenceDetail={evidenceDetail}
+            pendingMemoryReviewCount={pendingMemoryReviewCount}
+            onNavigateTab={navigateTab}
+            onRefresh={() => refresh("all")}
+          />
+        </Col>
+        <Col xs={24} xl={10}>
+          <EventOperationalInsights detail={event} writebacks={writebacks} />
+        </Col>
+      </Row>
       <AgentStatusPanel
         eventId={eventId}
         eventStatus={event.event.status}

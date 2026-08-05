@@ -244,18 +244,28 @@ export function useEventDetail(eventId: string | undefined) {
       if (
         socketEvent.type === "risk_updated" ||
         socketEvent.type === "state_change" ||
-        socketEvent.type === "final_verdict_updated"
+        socketEvent.type === "final_verdict_updated" ||
+        socketEvent.type === "report_generated"
       ) {
         void refresh("event");
       } else if (
         socketEvent.type === "action_executed" ||
-        socketEvent.type === "action_verified"
+        socketEvent.type === "action_verified" ||
+        socketEvent.type === "approval_required" ||
+        socketEvent.type === "approval_updated"
       ) {
         void refresh("actions");
+        if (
+          socketEvent.type === "approval_required" ||
+          socketEvent.type === "approval_updated"
+        ) {
+          void refresh("event");
+        }
       } else if (socketEvent.type === "disposition_submitted") {
         void refresh("dispositions");
       } else if (socketEvent.type === "writeback_updated") {
         void refresh("writebacks");
+        void refresh("event");
       }
     });
     return unsubscribe;

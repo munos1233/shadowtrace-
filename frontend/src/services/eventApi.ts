@@ -3,6 +3,7 @@
 import apiClient from "./apiClient";
 import type {
   AttackStoryline,
+  EventCloseRequest,
   EventDetailResponse,
   EventEvidenceResponse,
   EventListParams,
@@ -73,9 +74,10 @@ export function getHealth() {
   }>("/health");
 }
 
-export function closeEvent(eventId: string) {
+export function closeEvent(eventId: string, body: EventCloseRequest) {
   return apiClient.post<{ event_id: string; status: string }>(
     `/events/${eventId}/close`,
+    body,
   );
 }
 

@@ -621,6 +621,13 @@ export interface DetectionContextProjectionErrorSummary {
   recorded_at?: string | null;
 }
 
+export interface EventCloseRequest {
+  reason: string;
+  final_verdict?: FinalVerdict;
+  need_investigation?: boolean;
+  force_local_close?: boolean;
+}
+
 export interface EventDetailResponse {
   event: SecurityEvent;
   writeback_required: boolean;

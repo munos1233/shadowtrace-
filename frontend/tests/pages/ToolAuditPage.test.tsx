@@ -238,6 +238,7 @@ describe("DecisionTraceTimeline", () => {
     expect(screen.getByText("91%")).toBeInTheDocument();
     expect(screen.getByText("需要人工复核")).toBeInTheDocument();
     expect(screen.getByText("XDR receipt #17")).toBeInTheDocument();
+    expect(screen.getAllByText("success").length).toBeGreaterThan(0);
     expect(
       screen.queryByText("must-not-render-hidden-reasoning"),
     ).not.toBeInTheDocument();

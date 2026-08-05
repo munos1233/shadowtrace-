@@ -60,28 +60,94 @@ function AgentDecisionBasis({ entry }: { entry: DecisionTraceEntry }) {
   );
 }
 
+function NonAgentTraceDetail({ entry }: { entry: DecisionTraceEntry }) {
+  const detail = entry.detail;
+  const rows: Array<{ label: string; value: unknown }> = [];
+
+  const push = (label: string, ...keys: string[]) => {
+    for (const key of keys) {
+      if (detail[key] !== undefined && detail[key] !== null && detail[key] !== "") {
+        rows.push({ label, value: detail[key] });
+        return;
+      }
+    }
+  };
+
+  switch (entry.entry_type) {
+    case "tool_call":
+      push("工具", "tool_name");
+      push("状态", "status");
+      push("耗时 (ms)", "duration_ms");
+      push("结果摘要", "result_summary", "summary", "message");
+      break;
+    case "llm_call":
+      push("模型", "model_name", "model");
+      push("状态", "status");
+      push("Tokens", "tokens_used", "total_tokens");
+      push("输出摘要", "output_summary", "summary");
+      break;
+    case "state_transition":
+      push("原状态", "from_status");
+      push("新状态", "to_status");
+      push("原因", "reason", "message");
+      break;
+    case "approval":
+      push("动作 ID", "action_id");
+      push("状态", "status", "decision");
+      push("说明", "comment", "summary");
+      break;
+    case "action_execution":
+      push("动作 ID", "action_id");
+      push("动作名", "action_name");
+      push("状态", "status");
+      push("目标", "target");
+      break;
+    case "disposition":
+      push("disposition_id", "disposition_id");
+      push("intent", "intent_kind");
+      push("状态", "status");
+      break;
+    case "writeback":
+      push("状态", "status");
+      push("confirmation_evidence", "confirmation_evidence");
+      push("disposition_id", "disposition_id");
+      break;
+    default:
+      break;
+  }
+
+  if (rows.length === 0) {
+    const hasDetail = Object.keys(detail).length > 0;
+    if (!hasDetail) {
+      return (
+        <Typography.Text type="secondary" style={{ marginTop: 8, display: "block" }}>
+          无结构化详情
+        </Typography.Text>
+      );
+    }
+    return (
+      <div style={{ marginTop: 8 }}>
+        <JsonTree value={detail} />
+      </div>
+    );
+  }
+
+  return (
+    <Descriptions size="small" column={1} style={{ marginTop: 8 }}>
+      {rows.map((row) => (
+        <Descriptions.Item key={row.label} label={row.label}>
+          {textList(row.value)}
+        </Descriptions.Item>
+      ))}
+    </Descriptions>
+  );
+}
+
 function TraceDetail({ entry }: { entry: DecisionTraceEntry }) {
   if (entry.entry_type === "agent_execution") {
     return <AgentDecisionBasis entry={entry} />;
   }
-  if (entry.entry_type === "writeback") {
-    return (
-      <Descriptions size="small" column={1} style={{ marginTop: 8 }}>
-        <Descriptions.Item label="状态">{textList(entry.detail.status)}</Descriptions.Item>
-        <Descriptions.Item label="confirmation_evidence">
-          {textList(entry.detail.confirmation_evidence)}
-        </Descriptions.Item>
-        <Descriptions.Item label="disposition_id">
-          {textList(entry.detail.disposition_id)}
-        </Descriptions.Item>
-      </Descriptions>
-    );
-  }
-  return (
-    <div style={{ marginTop: 8 }}>
-      <JsonTree value={entry.detail} />
-    </div>
-  );
+  return <NonAgentTraceDetail entry={entry} />;
 }
 
 export default function DecisionTraceTimeline({

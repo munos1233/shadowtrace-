@@ -19,6 +19,10 @@ const mockGetWriteback = vi.fn();
 const mockGetDecisionTrace = vi.fn();
 const mockGetEventToolCalls = vi.fn();
 const mockGetTrajectory = vi.fn();
+const mockCloseEvent = vi.fn();
+const mockResolveUnknownAction = vi.fn();
+const mockResolveWriteback = vi.fn();
+const mockListMemoryReviews = vi.fn();
 
 vi.mock("../../src/services/eventApi", () => ({
   getEvent: (...args: unknown[]) => mockGetEvent(...args),
@@ -31,6 +35,13 @@ vi.mock("../../src/services/eventApi", () => ({
   getSourceRecord: (...args: unknown[]) => mockGetSourceRecord(...args),
   getExecutionJob: (...args: unknown[]) => mockGetExecutionJob(...args),
   getWriteback: (...args: unknown[]) => mockGetWriteback(...args),
+  closeEvent: (...args: unknown[]) => mockCloseEvent(...args),
+  resolveUnknownAction: (...args: unknown[]) => mockResolveUnknownAction(...args),
+  resolveWriteback: (...args: unknown[]) => mockResolveWriteback(...args),
+}));
+
+vi.mock("../../src/services/knowledgeApi", () => ({
+  listMemoryReviews: (...args: unknown[]) => mockListMemoryReviews(...args),
 }));
 
 vi.mock("../../src/services/auditApi", () => ({
@@ -241,6 +252,7 @@ function renderPage(initialPath = "/events/evt-70#source") {
 describe("EventDetailPage", () => {
   afterEach(() => {
     cleanup();
+    vi.unstubAllEnvs();
     useAgentStatusStore.getState().stopWatching();
     socketHandlers.clear();
     socketHandler = undefined;
@@ -344,6 +356,10 @@ describe("EventDetailPage", () => {
     });
     mockGetExecutionJob.mockResolvedValue({ data: {} });
     mockGetWriteback.mockResolvedValue({ data: {} });
+    mockCloseEvent.mockResolvedValue({ data: { event_id: "evt-70", status: "closed" } });
+    mockResolveUnknownAction.mockResolvedValue({ data: {} });
+    mockResolveWriteback.mockResolvedValue({ data: {} });
+    mockListMemoryReviews.mockResolvedValue({ data: { total: 0, items: [] } });
     mockGetDecisionTrace.mockResolvedValue({
       data: {
         event_id: "evt-70",
@@ -664,7 +680,171 @@ describe("EventDetailPage", () => {
     const banner = await screen.findByTestId("analysis-phase-banner");
     expect(banner).toBeInTheDocument();
     expect(screen.getByText("分析已完成，处置方案未生成")).toBeInTheDocument();
-    expect(screen.getByText("分析已完成，未生成/执行处置方案。")).toBeInTheDocument();
+    expect(screen.getAllByText("分析已完成，未生成/执行处置方案。").length).toBeGreaterThan(0);
     expect(screen.queryByTestId("start-response-execution-cta")).not.toBeInTheDocument();
+  });
+
+  it("shows todo bar with report pending and operational insights", async () => {
+    mockGetEvent.mockResolvedValue({
+      data: {
+        ...makeDetail({ status: "reporting", degraded_flags: ["llm_degraded"] }),
+        analysis_only_complete: true,
+        phase_message: "分析已完成，请生成报告。",
+        next_recommended_action: "none",
+      },
+    });
+
+    renderPage("/events/evt-70");
+    expect(await screen.findByTestId("event-todo-bar")).toBeInTheDocument();
+    expect(screen.getByText("待生成报告")).toBeInTheDocument();
+    expect(screen.getByTestId("event-operational-insights")).toBeInTheDocument();
+    expect(screen.getByText("分析已完成，请生成报告。")).toBeInTheDocument();
+    expect(screen.getByTestId("event-degraded-flags")).toHaveTextContent("llm_degraded");
+  });
+
+  it("navigates to audit tab from decision basis todo", async () => {
+    const user = userEvent.setup();
+    mockGetEvent.mockResolvedValue({
+      data: {
+        ...makeDetail({ status: "reporting" }),
+        analysis_only_complete: true,
+      },
+    });
+    renderPage("/events/evt-70");
+    expect(await screen.findByTestId("event-todo-bar")).toBeInTheDocument();
+    await user.click(screen.getByTestId("todo-nav-decision-basis"));
+    expect(screen.getByTestId("location-hash")).toHaveTextContent("#audit");
+  });
+
+  it("closes event with reason via todo bar", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst");
+    const user = userEvent.setup();
+    const detail = makeDetail({ status: "reporting" });
+    detail.next_recommended_action = "close";
+    detail.event.event_context_snapshot = {
+      ...detail.event.event_context_snapshot!,
+      report: { report_id: "evt-70", summary: "ready" },
+    };
+    mockGetEvent.mockResolvedValue({ data: detail });
+
+    renderPage("/events/evt-70");
+    const closeButton = await screen.findByTestId("event-close-button");
+    await waitFor(() => expect(closeButton).not.toBeDisabled());
+    await user.click(closeButton);
+    await user.click(screen.getByRole("button", { name: "确认结案" }));
+    await waitFor(() =>
+      expect(mockCloseEvent).toHaveBeenCalledWith("evt-70", {
+        reason: "operator closed from event detail",
+      }),
+    );
+  });
+
+  it("resolves unknown action from todo bar", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "admin");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue({
+      data: {
+        total: 1,
+        page: 1,
+        page_size: 100,
+        items: [
+          {
+            action_id: "act-unknown",
+            event_id: "evt-70",
+            action_name: "block_ip",
+            action_category: "security",
+            tool_name: "mock_tool",
+            status: "unknown",
+            target: "1.2.3.4",
+            execution_owner: "DIRECT_TOOL",
+            execution_phase: "immediate",
+            created_at: "2026-08-01T00:00:00Z",
+            updated_at: "2026-08-01T00:00:00Z",
+          },
+        ],
+      },
+    });
+    mockGetEvent.mockResolvedValue({
+      data: {
+        ...makeDetail({ status: "executing_response" }),
+        execution_substate: "manual_resolution",
+      },
+    });
+    renderPage("/events/evt-70");
+    expect(await screen.findByText("写回待处理")).toBeInTheDocument();
+    await user.click(screen.getByTestId("event-resolve-unknown-button"));
+    await user.type(screen.getByLabelText("裁决说明"), "人工确认外部已生效");
+    await user.click(screen.getByRole("button", { name: "提交裁决" }));
+    await waitFor(() =>
+      expect(mockResolveUnknownAction).toHaveBeenCalledWith("act-unknown", {
+        resolution: "manual_confirmed",
+        comment: "人工确认外部已生效",
+      }),
+    );
+  });
+
+  it("disables resolve-unknown for non-admin roles", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst");
+    mockListActions.mockResolvedValue({
+      data: {
+        total: 1,
+        page: 1,
+        page_size: 100,
+        items: [
+          {
+            action_id: "act-unknown",
+            event_id: "evt-70",
+            action_name: "block_ip",
+            action_category: "security",
+            tool_name: "mock_tool",
+            status: "unknown",
+            target: "1.2.3.4",
+            execution_owner: "DIRECT_TOOL",
+            execution_phase: "immediate",
+            created_at: "2026-08-01T00:00:00Z",
+            updated_at: "2026-08-01T00:00:00Z",
+          },
+        ],
+      },
+    });
+    mockGetEvent.mockResolvedValue({
+      data: {
+        ...makeDetail({ status: "executing_response" }),
+        execution_substate: "manual_resolution",
+      },
+    });
+    renderPage("/events/evt-70");
+    const resolveButton = await screen.findByTestId("event-resolve-unknown-button");
+    expect(resolveButton).toBeDisabled();
+    expect(screen.getByText("裁决 UNKNOWN 需 admin 角色")).toBeInTheDocument();
+  });
+
+  it("refreshes detail after writeback_updated socket event", async () => {
+    renderPage();
+    expect(await screen.findByText("异常管理员登录")).toBeInTheDocument();
+    const callsBefore = mockGetEvent.mock.calls.length;
+    emitSocketEvent({
+      type: "writeback_updated",
+      event_id: "evt-70",
+      payload: { writeback_id: "wbk-1", status: "confirmed" },
+    });
+    await waitFor(() => expect(mockGetEvent.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it("refreshes detail after report_generated socket event", async () => {
+    renderPage();
+    expect(await screen.findByText("异常管理员登录")).toBeInTheDocument();
+    const callsBefore = mockGetEvent.mock.calls.length;
+    mockGetEvent.mockResolvedValueOnce({
+      data: makeDetail({
+        status: "reporting",
+        event_context_snapshot: {
+          ...makeDetail().event.event_context_snapshot,
+          report: { report_id: "evt-70", summary: "generated" },
+        },
+      }),
+    });
+    emitSocketEvent({ type: "report_generated", event_id: "evt-70", payload: {} });
+    await waitFor(() => expect(mockGetEvent.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 });

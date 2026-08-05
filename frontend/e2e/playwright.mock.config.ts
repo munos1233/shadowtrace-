@@ -10,7 +10,7 @@ const AUTH_TOKEN = process.env.E2E_AUTH_TOKEN ?? "e2e-token";
 
 export default defineConfig({
   testDir: path.join(__dirname, "tests"),
-  testMatch: "**/knowledge-review.spec.ts",
+  testMatch: ["**/knowledge-review.spec.ts", "**/event-todo-bar.spec.ts"],
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
