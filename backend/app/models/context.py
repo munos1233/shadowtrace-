@@ -86,3 +86,5 @@ class EventContext(BaseModel):
     triage_degraded: dict[str, Any] | None = None
     graph_degraded: dict[str, Any] | None = None
     storyline_degraded: dict[str, Any] | None = None
+    # ISSUE-209: durable human classification override (not a machine-write path).
+    classification_override: dict[str, Any] | None = None

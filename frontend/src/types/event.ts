@@ -34,6 +34,8 @@ export type EventType =
   | "lateral_movement"
   | "other";
 
+export type ClassificationSource = "source" | "heuristic" | "llm_fallback" | "human";
+
 export type DispositionPolicy = "required" | "not_required";
 
 export type WritebackReadiness =
@@ -529,6 +531,7 @@ export interface EventListItem {
   created_at: string | null;
   updated_at: string | null;
   occurred_at: string | null;
+  classification_source?: ClassificationSource;
 }
 
 export interface EventListResponse {
@@ -581,6 +584,7 @@ export interface SecurityEvent {
   external_unsynced: boolean;
   event_context_snapshot: EventContextSnapshot | null;
   row_version: number;
+  classification_source?: ClassificationSource | null;
 }
 
 export type ResponsePhaseState =

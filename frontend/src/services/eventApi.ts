@@ -8,6 +8,7 @@ import type {
   EventEvidenceResponse,
   EventListParams,
   EventListResponse,
+  EventType,
   GraphOutput,
   ConnectorsResponse,
   DispositionListResponse,
@@ -36,6 +37,33 @@ export function listEvents(params?: EventListParams) {
 
 export function getEvent(eventId: string) {
   return apiClient.get<EventDetailResponse>(`/events/${eventId}`);
+}
+
+export interface ClassificationUpdateRequest {
+  event_type: EventType;
+  reason: string;
+  reinvestigate?: boolean;
+}
+
+export interface ClassificationUpdateResponse {
+  event_id: string;
+  event_type: EventType;
+  classification_source: "human";
+  previous_event_type?: EventType | null;
+  reinvestigate_requested: boolean;
+  reinvestigate_started: boolean;
+  side_effects: string[];
+}
+
+export function patchEventClassification(
+  eventId: string,
+  body: ClassificationUpdateRequest,
+) {
+  return apiClient.patch<ClassificationUpdateResponse>(
+    `/events/${eventId}/classification`,
+    body,
+    { skipGlobalErrorToast: true },
+  );
 }
 
 export function getTimeline(eventId: string) {

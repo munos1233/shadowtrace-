@@ -91,6 +91,28 @@ class InvestigateRequest(_StrictRequest):
     include_response_execution: bool = False
 
 
+class ClassificationUpdateRequest(_StrictRequest):
+    """PATCH /events/{id}/classification body (ISSUE-209)."""
+
+    event_type: EventType
+    reason: str = Field(min_length=1, max_length=500)
+    reinvestigate: bool = False
+
+
+class ClassificationUpdateResponse(BaseModel):
+    """PATCH classification response with documented reinvestigate side effects."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    event_type: EventType
+    classification_source: Literal["human"] = "human"
+    previous_event_type: EventType | None = None
+    reinvestigate_requested: bool = False
+    reinvestigate_started: bool = False
+    side_effects: list[str] = Field(default_factory=list)
+
+
 class EventCloseRequest(_StrictRequest):
     reason: str
     final_verdict: FinalVerdict | None = None

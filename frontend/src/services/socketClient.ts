@@ -198,7 +198,8 @@ class SocketClient {
       type === "agent_progress" ||
       type === "agent_completed" ||
       type === "agent_failed" ||
-      type === "report_generated"
+      type === "report_generated" ||
+      type === "classification_updated"
     ) {
       this.emit({ type, event_id, payload });
     }

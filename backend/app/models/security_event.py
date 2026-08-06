@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.disposition import SourceObjectLocator
 from app.models.entities import EntitySet
 from app.models.enums import (
+    ClassificationSource,
     DispositionPolicy,
     EventStatus,
     EventType,
@@ -64,6 +65,8 @@ class SecurityEvent(BaseModel):
     external_unsynced: bool = False
     event_context_snapshot: dict[str, Any] | None = None
     row_version: int = Field(default=1, ge=1)
+    # Derived on API GET (ISSUE-209); not an ORM-persisted column.
+    classification_source: ClassificationSource | None = None
 
 
 class EventListItem(BaseModel):
@@ -93,6 +96,8 @@ class EventListItem(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     occurred_at: datetime | None = None
+    # Derived read-only provenance (ISSUE-209); default source when unset.
+    classification_source: ClassificationSource = ClassificationSource.SOURCE
 
 
 class EventSummary(EventListItem):

@@ -67,6 +67,7 @@ from app.models.enums import (
     WritebackStatus,
 )
 from app.models.workflow import TransitionContext
+from app.services.classification import derive_classification_source
 from app.services.decision_trace_service import DecisionTraceService
 from app.services.investigation_guidance import (
     derive_investigation_guidance,
@@ -557,6 +558,10 @@ async def list_events(
                 created_at=event.created_at,
                 updated_at=event.updated_at,
                 occurred_at=event.occurred_at,
+                classification_source=derive_classification_source(
+                    degraded_flags=list(event.degraded_flags or []),
+                    event_context_snapshot=event.event_context_snapshot,
+                ),
             )
         )
     return s.EventListResponse(
@@ -758,40 +763,17 @@ async def _acquire_investigation_lease(event_id: str) -> tuple[Any, str]:
     return lease, owner_id
 
 
-# --------------------------------------------------------------------------- #
-# POST /events/{event_id}/investigate — start analysis
-# --------------------------------------------------------------------------- #
-
-
-@router.post(
-    "/events/{event_id}/investigate",
-    response_model=s.InvestigateResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def investigate_event(
+async def _schedule_investigation(
+    *,
     event_id: str,
     background: BackgroundTasks,
-    principal: Annotated[Principal, require_roles(ROLE_ANALYST)],
-    body: s.InvestigateRequest | None = None,
-    event_service: EventService = Depends(get_event_service),
-    state_machine: StateMachineService = Depends(get_state_machine),
-) -> s.InvestigateResponse:
-    event = await event_service.get_event(event_id)
-    if event is None:
-        raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
-
+    state_machine: StateMachineService,
+    include_response: bool = False,
+) -> str:
+    """Acquire lease and schedule analysis (shared by investigate + reinvestigate)."""
     settings = get_settings()
     mode = (settings.orchestration_mode or "graph").strip().lower()
     task_mode = (settings.task_mode or "background").strip().lower()
-    include_response = bool(body.include_response_execution) if body else False
-
-    if event.status is not EventStatus.NEW:
-        raise InvalidStateTransitionError(
-            f"event must be in NEW status to start investigation, current: {event.status.value}",
-            current=event.status,
-            target=EventStatus.TRIAGING,
-            details={"event_id": event_id},
-        )
 
     if mode == "analysis_only" and include_response:
         raise ValidationError(
@@ -835,7 +817,6 @@ async def investigate_event(
                     await pipeline.run(event_id)
                 await _record_workflow_path()
             except (InvestigationInProgressError, InvalidStateTransitionError) as exc:
-                # Concurrent loser or stale state — do not poison a live investigation.
                 logger.warning(
                     "AnalysisOnlyPipeline skipped for event=%s (concurrent or stale): %s",
                     event_id,
@@ -860,14 +841,15 @@ async def investigate_event(
                 await lease.release(event_id, owner_id)
 
         background.add_task(_run_pipeline)
-        task_id = event_id
-    elif task_mode == "celery":
+        return event_id
+
+    if task_mode == "celery":
         from app.tasks.investigation_tasks import dispatch_investigation
 
         lease, owner_id = await _acquire_investigation_lease(event_id)
 
         try:
-            task_id = await dispatch_investigation(
+            return await dispatch_investigation(
                 event_id,
                 include_response_execution=include_response,
                 owner_id=owner_id,
@@ -876,62 +858,183 @@ async def investigate_event(
         except Exception:
             await lease.release(event_id, owner_id)
             raise
-    else:
-        lease, owner_id = await _acquire_investigation_lease(event_id)
 
-        async def _run_super_agent() -> None:
-            investigate_started = False
+    lease, owner_id = await _acquire_investigation_lease(event_id)
+
+    async def _run_super_agent() -> None:
+        investigate_started = False
+        try:
+            from app.services.evidence_projection import (
+                EvidenceProjection,
+                bind_evidence_projection,
+            )
+
+            agent = await get_super_agent()
+            projection = EvidenceProjection(_get_session_factory())
+            with bind_evidence_projection(projection):
+                investigate_started = True
+                await agent.investigate(
+                    event_id,
+                    owner_id=owner_id,
+                    lease_acquired=True,
+                    include_response_execution=include_response,
+                )
+            await _record_workflow_path()
+        except InvestigationInProgressError:
+            logger.warning(
+                "SuperAgent lost lease for event=%s before start",
+                event_id,
+            )
+            await lease.release(event_id, owner_id)
+        except InvestigationLeaseLostError:
+            logger.info(
+                "SuperAgent stopped — lease lost mid-run event=%s",
+                event_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Background SuperAgent failed for event=%s: %s",
+                event_id,
+                exc,
+            )
             try:
-                from app.services.evidence_projection import (
-                    EvidenceProjection,
-                    bind_evidence_projection,
-                )
-
-                agent = await get_super_agent()
-                projection = EvidenceProjection(_get_session_factory())
-                with bind_evidence_projection(projection):
-                    investigate_started = True
-                    await agent.investigate(
-                        event_id,
-                        owner_id=owner_id,
-                        lease_acquired=True,
-                        include_response_execution=include_response,
-                    )
-                await _record_workflow_path()
-            except InvestigationInProgressError:
-                logger.warning(
-                    "SuperAgent lost lease for event=%s before start",
+                await state_machine.transition(
                     event_id,
+                    EventStatus.FAILED,
+                    operator="SuperAgent",
+                    reason=f"super_agent_failed: {exc}",
                 )
+            except Exception:
+                logger.exception("Failed to mark event as FAILED: %s", event_id)
+        finally:
+            if not investigate_started:
                 await lease.release(event_id, owner_id)
-            except InvestigationLeaseLostError:
-                # SuperAgent releases the HTTP-held lease in its own finally;
-                # do NOT transition to FAILED (ISSUE-182 / ISSUE-189).
-                logger.info(
-                    "SuperAgent stopped — lease lost mid-run event=%s",
-                    event_id,
-                )
-            except Exception as exc:
-                logger.error(
-                    "Background SuperAgent failed for event=%s: %s",
-                    event_id,
-                    exc,
-                )
-                try:
-                    await state_machine.transition(
-                        event_id,
-                        EventStatus.FAILED,
-                        operator="SuperAgent",
-                        reason=f"super_agent_failed: {exc}",
-                    )
-                except Exception:
-                    logger.exception("Failed to mark event as FAILED: %s", event_id)
-            finally:
-                if not investigate_started:
-                    await lease.release(event_id, owner_id)
 
-        background.add_task(_run_super_agent)
-        task_id = event_id
+    background.add_task(_run_super_agent)
+    return event_id
+
+
+# --------------------------------------------------------------------------- #
+# PATCH /events/{event_id}/classification — analyst override (ISSUE-209)
+# --------------------------------------------------------------------------- #
+
+
+@router.patch(
+    "/events/{event_id}/classification",
+    response_model=s.ClassificationUpdateResponse,
+)
+async def update_event_classification(
+    event_id: str,
+    body: s.ClassificationUpdateRequest,
+    background: BackgroundTasks,
+    principal: Annotated[Principal, require_roles(ROLE_ANALYST)],
+    event_service: EventService = Depends(get_event_service),
+    state_machine: StateMachineService = Depends(get_state_machine),
+) -> s.ClassificationUpdateResponse:
+    """Override ``event_type`` with audit trail; optional controlled reinvestigate.
+
+    ``reinvestigate=true`` side effects (documented):
+    - Only starts when status is ``NEW`` (acquires investigation lease + schedules
+      analysis pipeline / SuperAgent / Celery task — same path as POST investigate).
+    - Does **not** invent a silent mid-flight replan; later response planning will
+      naturally bump ``plan_revision`` if a new plan is produced after re-analysis.
+    - Locked statuses ``executing_response`` / ``verifying`` return 409
+      ``classification_conflict_active_investigation`` (no silent type change).
+    """
+    existing = await event_service.get_event(event_id)
+    if existing is None:
+        raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
+    previous_type = existing.event_type
+
+    updated = await event_service.update_classification(
+        event_id,
+        event_type=body.event_type,
+        reason=body.reason,
+        operator=principal.subject,
+        reinvestigate=bool(body.reinvestigate),
+    )
+
+    side_effects = [
+        "event_type_updated",
+        "classification_source=human",
+        "audit_logged",
+        "classification_override_persisted",
+    ]
+    reinvestigate_started = False
+    if body.reinvestigate:
+        if updated.status is EventStatus.NEW:
+            await _schedule_investigation(
+                event_id=event_id,
+                background=background,
+                state_machine=state_machine,
+                include_response=False,
+            )
+            reinvestigate_started = True
+            side_effects.extend(
+                [
+                    "investigation_lease_acquired",
+                    "analysis_pipeline_scheduled",
+                    "note:subsequent_response_plan_bumps_plan_revision",
+                ]
+            )
+        else:
+            side_effects.append(
+                "reinvestigate_not_started:status_not_new;"
+                "classification_saved;"
+                "start_POST_investigate_when_eligible_or_await_replan_path;"
+                "next_response_plan_would_bump_plan_revision"
+            )
+
+    return s.ClassificationUpdateResponse(
+        event_id=event_id,
+        event_type=updated.event_type,
+        classification_source="human",
+        previous_event_type=previous_type,
+        reinvestigate_requested=bool(body.reinvestigate),
+        reinvestigate_started=reinvestigate_started,
+        side_effects=side_effects,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# POST /events/{event_id}/investigate — start analysis
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/events/{event_id}/investigate",
+    response_model=s.InvestigateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def investigate_event(
+    event_id: str,
+    background: BackgroundTasks,
+    principal: Annotated[Principal, require_roles(ROLE_ANALYST)],
+    body: s.InvestigateRequest | None = None,
+    event_service: EventService = Depends(get_event_service),
+    state_machine: StateMachineService = Depends(get_state_machine),
+) -> s.InvestigateResponse:
+    event = await event_service.get_event(event_id)
+    if event is None:
+        raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
+
+    settings = get_settings()
+    include_response = bool(body.include_response_execution) if body else False
+
+    if event.status is not EventStatus.NEW:
+        raise InvalidStateTransitionError(
+            f"event must be in NEW status to start investigation, current: {event.status.value}",
+            current=event.status,
+            target=EventStatus.TRIAGING,
+            details={"event_id": event_id},
+        )
+
+    task_id = await _schedule_investigation(
+        event_id=event_id,
+        background=background,
+        state_machine=state_machine,
+        include_response=include_response,
+    )
 
     return s.InvestigateResponse(
         event_id=event_id,

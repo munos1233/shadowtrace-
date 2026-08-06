@@ -68,6 +68,17 @@
       "title": "AccountEntity",
       "type": "object"
     },
+    "ClassificationSource": {
+      "description": "Read-only provenance of ``SecurityEvent.event_type`` (ISSUE-209 / #754).\n\nDerived on GET; never a parallel machine-write store. Machine signals stay\nin ``event_type_from_*`` degraded_flags (ISSUE-197); human PATCH persists a\nseparate ``classification_override`` marker.",
+      "enum": [
+        "source",
+        "heuristic",
+        "llm_fallback",
+        "human"
+      ],
+      "title": "ClassificationSource",
+      "type": "string"
+    },
     "DispositionPolicy": {
       "enum": [
         "required",
@@ -907,6 +918,17 @@
       "minimum": 1,
       "title": "Row Version",
       "type": "integer"
+    },
+    "classification_source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClassificationSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

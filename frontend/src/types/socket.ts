@@ -76,7 +76,8 @@ export type EventDetailSocketEventType =
   | "agent_progress"
   | "agent_completed"
   | "agent_failed"
-  | "report_generated";
+  | "report_generated"
+  | "classification_updated";
 
 export type SocketEvent =
   | { type: "event_created"; event_id: string; payload: SocketEventCreatedPayload }

@@ -129,6 +129,8 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "memory_review_not_found": ErrorCategory.USER_INPUT,
     "memory_review_conflict": ErrorCategory.PERMANENT,
     "memory_governance_bypass_blocked": ErrorCategory.USER_INPUT,
+    # ISSUE-209 — classification override conflicts with active response/verify
+    "classification_conflict_active_investigation": ErrorCategory.PERMANENT,
     # Generic dependency / domain defaults used by subclasses
     "dependency_unavailable": ErrorCategory.TRANSIENT,
     "task_unavailable": ErrorCategory.TRANSIENT,
@@ -488,6 +490,15 @@ class InvestigationInProgressError(ShadowTraceError):
 
     status_code = 409
     default_error_code = "investigation_in_progress"
+    default_category = ErrorCategory.PERMANENT
+    default_retryable = False
+
+
+class ClassificationConflictError(ShadowTraceError):
+    """Classification PATCH blocked during active response/verify (ISSUE-209)."""
+
+    status_code = 409
+    default_error_code = "classification_conflict_active_investigation"
     default_category = ErrorCategory.PERMANENT
     default_retryable = False
 

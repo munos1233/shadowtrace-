@@ -21,7 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.v1.schemas import EventSummary
 from app.core.config import get_settings
-from app.core.errors import DependencyUnavailableError, EventNotFoundError, ValidationError
+from app.core.errors import (
+    ClassificationConflictError,
+    DependencyUnavailableError,
+    EventNotFoundError,
+    ValidationError,
+)
 from app.core.event_bus import EventBus
 from app.db import models as orm
 from app.models.action import Action
@@ -34,6 +39,7 @@ from app.models.detection_promotion import (
 from app.models.disposition import SourceObjectLocator
 from app.models.entities import EntitySet
 from app.models.enums import (
+    ClassificationSource,
     DispositionPolicy,
     EventStatus,
     EventType,
@@ -56,6 +62,13 @@ from app.services.context_service import (
     append_context_journal_in_session,
     event_summary_from_security_event,
 )
+from app.services.classification import (
+    CLASSIFICATION_OVERRIDE_KEY,
+    TRIAGE_RESULT_KEY,
+    apply_event_type_to_triage_payload,
+    build_human_classification_override,
+    derive_classification_source,
+)
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.entity_validator import validate_entity_set
 from app.services.evidence_projection import EvidenceQueryScope
@@ -73,6 +86,14 @@ LINK_ROLE_RELATED = "related"
 LINK_ROLE_PROVISIONAL = "provisional"
 PROMOTION_NONE = "none"
 PROMOTION_PROMOTED = "promoted"
+
+# ISSUE-209: classification PATCH is locked during active response/verify.
+_CLASSIFICATION_LOCKED_STATUSES: frozenset[EventStatus] = frozenset(
+    {
+        EventStatus.EXECUTING_RESPONSE,
+        EventStatus.VERIFYING,
+    }
+)
 
 _SOCKET_VERDICT: dict[FinalVerdict, str] = {
     FinalVerdict.NONE: "inconclusive",
@@ -430,6 +451,14 @@ def _security_event_from_row(row: orm.SecurityEvent) -> SecurityEvent:
         external_unsynced=bool(row.external_unsynced),
         event_context_snapshot=row.event_context_snapshot,
         row_version=int(row.row_version or 1),
+        classification_source=derive_classification_source(
+            degraded_flags=[str(f) for f in (row.degraded_flags or [])],
+            event_context_snapshot=(
+                dict(row.event_context_snapshot)
+                if isinstance(row.event_context_snapshot, dict)
+                else None
+            ),
+        ),
     )
 
 
@@ -1013,6 +1042,155 @@ class EventService:
             if factor_names:
                 payload["factors"] = list(factor_names)
             await self._bus.publish_event(event_id, "risk_updated", payload)
+        return result
+
+    async def update_classification(
+        self,
+        event_id: str,
+        *,
+        event_type: EventType,
+        reason: str,
+        operator: str,
+        reinvestigate: bool = False,
+    ) -> SecurityEvent:
+        """Persist analyst event_type override with audit + human marker (ISSUE-209).
+
+        Writes:
+        - ``security_event.event_type``
+        - ``EventAuditLog`` (same status, classification reason)
+        - durable ``classification_override`` in context store + snapshot mirror
+        """
+        cleaned_reason = (reason or "").strip()
+        if not cleaned_reason:
+            raise ValidationError(
+                "classification reason is required",
+                error_code="validation_error",
+                details={"field": "reason"},
+            )
+        if not isinstance(event_type, EventType):
+            try:
+                event_type = EventType(str(event_type))
+            except ValueError as exc:
+                raise ValidationError(
+                    f"illegal event_type: {event_type!r}",
+                    error_code="validation_error",
+                    details={"field": "event_type"},
+                ) from exc
+
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(
+                    orm.SecurityEvent,
+                    event_id,
+                    with_for_update=True,
+                )
+                if row is None:
+                    raise EventNotFoundError(
+                        f"event {event_id} not found",
+                        details={"event_id": event_id},
+                    )
+                current_status = EventStatus(row.status)
+                if current_status in _CLASSIFICATION_LOCKED_STATUSES:
+                    raise ClassificationConflictError(
+                        "classification cannot change while response execution "
+                        "or verification is active; wait for the stage to finish "
+                        "or abort/complete the current disposition first",
+                        details={
+                            "event_id": event_id,
+                            "status": current_status.value,
+                            "locked_statuses": sorted(
+                                s.value for s in _CLASSIFICATION_LOCKED_STATUSES
+                            ),
+                        },
+                    )
+
+                previous_type = str(row.event_type)
+                new_type = event_type.value
+                override = build_human_classification_override(
+                    event_type=new_type,
+                    reason=cleaned_reason,
+                    operator=operator,
+                    previous_event_type=previous_type,
+                    updated_at=now.isoformat(),
+                    reinvestigate=reinvestigate,
+                )
+                row.event_type = new_type
+                row.row_version = int(row.row_version or 1) + 1
+                snapshot = (
+                    dict(row.event_context_snapshot)
+                    if isinstance(row.event_context_snapshot, dict)
+                    else {}
+                )
+                snapshot[CLASSIFICATION_OVERRIDE_KEY] = override
+                triage_synced = False
+                snap_triage, triage_changed = apply_event_type_to_triage_payload(
+                    snapshot.get(TRIAGE_RESULT_KEY),
+                    new_type,
+                )
+                if triage_changed and isinstance(snap_triage, dict):
+                    snapshot[TRIAGE_RESULT_KEY] = snap_triage
+                    triage_synced = True
+                row.event_context_snapshot = snapshot
+                audit_reason = (
+                    f"classification_override:{previous_type}->{new_type}: {cleaned_reason}"
+                )
+                if triage_synced:
+                    audit_reason = f"{audit_reason}; triage_result_event_type_synced"
+                session.add(
+                    orm.EventAuditLog(
+                        event_id=event_id,
+                        from_status=row.status,
+                        to_status=row.status,
+                        operator=operator,
+                        reason=audit_reason,
+                    )
+                )
+                await session.flush()
+                await session.refresh(row)
+                result = _security_event_from_row(row)
+                summary = event_summary_from_security_event(row)
+
+        await self._sync_event_summary_after_mutation(
+            event_id,
+            committed_version=result.row_version,
+            summary=summary,
+        )
+        # Persist human marker as a first-class EventContext field.
+        try:
+            await self._store.set(event_id, "classification_override", override)
+        except Exception:
+            logger.warning(
+                "classification_override context write failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+        # Keep ResponseAgent rule selection aligned when reinvestigate is skipped.
+        try:
+            triage = await self._store.get(event_id, TRIAGE_RESULT_KEY)
+            updated_triage, triage_changed = apply_event_type_to_triage_payload(
+                triage,
+                new_type,
+            )
+            if triage_changed and updated_triage is not None:
+                await self._store.set(event_id, TRIAGE_RESULT_KEY, updated_triage)
+        except Exception:
+            logger.warning(
+                "triage_result event_type sync failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+        if self._bus is not None:
+            await self._bus.publish_event(
+                event_id,
+                "classification_updated",
+                {
+                    "event_type": new_type,
+                    "previous_event_type": previous_type,
+                    "classification_source": ClassificationSource.HUMAN.value,
+                    "reinvestigate": bool(reinvestigate),
+                },
+            )
         return result
 
     async def upsert_report(self, report: InvestigationReport) -> InvestigationReport:

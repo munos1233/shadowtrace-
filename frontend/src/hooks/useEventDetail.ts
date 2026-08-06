@@ -245,7 +245,8 @@ export function useEventDetail(eventId: string | undefined) {
         socketEvent.type === "risk_updated" ||
         socketEvent.type === "state_change" ||
         socketEvent.type === "final_verdict_updated" ||
-        socketEvent.type === "report_generated"
+        socketEvent.type === "report_generated" ||
+        socketEvent.type === "classification_updated"
       ) {
         void refresh("event");
       } else if (

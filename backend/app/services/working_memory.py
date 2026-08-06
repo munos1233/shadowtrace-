@@ -66,6 +66,8 @@ FIELD_OWNERSHIP: dict[str, str] = {
     "triage_degraded": "TriageAgent",
     "graph_degraded": "GraphAgent",
     "storyline_degraded": "StorylineService",
+    # ISSUE-209 — analyst classification override (API via EventService)
+    "classification_override": "EventService",
 }
 
 # Legacy writer alias kept for journal entries written before ISSUE-114 hook removal.

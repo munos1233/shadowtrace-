@@ -313,6 +313,59 @@
         }
       }
     },
+    "/api/v1/events/{event_id}/classification": {
+      "patch": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Update Event Classification",
+        "description": "Override ``event_type`` with audit trail; optional controlled reinvestigate.\n\n``reinvestigate=true`` side effects (documented):\n- Only starts when status is ``NEW`` (acquires investigation lease + schedules\n  analysis pipeline / SuperAgent / Celery task — same path as POST investigate).\n- Does **not** invent a silent mid-flight replan; later response planning will\n  naturally bump ``plan_revision`` if a new plan is produced after re-analysis.\n- Locked statuses ``executing_response`` / ``verifying`` return 409\n  ``classification_conflict_active_investigation`` (no silent type change).",
+        "operationId": "update_event_classification_api_v1_events__event_id__classification_patch",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationUpdateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{event_id}/investigate": {
       "post": {
         "tags": [
@@ -4035,6 +4088,95 @@
         ],
         "title": "ChatRequest"
       },
+      "ClassificationSource": {
+        "type": "string",
+        "enum": [
+          "source",
+          "heuristic",
+          "llm_fallback",
+          "human"
+        ],
+        "title": "ClassificationSource",
+        "description": "Read-only provenance of ``SecurityEvent.event_type`` (ISSUE-209 / #754).\n\nDerived on GET; never a parallel machine-write store. Machine signals stay\nin ``event_type_from_*`` degraded_flags (ISSUE-197); human PATCH persists a\nseparate ``classification_override`` marker."
+      },
+      "ClassificationUpdateRequest": {
+        "properties": {
+          "event_type": {
+            "$ref": "#/components/schemas/EventType"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "reinvestigate": {
+            "type": "boolean",
+            "title": "Reinvestigate",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_type",
+          "reason"
+        ],
+        "title": "ClassificationUpdateRequest",
+        "description": "PATCH /events/{id}/classification body (ISSUE-209)."
+      },
+      "ClassificationUpdateResponse": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventType"
+          },
+          "classification_source": {
+            "type": "string",
+            "const": "human",
+            "title": "Classification Source",
+            "default": "human"
+          },
+          "previous_event_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reinvestigate_requested": {
+            "type": "boolean",
+            "title": "Reinvestigate Requested",
+            "default": false
+          },
+          "reinvestigate_started": {
+            "type": "boolean",
+            "title": "Reinvestigate Started",
+            "default": false
+          },
+          "side_effects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Side Effects"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type"
+        ],
+        "title": "ClassificationUpdateResponse",
+        "description": "PATCH classification response with documented reinvestigate side effects."
+      },
       "CollectionStatus": {
         "type": "string",
         "enum": [
@@ -5289,6 +5431,10 @@
               }
             ],
             "title": "Occurred At"
+          },
+          "classification_source": {
+            "$ref": "#/components/schemas/ClassificationSource",
+            "default": "source"
           }
         },
         "additionalProperties": false,
@@ -5439,6 +5585,10 @@
               }
             ],
             "title": "Occurred At"
+          },
+          "classification_source": {
+            "$ref": "#/components/schemas/ClassificationSource",
+            "default": "source"
           },
           "disposition_policy": {
             "$ref": "#/components/schemas/DispositionPolicy"
@@ -7496,6 +7646,16 @@
             "minimum": 1.0,
             "title": "Row Version",
             "default": 1
+          },
+          "classification_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClassificationSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

@@ -716,7 +716,7 @@ export default function EventDetailPage() {
           刷新
         </Button>
       </Space>
-      <EventOverviewCard detail={event} />
+      <EventOverviewCard detail={event} onRefresh={() => refresh("all")} />
       <InvestigationPhaseBanner detail={event} />
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={14}>

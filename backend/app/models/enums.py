@@ -164,6 +164,20 @@ class EventType(StrEnum):
     OTHER = "other"
 
 
+class ClassificationSource(StrEnum):
+    """Read-only provenance of ``SecurityEvent.event_type`` (ISSUE-209 / #754).
+
+    Derived on GET; never a parallel machine-write store. Machine signals stay
+    in ``event_type_from_*`` degraded_flags (ISSUE-197); human PATCH persists a
+    separate ``classification_override`` marker.
+    """
+
+    SOURCE = "source"
+    HEURISTIC = "heuristic"
+    LLM_FALLBACK = "llm_fallback"
+    HUMAN = "human"
+
+
 class SourceObjectKind(StrEnum):
     """Canonical source object kind used for the internal discriminated union."""
 

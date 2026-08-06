@@ -32,6 +32,7 @@ from app.models.enums import (
     WritebackStatus,
 )
 from app.models.security_event import SecurityEvent
+from app.services.classification import derive_classification_source
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,14 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
         created_at=row.created_at,
         updated_at=row.updated_at,
         occurred_at=row.occurred_at,
+        classification_source=derive_classification_source(
+            degraded_flags=[str(f) for f in (row.degraded_flags or [])],
+            event_context_snapshot=(
+                dict(row.event_context_snapshot)
+                if isinstance(row.event_context_snapshot, dict)
+                else None
+            ),
+        ),
         disposition_policy=policy,
         external_unsynced=bool(row.external_unsynced),
         escalated=bool(row.escalated),
@@ -248,6 +257,13 @@ def event_summary_from_domain(event: SecurityEvent) -> EventSummary:
         created_at=event.created_at,
         updated_at=event.updated_at,
         occurred_at=event.occurred_at,
+        classification_source=derive_classification_source(
+            classification_override=None,
+            degraded_flags=list(event.degraded_flags or []),
+            event_context_snapshot=event.event_context_snapshot,
+        )
+        if event.classification_source is None
+        else event.classification_source,
         disposition_policy=event.disposition_policy,
         external_unsynced=event.external_unsynced,
         escalated=event.escalated,
