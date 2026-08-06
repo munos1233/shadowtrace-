@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -866,3 +867,244 @@ def test_run_investigation_soft_time_limit_releases_with_resolved_owner(
 
     expected_owner = celery_task_owner_id("task-soft-limit-001")
     assert released == [("evt-soft-limit", expected_owner)]
+
+
+# --------------------------------------------------------------------------- #
+# Analysis-only Celery task tests (ISSUE-225)
+# --------------------------------------------------------------------------- #
+
+
+async def _fake_renewal_coro() -> None:
+    """Smallest awaitable for fake start_renewal."""
+    pass
+
+
+def _make_fake_lease(
+    *,
+    acquire_result: bool = True,
+    release_result: bool = True,
+) -> MagicMock:
+    """Build a minimal EventLease-alike for execute_analysis_only_investigation."""
+    lease = MagicMock()
+    lease.acquire = AsyncMock(return_value=acquire_result)
+    lease.release = AsyncMock(return_value=release_result)
+
+    async def _start_renewal(
+        event_id: str,
+        owner_id: str,
+        *,
+        on_renewal_failed: Any = None,
+        max_renew_failures: int = 3,
+    ) -> asyncio.Task[None]:
+        return asyncio.ensure_future(_fake_renewal_coro())
+
+    lease.start_renewal = _start_renewal
+    return lease
+
+
+@pytest.mark.asyncio
+async def test_execute_analysis_only_runs_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Success path: pipeline runs and returns completed."""
+    calls: list[str] = []
+
+    async def _fake_run(event_id: str, *, generate_report: bool = True) -> None:
+        calls.append(event_id)
+
+    async def _fake_pipeline() -> Any:
+        pipeline = MagicMock()
+        pipeline.run = _fake_run
+        return pipeline
+
+    monkeypatch.setattr("app.api.v1.deps.get_pipeline", _fake_pipeline)
+    monkeypatch.setattr("app.api.v1.deps.get_event_lease", lambda: _make_fake_lease())
+    monkeypatch.setattr("app.api.v1.deps._get_session_factory", lambda: object())
+    monkeypatch.setattr(
+        "app.services.investigation_guidance.record_investigation_workflow_path",
+        AsyncMock(),
+    )
+
+    result = await tasks.execute_analysis_only_investigation(
+        "evt-ao-001",
+        owner_id="worker-test",
+        lease_acquired=True,
+    )
+    assert result == {"status": "completed", "event_id": "evt-ao-001"}
+    assert calls == ["evt-ao-001"]
+
+
+@pytest.mark.asyncio
+async def test_execute_analysis_only_skips_when_lease_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pipeline raises InvestigationInProgressError → skipped."""
+
+    async def _boom(event_id: str, **kwargs: Any) -> None:
+        raise InvestigationInProgressError(
+            message="investigation already in progress",
+            error_code="investigation_in_progress",
+            details={"event_id": event_id},
+        )
+
+    async def _fake_pipeline() -> Any:
+        pipeline = MagicMock()
+        pipeline.run = _boom
+        return pipeline
+
+    monkeypatch.setattr("app.api.v1.deps.get_pipeline", _fake_pipeline)
+    monkeypatch.setattr("app.api.v1.deps.get_event_lease", lambda: _make_fake_lease())
+
+    result = await tasks.execute_analysis_only_investigation(
+        "evt-ao-skip",
+        owner_id="worker-test",
+        lease_acquired=True,
+    )
+    assert result == {
+        "status": "skipped",
+        "event_id": "evt-ao-skip",
+        "reason": "investigation_in_progress",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_analysis_only_skips_when_lease_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pipeline raises InvestigationLeaseLostError → skipped."""
+
+    async def _lost(event_id: str, **kwargs: Any) -> None:
+        raise InvestigationLeaseLostError(
+            message="investigation lease lost",
+            error_code="investigation_lease_lost",
+            details={"event_id": event_id},
+        )
+
+    async def _fake_pipeline() -> Any:
+        pipeline = MagicMock()
+        pipeline.run = _lost
+        return pipeline
+
+    monkeypatch.setattr("app.api.v1.deps.get_pipeline", _fake_pipeline)
+    monkeypatch.setattr("app.api.v1.deps.get_event_lease", lambda: _make_fake_lease())
+
+    result = await tasks.execute_analysis_only_investigation(
+        "evt-ao-lost",
+        owner_id="worker-test",
+        lease_acquired=True,
+    )
+    assert result == {
+        "status": "skipped",
+        "event_id": "evt-ao-lost",
+        "reason": "investigation_lease_lost",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_analysis_only_acquires_lease_when_not_preacquired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When lease_acquired=False, the worker acquires the lease itself."""
+    calls: list[str] = []
+
+    async def _fake_run(event_id: str, *, generate_report: bool = True) -> None:
+        calls.append(event_id)
+
+    async def _fake_pipeline() -> Any:
+        pipeline = MagicMock()
+        pipeline.run = _fake_run
+        return pipeline
+
+    fake_lease = _make_fake_lease()
+    monkeypatch.setattr("app.api.v1.deps.get_pipeline", _fake_pipeline)
+    monkeypatch.setattr("app.api.v1.deps.get_event_lease", lambda: fake_lease)
+    monkeypatch.setattr("app.api.v1.deps._get_session_factory", lambda: object())
+    monkeypatch.setattr(
+        "app.services.investigation_guidance.record_investigation_workflow_path",
+        AsyncMock(),
+    )
+
+    result = await tasks.execute_analysis_only_investigation(
+        "evt-ao-acquire",
+        owner_id="worker-test",
+        lease_acquired=False,
+    )
+    assert result["status"] == "completed"
+    fake_lease.acquire.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_analysis_only_fails_when_lease_already_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When lease_acquired=False and acquire fails, raise immediately."""
+    fake_lease = _make_fake_lease(acquire_result=False)
+    monkeypatch.setattr("app.api.v1.deps.get_event_lease", lambda: fake_lease)
+
+    with pytest.raises(InvestigationInProgressError, match="already in progress"):
+        await tasks.execute_analysis_only_investigation(
+            "evt-ao-busy",
+            owner_id="worker-test",
+            lease_acquired=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_analysis_only_releases_lease_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pipeline raises an unexpected error → lease is released in finally."""
+
+    async def _fail(event_id: str, **kwargs: Any) -> None:
+        raise RuntimeError("pipeline crash")
+
+    async def _fake_pipeline() -> Any:
+        pipeline = MagicMock()
+        pipeline.run = _fail
+        return pipeline
+
+    fake_lease = _make_fake_lease()
+    monkeypatch.setattr("app.api.v1.deps.get_pipeline", _fake_pipeline)
+    monkeypatch.setattr("app.api.v1.deps.get_event_lease", lambda: fake_lease)
+
+    with pytest.raises(RuntimeError, match="pipeline crash"):
+        await tasks.execute_analysis_only_investigation(
+            "evt-ao-crash",
+            owner_id="worker-test",
+            lease_acquired=True,
+        )
+    fake_lease.release.assert_awaited_once()
+
+
+def test_run_analysis_only_eager_executes_task(
+    celery_eager: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eager mode: the Celery task runs execute_analysis_only_investigation."""
+
+    async def _fake_execute(event_id: str, **kwargs: Any) -> dict[str, str]:
+        return {"status": "completed", "event_id": event_id}
+
+    monkeypatch.setattr(tasks, "execute_analysis_only_investigation", _fake_execute)
+    result = tasks.run_analysis_only_investigation.apply(args=["evt-ao-eager"]).result
+    assert result == {"status": "completed", "event_id": "evt-ao-eager"}
+
+
+def test_run_analysis_only_duplicate_delivery_is_idempotent(
+    celery_eager: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redelivery of the same task should skip if event already terminal."""
+    calls = {"n": 0}
+
+    async def _fake_execute(event_id: str, **kwargs: Any) -> dict[str, str]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"status": "completed", "event_id": event_id}
+        return {"status": "skipped", "event_id": event_id}
+
+    monkeypatch.setattr(tasks, "execute_analysis_only_investigation", _fake_execute)
+    first = tasks.run_analysis_only_investigation.apply(args=["evt-ao-dup"]).result
+    second = tasks.run_analysis_only_investigation.apply(args=["evt-ao-dup"]).result
+    assert first["status"] == "completed"
+    assert second["status"] == "skipped"

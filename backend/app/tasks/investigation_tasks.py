@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -446,15 +447,244 @@ def run_investigation(
         raise
 
 
+# --------------------------------------------------------------------------- #
+# Analysis-only Celery task (ISSUE-225)
+# --------------------------------------------------------------------------- #
+
+ANALYSIS_ONLY_TASK_NAME = "shadowtrace.run_analysis_only_investigation"
+ANALYSIS_ONLY_TASK_QUEUE = "investigation"
+
+
+async def execute_analysis_only_investigation(
+    event_id: str,
+    *,
+    generate_report: bool = True,
+    owner_id: str,
+    lease_acquired: bool = False,
+) -> dict[str, str]:
+    """Run AnalysisOnlyPipeline (called from Celery worker via ``asyncio.run``).
+
+    Lease semantics mirror ``execute_investigation``: when *lease_acquired* is
+    True the HTTP layer already holds the lease; the pipeline skips its own
+    acquire and starts renewal (ISSUE-186 / ISSUE-225).
+
+    ISSUE-225: a background renewal loop keeps the lease alive while the
+    pipeline runs.  When renewal fails (stolen or consecutive Redis errors)
+    the orchestration is cancelled and ``InvestigationLeaseLostError`` is
+    raised, matching the SuperAgent behaviour.
+    """
+    from app.agents.super_agent import _run_orchestration_with_renewal_watch
+    from app.api.v1.deps import _get_session_factory, get_event_lease, get_pipeline
+    from app.core.errors import (
+        InvestigationInProgressError,
+        InvestigationLeaseLostError,
+    )
+    from app.services.investigation_guidance import record_investigation_workflow_path
+
+    lease = get_event_lease()
+    if not lease_acquired:
+        acquired = await lease.acquire(event_id, owner_id)
+        if not acquired:
+            raise InvestigationInProgressError(
+                message="investigation already in progress for this event",
+                error_code="investigation_in_progress",
+                details={"event_id": event_id},
+            )
+
+    # Start background renewal so the lease does not expire during a long
+    # pipeline run (ISSUE-225).  Mirrors SuperAgent.investigate().
+    renewal_failed: asyncio.Event | None = None
+    renewal_task: asyncio.Task[None] | None = None
+    if lease is not None:
+        renewal_failed = asyncio.Event()
+        renewal_task = await lease.start_renewal(
+            event_id,
+            owner_id,
+            on_renewal_failed=renewal_failed,
+        )
+
+    pipeline = await get_pipeline()
+    try:
+        await _run_orchestration_with_renewal_watch(
+            pipeline.run(event_id, generate_report=generate_report),
+            renewal_failed,
+            event_id=event_id,
+        )
+        # Record workflow path for investigation guidance (ISSUE-225).
+        await record_investigation_workflow_path(
+            _get_session_factory(),
+            event_id,
+            workflow_path="analysis_only",
+            include_response_execution=False,
+        )
+        return {"status": "completed", "event_id": event_id}
+    except InvestigationInProgressError:
+        logger.info(
+            "run_analysis_only skipped for event=%s — lease already held",
+            event_id,
+        )
+        return {
+            "status": "skipped",
+            "event_id": event_id,
+            "reason": "investigation_in_progress",
+        }
+    except InvestigationLeaseLostError:
+        logger.info(
+            "run_analysis_only stopped for event=%s — lease lost mid-run",
+            event_id,
+        )
+        return {
+            "status": "skipped",
+            "event_id": event_id,
+            "reason": "investigation_lease_lost",
+        }
+    finally:
+        if renewal_task is not None:
+            renewal_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await renewal_task
+        await lease.release(event_id, owner_id)
+
+
+async def dispatch_analysis_only_investigation(
+    event_id: str,
+    *,
+    generate_report: bool = True,
+    owner_id: str | None = None,
+    lease_acquired: bool = False,
+) -> str:
+    """Enqueue ``run_analysis_only_investigation`` and return the Celery task id.
+
+    Same contract as ``dispatch_investigation``: the HTTP layer acquires the
+    lease and passes *owner_id* + *lease_acquired=True* so the worker inherits
+    the existing lease (ISSUE-225).
+    """
+    task_id = str(celery_uuid())
+    await register_task_metadata(task_id, event_id)
+    try:
+        kwargs: dict[str, object] = {"generate_report": generate_report}
+        if owner_id is not None:
+            kwargs["owner_id"] = owner_id
+        if lease_acquired:
+            kwargs["lease_acquired"] = True
+        run_analysis_only_investigation.apply_async(
+            args=[event_id],
+            kwargs=kwargs,
+            task_id=task_id,
+            queue=ANALYSIS_ONLY_TASK_QUEUE,
+        )
+    except (OperationalError, OSError, ConnectionError) as exc:
+        await delete_task_metadata(task_id)
+        raise DependencyUnavailableError(
+            message="celery broker unavailable",
+            error_code="task_unavailable",
+            details={"dependency": "celery_broker", "event_id": event_id},
+        ) from exc
+    return task_id
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name=ANALYSIS_ONLY_TASK_NAME,
+    bind=True,
+    acks_late=True,
+    max_retries=2,
+    retry_backoff=True,
+    soft_time_limit=600,
+    queue=ANALYSIS_ONLY_TASK_QUEUE,
+)
+def run_analysis_only_investigation(
+    self: Any,
+    event_id: str,
+    generate_report: bool = True,
+    owner_id: str | None = None,
+    lease_acquired: bool = False,
+) -> dict[str, str]:
+    """Execute AnalysisOnlyPipeline for *event_id* (ISSUE-225).
+
+    When *owner_id* is set the HTTP layer already holds the lease; the worker
+    skips its own acquire and only starts renewal.
+    """
+    resolved_owner = owner_id or celery_task_owner_id(str(self.request.id))
+    redelivered = bool(getattr(self.request, "delivery_info", {}).get("redelivered"))
+    if redelivered:
+        logger.info(
+            "run_analysis_only redelivery for event=%s task=%s owner=%s",
+            event_id,
+            self.request.id,
+            resolved_owner,
+        )
+        skip, skip_reason = asyncio.run(evaluate_redelivered_investigation_skip(event_id))
+        if skip:
+            logger.info(
+                "run_analysis_only redelivery skipped event=%s reason=%s",
+                event_id,
+                skip_reason,
+            )
+            return {
+                "status": "skipped",
+                "event_id": event_id,
+                "reason": skip_reason or "lookup_degraded",
+            }
+    try:
+        try:
+            result = asyncio.run(
+                execute_analysis_only_investigation(
+                    event_id,
+                    generate_report=bool(generate_report),
+                    owner_id=resolved_owner,
+                    lease_acquired=lease_acquired,
+                )
+            )
+            return result
+        finally:
+            _release_celery_task_loop_resources()
+    except SoftTimeLimitExceeded:
+        logger.warning("run_analysis_only soft time limit exceeded for event=%s", event_id)
+        try:
+            from app.api.v1.deps import get_event_lease
+
+            lease = get_event_lease()
+            asyncio.run(lease.release(event_id, resolved_owner))
+        except Exception:
+            logger.warning(
+                "run_analysis_only: best-effort lease release failed after "
+                "soft limit event=%s owner=%s",
+                event_id,
+                resolved_owner,
+                exc_info=True,
+            )
+        raise
+    except (DependencyUnavailableError, OperationalError, OSError, ConnectionError) as exc:
+        logger.warning(
+            "run_analysis_only transient failure for event=%s; retry=%s",
+            event_id,
+            self.request.retries,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc) from exc
+    except Exception:
+        logger.error(
+            "run_analysis_only failed for event=%s",
+            event_id,
+            exc_info=True,
+        )
+        raise
+
+
 __all__ = [
+    "ANALYSIS_ONLY_TASK_NAME",
+    "ANALYSIS_ONLY_TASK_QUEUE",
     "TASK_NAME",
     "TASK_QUEUE",
     "delete_task_metadata",
+    "dispatch_analysis_only_investigation",
     "dispatch_investigation",
+    "execute_analysis_only_investigation",
     "execute_investigation",
     "lookup_task_event_id",
     "publish_investigation_for_intent",
     "register_task_metadata",
     "resolve_task_state",
+    "run_analysis_only_investigation",
     "run_investigation",
 ]

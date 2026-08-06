@@ -111,6 +111,19 @@ DISPOSITION_BASE_URL=http://mock-xdr:8100
 
 调度器按 interval 触发 Celery task `shadowtrace.poll_sources`，复用 `SourceIngester.poll()` 增量摄取 Mock XDR 新对象（`status=new`），**不会**自动触发 investigate（见 ISSUE-108）。
 
+### 调查执行矩阵（ISSUE-225）
+
+`ORCHESTRATION_MODE` × `TASK_MODE` 决定调查 runner：
+
+| ORCHESTRATION_MODE | TASK_MODE | trigger | runner | 持久性 |
+|---|---|---|---|---|
+| `graph`（默认） | `background`（默认） | HTTP investigate | BackgroundTasks → SuperAgent | ❌ 进程重启丢失 |
+| `graph` | `celery` | HTTP investigate | Celery → SuperAgent | ✅ worker 宕机可重试 |
+| `analysis_only` | `background` | HTTP investigate | BackgroundTasks → AnalysisOnlyPipeline | ❌ 进程重启丢失 |
+| `analysis_only` | `celery` | HTTP investigate | Celery → AnalysisOnlyPipeline | ✅ worker 宕机可重试 |
+
+**注意**：`analysis_only` + `celery` 从 ISSUE-225 开始支持；之前 `analysis_only` 忽略 `TASK_MODE` 始终走 BackgroundTasks。
+
 验证：
 
 ```bash

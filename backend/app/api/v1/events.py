@@ -808,6 +808,21 @@ async def _schedule_investigation(
             )
 
     if mode == "analysis_only":
+        if task_mode == "celery":
+            from app.tasks.investigation_tasks import dispatch_analysis_only_investigation
+
+            lease, owner_id = await _acquire_investigation_lease(event_id)
+            try:
+                return await dispatch_analysis_only_investigation(
+                    event_id,
+                    generate_report=generate_report,
+                    owner_id=owner_id,
+                    lease_acquired=True,
+                )
+            except Exception:
+                await lease.release(event_id, owner_id)
+                raise
+
         lease, owner_id = await _acquire_investigation_lease(event_id)
 
         async def _run_pipeline() -> None:
