@@ -199,16 +199,23 @@ class EventLease:
         owner_id: str,
         *,
         on_renewal_failed: asyncio.Event | None = None,
+        max_renew_failures: int = 3,
     ) -> asyncio.Task[None]:
         """Launch a background task that renews the lease every 60 s.
 
         When *on_renewal_failed* is provided it is set when the renewal loop
-        exits because of an owner mismatch (lease stolen).  The caller **must**
-        cancel the returned task when the orchestration finishes (or fails) to
-        stop the renewal loop.
+        exits because of:
+
+        * an owner mismatch (lease stolen), or
+        * *max_renew_failures* consecutive Redis/network exceptions
+          (ISSUE-226).
+
+        The caller **must** cancel the returned task when the orchestration
+        finishes (or fails) to stop the renewal loop.
         """
 
         async def _renew_loop() -> None:
+            consecutive_errors = 0
             while True:
                 await asyncio.sleep(RENEW_INTERVAL_S)
                 try:
@@ -223,9 +230,26 @@ class EventLease:
                         if on_renewal_failed is not None:
                             on_renewal_failed.set()
                         break
+                    # Successful renewal resets the consecutive error counter.
+                    consecutive_errors = 0
                 except Exception:
+                    consecutive_errors += 1
+                    if consecutive_errors > max_renew_failures:
+                        logger.error(
+                            "EventLease: %d consecutive renewal errors for "
+                            "event=%s (threshold=%d) — treating as fatal "
+                            "and signaling caller",
+                            consecutive_errors,
+                            event_id,
+                            max_renew_failures,
+                        )
+                        if on_renewal_failed is not None:
+                            on_renewal_failed.set()
+                        break
                     logger.warning(
-                        "EventLease: renewal error for event=%s",
+                        "EventLease: renewal error %d/%d for event=%s",
+                        consecutive_errors,
+                        max_renew_failures + 1,
                         event_id,
                         exc_info=True,
                     )

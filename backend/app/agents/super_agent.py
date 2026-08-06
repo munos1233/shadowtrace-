@@ -92,10 +92,12 @@ async def _run_orchestration_with_renewal_watch(
     *,
     event_id: str,
 ) -> Any:
-    """Run graph work until completion or lease renewal failure (owner lost).
+    """Run graph work until completion or lease renewal failure.
 
-    Transient Redis errors during ``renew()`` do not set *renewal_failed*; only
-    owner mismatch stops orchestration (ISSUE-182).
+    *Renewal_failed* is set by :meth:`EventLease.start_renewal` when the lease is
+    stolen (owner mismatch) or when consecutive Redis/network exceptions exceed
+    the configured threshold (ISSUE-182, ISSUE-226).  In either case the
+    orchestration is cancelled and :class:`InvestigationLeaseLostError` is raised.
     """
     if renewal_failed is None:
         return await orchestration
