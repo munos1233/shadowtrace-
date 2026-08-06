@@ -96,6 +96,9 @@ export default function EventListPage() {
     null,
   );
   const [includeResponseExecution, setIncludeResponseExecution] = useState(false);
+  // ISSUE-204: report generation toggle — default OFF (product default). When
+  // checked, triggerInvestigation sends generate_report=true so the backend
+  // actually generates a report during the investigation.
   const [generateReport, setGenerateReport] = useState(false);
 
   // Keep latest items in a ref so the socket handler (registered once) can
@@ -430,8 +433,8 @@ export default function EventListPage() {
         data-testid="investigate-mode-modal"
       >
         <Typography.Paragraph type="secondary">
-          默认「仅分析」不自动生成报告（可在下方勾选）；「分析并生成处置方案」会继续进入
-          ResponseAgent 与审批流程。
+          默认「仅分析」不自动生成报告（可在下方勾选或稍后在报告 Tab 生成）；
+          「分析并生成处置方案」会继续进入 ResponseAgent 与审批流程，不会产生待审批动作。
         </Typography.Paragraph>
         <Radio.Group
           value={includeResponseExecution ? "full" : "analysis_only"}
@@ -458,6 +461,9 @@ export default function EventListPage() {
           data-testid="investigate-generate-report"
         >
           同时生成分析报告
+          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+            （默认关闭，节省 LLM 开销）
+          </Typography.Text>
         </Checkbox>
         {investigationHealth?.approval_policy_version ? (
           <Typography.Paragraph

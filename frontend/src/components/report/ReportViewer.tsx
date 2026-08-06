@@ -6,8 +6,8 @@ use CHAPTER_KEYS for stable ordering / dedup.
 */
 
 import { useRef, useEffect } from "react";
-import { Alert, Spin, Typography, Divider } from "antd";
-import { FileTextOutlined } from "@ant-design/icons";
+import { Alert, Button, Spin, Typography, Divider } from "antd";
+import { FileTextOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { InvestigationReport, ReportQuality } from "../../types/report";
 import { resolveReportQuality } from "../../types/report";
 import ReportToc from "./ReportToc";
@@ -31,6 +31,11 @@ interface ReportViewerProps {
   report: InvestigationReport | null;
   loading: boolean;
   eventStatus?: string;
+  /** ISSUE-206: on-demand generation (empty state CTA). */
+  onGenerate?: () => void;
+  /** ISSUE-206: regenerate an existing report (with confirmation upstream). */
+  onRegenerate?: () => void;
+  generating?: boolean;
 }
 
 function qualityAlert(report: InvestigationReport): {
@@ -62,7 +67,14 @@ function qualityAlert(report: InvestigationReport): {
   return null;
 }
 
-export default function ReportViewer({ report, loading, eventStatus }: ReportViewerProps) {
+export default function ReportViewer({
+  report,
+  loading,
+  eventStatus,
+  onGenerate,
+  onRegenerate,
+  generating = false,
+}: ReportViewerProps) {
   const printStyleRef = useRef<HTMLStyleElement | null>(null);
 
   useEffect(() => {
@@ -98,6 +110,18 @@ export default function ReportViewer({ report, loading, eventStatus }: ReportVie
         <Text type="secondary" style={{ display: "block", marginTop: 16 }}>
           {isReporting ? "报告生成中，请稍候..." : "报告尚未生成"}
         </Text>
+        {!isReporting && onGenerate && (
+          <Button
+            type="primary"
+            icon={<FileTextOutlined />}
+            loading={generating}
+            style={{ marginTop: 16 }}
+            onClick={onGenerate}
+            data-testid="report-generate-button"
+          >
+            生成完整报告
+          </Button>
+        )}
       </div>
     );
   }
@@ -111,6 +135,23 @@ export default function ReportViewer({ report, loading, eventStatus }: ReportVie
       </div>
 
       <div className="shadowtrace-report-viewer" style={{ flex: 1, maxWidth: 800 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+          <div className="shadowtrace-export-btns">
+            <ReportExportButtons report={report} />
+          </div>
+          {onRegenerate && eventStatus !== "reporting" && (
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={generating}
+              onClick={onRegenerate}
+              data-testid="report-regenerate-button"
+            >
+              重新生成
+            </Button>
+          )}
+        </div>
+
         {alert && (
           <Alert
             message={alert.message}
@@ -120,10 +161,6 @@ export default function ReportViewer({ report, loading, eventStatus }: ReportVie
             data-testid="report-quality-alert"
           />
         )}
-
-        <div className="shadowtrace-export-btns" style={{ marginBottom: 16 }}>
-          <ReportExportButtons report={report} />
-        </div>
 
         <Title level={4}>
           <FileTextOutlined style={{ marginRight: 8 }} />

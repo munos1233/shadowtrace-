@@ -4,6 +4,7 @@ import {
   Card,
   Col,
   Descriptions,
+  Modal,
   Result,
   Row,
   Skeleton,
@@ -12,6 +13,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  message,
 } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -19,6 +21,8 @@ import type { ColumnsType } from "antd/es/table";
 import { triageContextFromSnapshot } from "../utils/evidenceContext";
 import ReportViewer from "../components/report/ReportViewer";
 import { coerceInvestigationReport } from "../types/report";
+import { ApiError } from "../services/apiClient";
+import { generateReport } from "../services/eventApi";
 import EventOverviewCard from "../components/event/EventOverviewCard";
 import EventOperationalInsights from "../components/event/EventOperationalInsights";
 import EventTodoBar from "../components/event/EventTodoBar";
@@ -449,6 +453,55 @@ export default function EventDetailPage() {
   const selectedTab = activeTab(location.hash);
   const [pendingMemoryReviewCount, setPendingMemoryReviewCount] = useState(0);
 
+  // ISSUE-206: on-demand report generation with ISSUE-212 quality-gate handling.
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
+  const [qualityConfirm, setQualityConfirm] = useState<{
+    open: boolean;
+    errorCode: "report_quality_incomplete" | "report_quality_conflict";
+    retryParams: { force?: boolean; confirm_downgrade?: boolean };
+  }>({ open: false, errorCode: "report_quality_incomplete", retryParams: {} });
+
+  const handleGenerateReport = async (
+    params?: { force?: boolean; confirm_downgrade?: boolean },
+  ) => {
+    if (!eventId) return;
+    setReportGenerating(true);
+    try {
+      await generateReport(eventId, params);
+      message.success("报告已生成");
+      setQualityConfirm((q) => ({ ...q, open: false }));
+      setRegenerateOpen(false);
+      // Refresh the event snapshot — socket report_generated also re-pulls the
+      // event, so the report tab updates without a manual page reload.
+      await refresh("event");
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.error_code === "report_quality_incomplete") {
+        message.error("报告质量不完整：存在占位章节。可强制生成以存档降级件。");
+        setRegenerateOpen(false);
+        setQualityConfirm({
+          open: true,
+          errorCode: "report_quality_incomplete",
+          retryParams: { force: true },
+        });
+      } else if (err instanceof ApiError && err.error_code === "report_quality_conflict") {
+        message.warning("已有完整报告：覆盖为降级报告需确认降级。");
+        setRegenerateOpen(false);
+        setQualityConfirm({
+          open: true,
+          errorCode: "report_quality_conflict",
+          retryParams: { confirm_downgrade: true },
+        });
+      } else if (err instanceof ApiError) {
+        message.error(err.message || err.error_code || "报告生成失败");
+      } else {
+        message.error("报告生成失败");
+      }
+    } finally {
+      setReportGenerating(false);
+    }
+  };
+
   const navigateTab = useCallback(
     (tabKey: string) => {
       navigate(
@@ -696,6 +749,9 @@ export default function EventDetailPage() {
           report={coerceInvestigationReport(context?.report)}
           loading={loading}
           eventStatus={event.event.status}
+          onGenerate={() => void handleGenerateReport()}
+          onRegenerate={() => setRegenerateOpen(true)}
+          generating={reportGenerating}
         />
       ),
     },
@@ -763,6 +819,38 @@ export default function EventDetailPage() {
           }
         />
       </Card>
+
+      <Modal
+        title="重新生成报告"
+        open={regenerateOpen}
+        okText="重新生成"
+        cancelText="取消"
+        confirmLoading={reportGenerating}
+        onOk={() => void handleGenerateReport()}
+        onCancel={() => setRegenerateOpen(false)}
+        data-testid="report-regenerate-modal"
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          重新生成将基于当前调查上下文重建正式报告，并再次经过质量门校验。
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title={qualityConfirm.errorCode === "report_quality_conflict" ? "确认覆盖完整报告" : "强制生成降级报告"}
+        open={qualityConfirm.open}
+        okText={qualityConfirm.errorCode === "report_quality_conflict" ? "确认覆盖" : "强制生成"}
+        cancelText="取消"
+        confirmLoading={reportGenerating}
+        onOk={() => void handleGenerateReport(qualityConfirm.retryParams)}
+        onCancel={() => setQualityConfirm((q) => ({ ...q, open: false }))}
+        data-testid="report-quality-confirm-modal"
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          {qualityConfirm.errorCode === "report_quality_conflict"
+            ? "目标报告将用降级质量覆盖现有完整报告，覆盖后原完整报告不可恢复。"
+            : "报告存在占位章节，强制生成将把当前版本存档为降级件（incomplete_placeholder），不视为完整合格报告。"}
+        </Typography.Paragraph>
+      </Modal>
     </Space>
   );
 }

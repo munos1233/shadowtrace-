@@ -159,3 +159,75 @@ describe("ReportViewer", () => {
     expect(scrollIntoView).toHaveBeenCalled();
   });
 });
+
+
+  // ---- ISSUE-206: on-demand generation CTA ---------------------------------
+
+  it("renders generate CTA in the empty state and triggers onGenerate", async () => {
+    const user = userEvent.setup();
+    const onGenerate = vi.fn();
+    render(
+      <ReportViewer report={null} loading={false} onGenerate={onGenerate} />,
+    );
+    const button = screen.getByTestId("report-generate-button");
+    expect(button).toBeInTheDocument();
+    await user.click(button);
+    expect(onGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the generate CTA while the event is REPORTING", () => {
+    render(
+      <ReportViewer
+        report={null}
+        loading={false}
+        eventStatus="reporting"
+        onGenerate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("report-generate-button")).not.toBeInTheDocument();
+  });
+
+  it("shows loading on the generate CTA while generating", () => {
+    render(
+      <ReportViewer
+        report={null}
+        loading={false}
+        onGenerate={vi.fn()}
+        generating
+      />,
+    );
+    expect(screen.getByTestId("report-generate-button").classList).toContain(
+      "ant-btn-loading",
+    );
+  });
+
+  it("renders a regenerate button for an existing report and triggers onRegenerate", async () => {
+    const user = userEvent.setup();
+    const onRegenerate = vi.fn();
+    render(
+      <ReportViewer
+        report={{
+          report_id: "rpt-abc12345",
+          event_id: "evt-test001",
+          title: "数据外泄调查报告",
+          summary: "调查摘要",
+          sections: [
+            { key: "overview", title: "事件概述", content: "事件概述内容...", data: {} },
+          ],
+          final_verdict: "confirmed_threat",
+          risk_score: 85,
+          severity: "high",
+          version: 1,
+          generated_by: null,
+          generated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }}
+        loading={false}
+        onRegenerate={onRegenerate}
+      />,
+    );
+    const button = screen.getByTestId("report-regenerate-button");
+    expect(button).toBeInTheDocument();
+    await user.click(button);
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+  });

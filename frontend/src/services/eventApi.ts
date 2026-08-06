@@ -119,6 +119,24 @@ export function getReport(eventId: string) {
   return apiClient.get<{ report: InvestigationReport }>(`/events/${eventId}/report`);
 }
 
+/** POST /events/{id}/report — on-demand generation with ISSUE-212 quality gate.
+ * 422 report_quality_incomplete → force=true archives a degraded report;
+ * 409 report_quality_conflict → confirm_downgrade=true overwrites a complete one. */
+export function generateReport(
+  eventId: string,
+  params?: { force?: boolean; confirm_downgrade?: boolean },
+) {
+  return apiClient.post<{ report: InvestigationReport }>(
+    `/events/${eventId}/report`,
+    undefined,
+    {
+      params,
+      // Quality-gate errors are handled locally by the report tab.
+      skipGlobalErrorToast: true,
+    },
+  );
+}
+
 export function getTraces(eventId: string) {
   return apiClient.get<{ total: number; page: number; page_size: number; items: AgentTrace[] }>(
     `/events/${eventId}/traces`,

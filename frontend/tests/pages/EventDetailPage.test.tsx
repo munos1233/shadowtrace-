@@ -1,9 +1,10 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App as AntApp } from "antd";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { EventDetailResponse } from "../../src/types/event";
+import { ApiError } from "../../src/services/apiClient";
 import { useAgentStatusStore } from "../../src/stores/agentStatusStore";
 
 const mockGetEvent = vi.fn();
@@ -23,6 +24,7 @@ const mockCloseEvent = vi.fn();
 const mockResolveUnknownAction = vi.fn();
 const mockResolveWriteback = vi.fn();
 const mockListMemoryReviews = vi.fn();
+const mockGenerateReport = vi.fn();
 
 vi.mock("../../src/services/eventApi", () => ({
   getEvent: (...args: unknown[]) => mockGetEvent(...args),
@@ -38,6 +40,7 @@ vi.mock("../../src/services/eventApi", () => ({
   closeEvent: (...args: unknown[]) => mockCloseEvent(...args),
   resolveUnknownAction: (...args: unknown[]) => mockResolveUnknownAction(...args),
   resolveWriteback: (...args: unknown[]) => mockResolveWriteback(...args),
+  generateReport: (...args: unknown[]) => mockGenerateReport(...args),
 }));
 
 vi.mock("../../src/services/knowledgeApi", () => ({
@@ -358,6 +361,7 @@ describe("EventDetailPage", () => {
     mockGetWriteback.mockResolvedValue({ data: {} });
     mockCloseEvent.mockResolvedValue({ data: { event_id: "evt-70", status: "closed" } });
     mockResolveUnknownAction.mockResolvedValue({ data: {} });
+    mockGenerateReport.mockResolvedValue({ data: { report: {} } });
     mockResolveWriteback.mockResolvedValue({ data: {} });
     mockListMemoryReviews.mockResolvedValue({ data: { total: 0, items: [] } });
     mockGetDecisionTrace.mockResolvedValue({
@@ -862,5 +866,68 @@ describe("EventDetailPage", () => {
     });
     emitSocketEvent({ type: "report_generated", event_id: "evt-70", payload: {} });
     await waitFor(() => expect(mockGetEvent.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  // ---- ISSUE-206: on-demand report generation ---------------------------------
+
+  it("generates a report from the empty-state CTA and refreshes", async () => {
+    const user = userEvent.setup();
+    renderPage("/events/evt-70#report");
+    expect(await screen.findByText("报告尚未生成")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("report-generate-button"));
+
+    await waitFor(() => expect(mockGenerateReport).toHaveBeenCalledWith("evt-70", undefined));
+    expect(await screen.findByText("报告已生成")).toBeInTheDocument();
+    // Event snapshot is refreshed so the report tab updates without a reload.
+    expect(mockGetEvent.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("offers force-generate on 422 report_quality_incomplete", async () => {
+    const user = userEvent.setup();
+    mockGenerateReport.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "report_quality_incomplete",
+        error_message: "incomplete placeholder present",
+      }),
+    );
+    renderPage("/events/evt-70#report");
+    await screen.findByTestId("report-generate-button");
+
+    await user.click(screen.getByTestId("report-generate-button"));
+    expect(
+      await screen.findByText("报告质量不完整：存在占位章节。可强制生成以存档降级件。"),
+    ).toBeInTheDocument();
+
+    const modal = await screen.findByTestId("report-quality-confirm-modal");
+    await user.click(within(modal).getByRole("button", { name: /强制生成/ }));
+    await waitFor(() =>
+      expect(mockGenerateReport).toHaveBeenLastCalledWith("evt-70", { force: true }),
+    );
+  });
+
+  it("confirms downgrade overwrite on 409 report_quality_conflict", async () => {
+    const user = userEvent.setup();
+    mockGenerateReport.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "report_quality_conflict",
+        error_message: "complete report exists",
+      }),
+    );
+    renderPage("/events/evt-70#report");
+    await screen.findByTestId("report-generate-button");
+
+    await user.click(screen.getByTestId("report-generate-button"));
+    expect(
+      await screen.findByText("已有完整报告：覆盖为降级报告需确认降级。"),
+    ).toBeInTheDocument();
+
+    const modal = await screen.findByTestId("report-quality-confirm-modal");
+    await user.click(within(modal).getByRole("button", { name: /确认覆盖/ }));
+    await waitFor(() =>
+      expect(mockGenerateReport).toHaveBeenLastCalledWith("evt-70", {
+        confirm_downgrade: true,
+      }),
+    );
   });
 });
