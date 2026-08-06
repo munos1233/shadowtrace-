@@ -73,10 +73,8 @@ export default function EventTodoBar({
   const [resolving, setResolving] = useState(false);
 
   const roles = currentAuthRoles();
-  const canCloseRole =
-    roles.includes("analyst") ||
-    roles.includes("approver") ||
-    roles.includes("admin");
+  // Backend close_event: require_roles(ROLE_ANALYST); admin bypasses via has_any_role.
+  const canCloseRole = roles.includes("analyst") || roles.includes("admin");
   const canResolveRole = roles.includes("admin");
 
   const unknownAction = unknownActions(actions)[0];
@@ -213,7 +211,9 @@ export default function EventTodoBar({
               结案
             </Button>
             {!canCloseRole && (
-              <Typography.Text type="secondary">结案需 analyst 角色</Typography.Text>
+              <Typography.Text type="secondary">
+                结案需 analyst 或 admin 角色
+              </Typography.Text>
             )}
             <Button
               disabled={!hasResolveTarget || !canResolveRole}

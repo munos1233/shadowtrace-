@@ -426,7 +426,9 @@ export default function KnowledgeReviewPage() {
         />
         {total > 0 && (
           <Typography.Text type="secondary" style={{ display: "block", marginTop: 12 }}>
-            共 {total} 条待审核
+            {eventIdFilter
+              ? `显示 ${visibleItems.length} / ${total} 条待审核（已按事件筛选）`
+              : `共 ${total} 条待审核`}
             {hasProfileOnly ? "（当前均为 profile，符合 CLOSED 前预期）" : ""}
             {hasClosedLoopTypes ? "（含须 CLOSED 后入队的 fp_rule / history_case）" : ""}
           </Typography.Text>

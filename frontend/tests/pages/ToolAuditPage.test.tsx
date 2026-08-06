@@ -211,7 +211,20 @@ function makeTraceEntries(): DecisionTraceEntry[] {
               disposition_id: "disp-1",
               confirmation_evidence: "XDR receipt #17",
             }
-          : { status: "success" },
+          : entryType === "tool_call"
+            ? {
+                tool_name: "query_process",
+                status: "success",
+                duration_ms: 42,
+                result_summary: "found suspicious process",
+              }
+            : entryType === "state_transition"
+              ? {
+                  from_status: "analyzing",
+                  to_status: "scoring",
+                  reason: "analysis complete",
+                }
+              : { status: "success" },
     ref_id: entryType === "tool_call" ? "call-1" : `ref-${index}`,
   }));
 }
@@ -238,6 +251,9 @@ describe("DecisionTraceTimeline", () => {
     expect(screen.getByText("91%")).toBeInTheDocument();
     expect(screen.getByText("需要人工复核")).toBeInTheDocument();
     expect(screen.getByText("XDR receipt #17")).toBeInTheDocument();
+    expect(screen.getByText("query_process")).toBeInTheDocument();
+    expect(screen.getByText("found suspicious process")).toBeInTheDocument();
+    expect(screen.getByText("analysis complete")).toBeInTheDocument();
     expect(screen.getAllByText("success").length).toBeGreaterThan(0);
     expect(
       screen.queryByText("must-not-render-hidden-reasoning"),

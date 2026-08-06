@@ -170,6 +170,10 @@ describe("socketClient", () => {
     "disposition_submitted",
     "tool_call_started",
     "tool_call_completed",
+    "agent_progress",
+    "agent_completed",
+    "agent_failed",
+    "report_generated",
   ])("passes through %s detail resource events", async (type) => {
     const { socketClient } = await import("../../src/services/socketClient");
     const handler = vi.fn();

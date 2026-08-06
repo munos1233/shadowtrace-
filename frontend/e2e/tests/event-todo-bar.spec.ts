@@ -47,10 +47,10 @@ const DETAIL_FIXTURE = {
             event_id: EVENT_ID,
             description: "severity mismatch across sources",
             evidence_ids: ["ev-1", "ev-2"],
-            sources: ["edr"],
+            sources: ["endpoint"],
           },
         ],
-        gaps: [{ gap_id: "gap-1", description: "missing endpoint logs", sources: ["edr"] }],
+        gaps: [{ gap_id: "gap-1", description: "missing endpoint logs", sources: ["endpoint"] }],
         success_sources: [],
         failed_sources: [],
         overall_confidence: 0.5,
@@ -65,6 +65,7 @@ const DETAIL_FIXTURE = {
   analysis_only_complete: true,
   next_recommended_action: "none",
   phase_message: "分析已完成，请生成报告。",
+  execution_substate: null as string | null,
 };
 
 const CLOSE_READY_FIXTURE = {
@@ -265,39 +266,21 @@ test.describe("ISSUE-210 · event todo bar", () => {
     await expect.poll(() => closeCalled).toBe(true);
   });
 
-  test("submits resolve-unknown when admin token and unknown action exist", async ({ page }) => {
-    let resolveCalled = false;
+  test("disables resolve-unknown for non-admin e2e token and shows role hint", async ({
+    page,
+  }) => {
     await mockEventDetailApis(page, {
       ...DETAIL_FIXTURE,
       execution_substate: "manual_resolution",
       event: { ...DETAIL_FIXTURE.event, status: "executing_response" },
     }, { unknownAction: true });
 
-    await page.route("**/api/v1/actions/*/resolve-unknown**", async (route) => {
-      resolveCalled = true;
-      const body = route.request().postDataJSON() as { comment?: string };
-      expect(body.comment).toContain("e2e confirmed");
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          action_id: UNKNOWN_ACTION_FIXTURE.action_id,
-          status: "success",
-          message: "resolved",
-        }),
-      });
-    });
-
     await page.goto(`/events/${EVENT_ID}`);
     await expect(page.getByText("写回待处理")).toBeVisible();
     const resolveButton = page.getByTestId("event-resolve-unknown-button");
     await expect(resolveButton).toBeVisible();
-    if (!(await resolveButton.isEnabled())) {
-      test.skip(true, "resolve button disabled — e2e token lacks admin role");
-    }
-    await resolveButton.click();
-    await page.getByLabel("裁决说明").fill("e2e confirmed external effect");
-    await page.getByRole("button", { name: "提交裁决" }).click();
-    await expect.poll(() => resolveCalled).toBe(true);
+    // Default E2E_AUTH_TOKEN / e2e-token has analyst+approver, not admin.
+    await expect(resolveButton).toBeDisabled();
+    await expect(page.getByText("裁决 UNKNOWN 需 admin 角色")).toBeVisible();
   });
 });

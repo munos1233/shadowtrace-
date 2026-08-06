@@ -183,7 +183,7 @@ describe("eventTodos", () => {
                 event_id: "evt-1",
                 description: "severity mismatch",
                 evidence_ids: ["ev-1", "ev-2"],
-                sources: ["edr"],
+                sources: ["endpoint"],
               },
             ],
             gaps: [],

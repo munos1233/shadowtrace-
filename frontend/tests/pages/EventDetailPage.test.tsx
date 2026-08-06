@@ -783,6 +783,22 @@ describe("EventDetailPage", () => {
     );
   });
 
+  it("disables close for approver-only roles", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "approver");
+    const detail = makeDetail({ status: "reporting" });
+    detail.next_recommended_action = "close";
+    detail.event.event_context_snapshot = {
+      ...detail.event.event_context_snapshot!,
+      report: { report_id: "evt-70", summary: "ready" },
+    };
+    mockGetEvent.mockResolvedValue({ data: detail });
+
+    renderPage("/events/evt-70");
+    const closeButton = await screen.findByTestId("event-close-button");
+    expect(closeButton).toBeDisabled();
+    expect(screen.getByText(/结案需 analyst 或 admin/)).toBeInTheDocument();
+  });
+
   it("disables resolve-unknown for non-admin roles", async () => {
     vi.stubEnv("VITE_AUTH_ROLES", "analyst");
     mockListActions.mockResolvedValue({
