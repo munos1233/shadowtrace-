@@ -71,9 +71,28 @@ describe("ReportViewer", () => {
     expect(screen.getByText("报告尚未生成")).toBeDefined();
   });
 
-  it("shows generating message when event is REPORTING", () => {
-    render(<ReportViewer report={null} loading={false} eventStatus="reporting" />);
-    expect(screen.getByText("报告生成中，请稍候...")).toBeDefined();
+  it("shows the generate CTA once analysis finished (REPORTING)", () => {
+    render(
+      <ReportViewer
+        report={null}
+        loading={false}
+        eventStatus="reporting"
+        onGenerate={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("report-generate-button")).toBeInTheDocument();
+  });
+
+  it("hides the generate CTA while the investigation is still running", () => {
+    render(
+      <ReportViewer
+        report={null}
+        loading={false}
+        eventStatus="analyzing"
+        onGenerate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("report-generate-button")).not.toBeInTheDocument();
   });
 
   it("renders report title and sections", () => {
@@ -175,17 +194,7 @@ describe("ReportViewer", () => {
     expect(onGenerate).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the generate CTA while the event is REPORTING", () => {
-    render(
-      <ReportViewer
-        report={null}
-        loading={false}
-        eventStatus="reporting"
-        onGenerate={vi.fn()}
-      />,
-    );
-    expect(screen.queryByTestId("report-generate-button")).not.toBeInTheDocument();
-  });
+
 
   it("shows loading on the generate CTA while generating", () => {
     render(

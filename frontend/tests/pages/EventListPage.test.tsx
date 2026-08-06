@@ -309,17 +309,18 @@ describe("EventListPage", () => {
     const btn = screen.getByTestId("trigger-investigation-evt-1");
     await user.click(btn);
     expect(await screen.findByTestId("investigate-mode-modal")).toBeInTheDocument();
-    // ISSUE-206: the report-generation toggle defaults OFF and is not sent to
-    // the API (the backend InvestigateRequest field ships with ISSUE-204).
-    const toggle = screen.getByTestId("investigate-generate-report-toggle");
-    // Disabled until the backend InvestigateRequest field ships (ISSUE-204).
-    expect(toggle).toBeDisabled();
+    // ISSUE-206/204: the report-generation toggle defaults OFF, and checking
+    // it sends generate_report=true to the investigate API.
+    const toggle = screen.getByTestId("investigate-generate-report");
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
     await user.click(screen.getByText("开始调查"));
 
     await waitFor(() =>
       expect(mockTriggerInvestigation).toHaveBeenCalledWith("evt-1", {
         includeResponseExecution: false,
-        generateReport: false,
+        generateReport: true,
       }),
     );
     await waitFor(() => {

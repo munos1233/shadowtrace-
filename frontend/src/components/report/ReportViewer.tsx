@@ -103,14 +103,19 @@ export default function ReportViewer({
   }
 
   if (!report || report.sections.length === 0) {
-    const isReporting = eventStatus === "reporting";
+    // ISSUE-204/206: REPORTING means analysis is complete but report bytes may
+    // not exist yet; generation is allowed only once analysis finished
+    // (REPORTING/CLOSED) — never while the investigation is still running.
+    const canGenerate =
+      onGenerate != null &&
+      (eventStatus === "reporting" || eventStatus === "closed" || eventStatus === undefined);
     return (
       <div style={{ textAlign: "center", padding: 48 }}>
         <FileTextOutlined style={{ fontSize: 48, color: "#d9d9d9" }} />
         <Text type="secondary" style={{ display: "block", marginTop: 16 }}>
-          {isReporting ? "报告生成中，请稍候..." : "报告尚未生成"}
+          报告尚未生成
         </Text>
-        {!isReporting && onGenerate && (
+        {canGenerate && (
           <Button
             type="primary"
             icon={<FileTextOutlined />}
@@ -139,17 +144,20 @@ export default function ReportViewer({
           <div className="shadowtrace-export-btns">
             <ReportExportButtons report={report} />
           </div>
-          {onRegenerate && eventStatus !== "reporting" && (
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={generating}
-              onClick={onRegenerate}
-              data-testid="report-regenerate-button"
-            >
-              重新生成
-            </Button>
-          )}
+          {onRegenerate != null &&
+            (eventStatus === "reporting" ||
+              eventStatus === "closed" ||
+              eventStatus === undefined) && (
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={generating}
+                onClick={onRegenerate}
+                data-testid="report-regenerate-button"
+              >
+                重新生成
+              </Button>
+            )}
         </div>
 
         {alert && (

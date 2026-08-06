@@ -1472,6 +1472,14 @@ async def _query_tool_call_items(
 # POST /events/{event_id}/report  (ISSUE-212 quality gate; generation for 204/212)
 # --------------------------------------------------------------------------- #
 
+# ISSUE-206: on-demand generation is only allowed once analysis finished —
+# REPORTING (report phase reachable; bytes may be absent) or CLOSED (report
+# required). Earlier lifecycle states would read an incomplete context and
+# race the running pipeline.
+REPORT_GENERATION_ALLOWED_STATUSES: frozenset[EventStatus] = frozenset(
+    {EventStatus.REPORTING, EventStatus.CLOSED}
+)
+
 
 @router.get("/events/{event_id}/report", response_model=s.ReportResponse)
 async def get_report(
@@ -1525,6 +1533,22 @@ async def generate_report(
     event = await event_service.get_event(event_id)
     if event is None:
         raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
+
+    # ISSUE-206: refuse generation while the investigation is still running.
+    # REPORTING means the report phase is reachable (analysis complete) but
+    # report bytes may not exist yet; CLOSED requires a report. Any earlier
+    # lifecycle state would read an incomplete context and race the pipeline.
+    if event.status not in REPORT_GENERATION_ALLOWED_STATUSES:
+        raise InvalidStateTransitionError(
+            f"report generation requires analysis to be complete "
+            f"(REPORTING or CLOSED), current status={event.status.value}",
+            details={
+                "event_id": event_id,
+                "status": event.status.value,
+                "hint": "wait for the investigation to reach REPORTING, or use "
+                "POST /events/{id}/report after completion",
+            },
+        )
 
     force_flag = bool(force or (body.force if body is not None else False))
     confirm_flag = bool(
