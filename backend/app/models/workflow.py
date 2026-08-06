@@ -879,7 +879,8 @@ def validate_closed_gate(ctx: TransitionContext) -> None:
     """Hard gate for every transition into CLOSED (required writeback semantics)."""
     if not ctx.report_exists:
         raise InvalidStateTransitionError(
-            "CLOSED requires an investigation report; call POST /api/v1/events/{event_id}/report first",
+            "CLOSED requires an investigation report; "
+            "call POST /api/v1/events/{event_id}/report first",
             target=EventStatus.CLOSED,
             details={"report_exists": False},
             error_code="closed_requires_report",
