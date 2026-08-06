@@ -426,8 +426,8 @@ export default function EventListPage() {
         data-testid="investigate-mode-modal"
       >
         <Typography.Paragraph type="secondary">
-          默认「仅分析」会生成报告并在 REPORTING 停止；「分析并生成处置方案」会继续进入
-          ResponseAgent 与审批流程。
+          默认「仅分析」会生成报告并在 REPORTING 停止，不会产生待审批动作；「分析并生成处置方案」
+          会继续进入 ResponseAgent 与审批流程（L2+ 或策略要求审批的处置动作会进入待审批）。
         </Typography.Paragraph>
         <Radio.Group
           value={includeResponseExecution ? "full" : "analysis_only"}

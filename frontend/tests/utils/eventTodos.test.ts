@@ -168,6 +168,10 @@ describe("eventTodos", () => {
     });
     expect(todos.some((item) => item.kind === "approval_pending")).toBe(true);
     expect(todos.some((item) => item.kind === "writeback_resolve")).toBe(true);
+    const approvalTodo = todos.find((item) => item.kind === "approval_pending");
+    // ISSUE-207: approval CTA deep-links to the approval center filtered by event.
+    expect(approvalTodo?.externalHref).toBe("/approvals?event_id=evt-1");
+    expect(approvalTodo?.tabKey).toBe("actions");
   });
 
   it("includes memory review, evidence gap, and conflict todos", () => {

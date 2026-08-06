@@ -21,6 +21,7 @@ import type {
 } from "../types/event";
 import type {
   ActionListResponse,
+  ActionOperationResponse,
   ResolveUnknownRequest,
   ResolveWritebackRequest,
 } from "../types/action";
@@ -146,14 +147,23 @@ export function approveAction(
   actionId: string,
   body?: { comment?: string; decision_id?: string },
 ) {
-  return apiClient.post(`/actions/${actionId}/approve`, body ?? {});
+  return apiClient.post<ActionOperationResponse>(
+    `/actions/${actionId}/approve`,
+    body ?? {},
+    // Callers surface decision errors (incl. 403 role hints) — avoid double toast.
+    { skipGlobalErrorToast: true },
+  );
 }
 
 export function rejectAction(
   actionId: string,
   body: { comment?: string; decision_id?: string },
 ) {
-  return apiClient.post(`/actions/${actionId}/reject`, body);
+  return apiClient.post<ActionOperationResponse>(
+    `/actions/${actionId}/reject`,
+    body,
+    { skipGlobalErrorToast: true },
+  );
 }
 
 // ------------------------------------------------------------------ //

@@ -97,13 +97,17 @@ describe("eventApi", () => {
   it("approveAction calls POST /actions/:id/approve", async () => {
     const body = { decision_id: "dec-1", comment: "LGTM" };
     await eventApi.approveAction("act-1", body);
-    expect(mockPost).toHaveBeenCalledWith("/actions/act-1/approve", body);
+    expect(mockPost).toHaveBeenCalledWith("/actions/act-1/approve", body, {
+      skipGlobalErrorToast: true,
+    });
   });
 
   it("rejectAction calls POST /actions/:id/reject", async () => {
     const body = { decision_id: "dec-2", comment: "not safe" };
     await eventApi.rejectAction("act-1", body);
-    expect(mockPost).toHaveBeenCalledWith("/actions/act-1/reject", body);
+    expect(mockPost).toHaveBeenCalledWith("/actions/act-1/reject", body, {
+      skipGlobalErrorToast: true,
+    });
   });
 
   it("triggerInvestigation skips global error toast for page-local handling", async () => {

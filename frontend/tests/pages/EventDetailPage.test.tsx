@@ -1,10 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App as AntApp } from "antd";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { EventDetailResponse } from "../../src/types/event";
 import { useAgentStatusStore } from "../../src/stores/agentStatusStore";
+import { ApiError } from "../../src/services/apiClient";
 
 const mockGetEvent = vi.fn();
 const mockGetTimeline = vi.fn();
@@ -23,6 +24,8 @@ const mockCloseEvent = vi.fn();
 const mockResolveUnknownAction = vi.fn();
 const mockResolveWriteback = vi.fn();
 const mockListMemoryReviews = vi.fn();
+const mockApproveAction = vi.fn();
+const mockRejectAction = vi.fn();
 
 vi.mock("../../src/services/eventApi", () => ({
   getEvent: (...args: unknown[]) => mockGetEvent(...args),
@@ -38,6 +41,8 @@ vi.mock("../../src/services/eventApi", () => ({
   closeEvent: (...args: unknown[]) => mockCloseEvent(...args),
   resolveUnknownAction: (...args: unknown[]) => mockResolveUnknownAction(...args),
   resolveWriteback: (...args: unknown[]) => mockResolveWriteback(...args),
+  approveAction: (...args: unknown[]) => mockApproveAction(...args),
+  rejectAction: (...args: unknown[]) => mockRejectAction(...args),
 }));
 
 vi.mock("../../src/services/knowledgeApi", () => ({
@@ -359,6 +364,24 @@ describe("EventDetailPage", () => {
     mockCloseEvent.mockResolvedValue({ data: { event_id: "evt-70", status: "closed" } });
     mockResolveUnknownAction.mockResolvedValue({ data: {} });
     mockResolveWriteback.mockResolvedValue({ data: {} });
+    mockApproveAction.mockResolvedValue({
+      data: {
+        action_id: "act-70",
+        status: "approved",
+        message: "approved",
+        resume_status: "ok",
+        degraded: false,
+      },
+    });
+    mockRejectAction.mockResolvedValue({
+      data: {
+        action_id: "act-70",
+        status: "rejected",
+        message: "rejected",
+        resume_status: null,
+        degraded: false,
+      },
+    });
     mockListMemoryReviews.mockResolvedValue({ data: { total: 0, items: [] } });
     mockGetDecisionTrace.mockResolvedValue({
       data: {
@@ -862,5 +885,277 @@ describe("EventDetailPage", () => {
     });
     emitSocketEvent({ type: "report_generated", event_id: "evt-70", payload: {} });
     await waitFor(() => expect(mockGetEvent.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  // ---- ISSUE-207: inline approval in event detail -----------------------
+
+  function waitingApprovalActionsFixture() {
+    return {
+      data: {
+        total: 1,
+        page: 1,
+        page_size: 100,
+        items: [
+          {
+            action_id: "act-70",
+            event_id: "evt-70",
+            action_level: "l4",
+            action_category: "response",
+            action_name: "block_ip",
+            tool_name: "block_ip",
+            execution_phase: "immediate",
+            status: "waiting_approval",
+            target: "198.51.100.7",
+            target_type: "ip",
+            execution_owner: "xdr_managed",
+            parameters: {},
+            updated_at: "2026-07-27T08:06:00Z",
+          },
+        ],
+      },
+    };
+  }
+
+  it("approves a waiting_approval action inline, shows resume feedback and refreshes tables", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({
+      data: makeDetail({ status: "waiting_approval" }),
+    });
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("approve-action-act-70");
+    const listCallsBefore = mockListActions.mock.calls.length;
+    const eventCallsBefore = mockGetEvent.mock.calls.length;
+
+    await user.click(screen.getByTestId("approve-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "批准动作" });
+    await user.click(within(dialog).getByRole("button", { name: /批\s*准/ }));
+
+    await waitFor(() => {
+      expect(mockApproveAction).toHaveBeenCalledWith(
+        "act-70",
+        expect.objectContaining({ decision_id: expect.any(String) }),
+      );
+    });
+    // resume_status=ok feedback surfaced (ISSUE-207).
+    expect(
+      await screen.findByText("动作 act-70 已批准，调查流程已继续"),
+    ).toBeInTheDocument();
+    // Locked refresh: actions table + event are re-fetched, not just a toast.
+    await waitFor(() => {
+      expect(mockListActions.mock.calls.length).toBeGreaterThan(listCallsBefore);
+    });
+    await waitFor(() => {
+      expect(mockGetEvent.mock.calls.length).toBeGreaterThan(eventCallsBefore);
+    });
+  });
+
+  it("surfaces failed resume without pretending the investigation continued", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+    mockApproveAction.mockResolvedValueOnce({
+      data: {
+        action_id: "act-70",
+        status: "approved",
+        message: "approved",
+        resume_status: "failed",
+        degraded: true,
+      },
+    });
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("approve-action-act-70");
+    await user.click(screen.getByTestId("approve-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "批准动作" });
+    await user.click(within(dialog).getByRole("button", { name: /批\s*准/ }));
+
+    expect(
+      await screen.findByText(
+        "动作 act-70 已批准，但调查流程继续失败，请查看事件状态（降级模式运行）",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("rejects a waiting_approval action inline", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("reject-action-act-70");
+    await user.click(screen.getByTestId("reject-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "拒绝动作" });
+    await user.type(within(dialog).getByPlaceholderText("请填写拒绝原因"), "不符合处置策略");
+    await user.click(within(dialog).getByRole("button", { name: /拒\s*绝/ }));
+
+    await waitFor(() => {
+      expect(mockRejectAction).toHaveBeenCalledWith(
+        "act-70",
+        expect.objectContaining({ comment: "不符合处置策略" }),
+      );
+    });
+    expect(await screen.findByText("动作 act-70 已拒绝")).toBeInTheDocument();
+  });
+
+  it("disables inline approval buttons and explains role without approver", async () => {
+    // Single-token dev/compose mode: known token + explicit analyst override.
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst");
+    vi.stubEnv("VITE_DEV_AUTH_TOKEN", "e2e-token");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("approve-action-act-70");
+    expect(screen.getByTestId("approve-action-act-70")).toBeDisabled();
+    expect(screen.getByTestId("reject-action-act-70")).toBeDisabled();
+    expect(screen.getByTestId("approval-role-hint")).toHaveTextContent(
+      "当前角色无审批权限",
+    );
+    expect(screen.getByText(/需要 approver 或 admin 角色/)).toBeInTheDocument();
+  });
+
+  it("shows a 403 permission hint when approve is forbidden by backend", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+    mockApproveAction.mockRejectedValueOnce(
+      new ApiError({ error_code: "forbidden", error_message: "requires one of roles: approver" }),
+    );
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("approve-action-act-70");
+    await user.click(screen.getByTestId("approve-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "批准动作" });
+    await user.click(within(dialog).getByRole("button", { name: /批\s*准/ }));
+
+    expect(
+      await screen.findByText("无审批权限（403）：需要 approver 角色，请联系管理员授权。"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps inline approval enabled when roles are unknown (production trusted-proxy)", async () => {
+    // No VITE_AUTH_ROLES / VITE_DEV_AUTH_TOKEN stubbed → hasKnownAuthRoles() is
+    // false; the real principal comes from the backend (trusted-proxy X-Auth-Roles),
+    // so the UI must not hard-disable the button (ISSUE-207 review blocker fix).
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    const approveButton = await screen.findByTestId("approve-action-act-70");
+    expect(approveButton).not.toBeDisabled();
+    expect(screen.queryByTestId("approval-role-hint")).not.toBeInTheDocument();
+  });
+
+  it("warns when approval succeeded but the follow-up refresh fails", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions
+      .mockResolvedValueOnce(waitingApprovalActionsFixture())
+      .mockRejectedValueOnce(new Error("actions 500"))
+      .mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent
+      .mockResolvedValueOnce({ data: makeDetail({ status: "waiting_approval" }) })
+      .mockRejectedValueOnce(new Error("event 500"))
+      .mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("approve-action-act-70");
+    await user.click(screen.getByTestId("approve-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "批准动作" });
+    await user.click(within(dialog).getByRole("button", { name: /批\s*准/ }));
+
+    // Approval fact itself succeeded; only the re-sync failed — surfaced as a
+    // refresh warning, never as an approval failure (ISSUE-207 review).
+    expect(
+      await screen.findByText("审批已成功，但页面刷新失败，请手动刷新查看最新状态。"),
+    ).toBeInTheDocument();
+    // The stale row must not offer a second submit: the action is locally
+    // marked as decided while awaiting re-sync (ISSUE-207 review).
+    expect(screen.getByTestId("approval-decided-act-70")).toBeInTheDocument();
+    expect(screen.queryByTestId("approve-action-act-70")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reject-action-act-70")).not.toBeInTheDocument();
+  });
+
+  it("handles approval_decision_conflict by closing dialog, refreshing and explaining", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions.mockResolvedValue(waitingApprovalActionsFixture());
+    mockGetEvent.mockResolvedValue({ data: makeDetail({ status: "waiting_approval" }) });
+    mockApproveAction.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "approval_decision_conflict",
+        error_message: "already decided by another approver",
+      }),
+    );
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    const listCallsBefore = mockListActions.mock.calls.length;
+    await screen.findByTestId("approve-action-act-70");
+    await user.click(screen.getByTestId("approve-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "批准动作" });
+    await user.click(within(dialog).getByRole("button", { name: /批\s*准/ }));
+
+    expect(
+      await screen.findByText("该审批已由其他审批者处理，已刷新最新状态。"),
+    ).toBeInTheDocument();
+    // Dialog closed and actions/event re-fetched instead of offering stale retries.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "批准动作" })).not.toBeInTheDocument(),
+    );
+    await waitFor(() => {
+      expect(mockListActions.mock.calls.length).toBeGreaterThan(listCallsBefore);
+    });
+  });
+
+  it("409 with a failed refresh still blocks a second approve", async () => {
+    vi.stubEnv("VITE_AUTH_ROLES", "analyst,approver");
+    const user = userEvent.setup();
+    mockListActions
+      .mockResolvedValueOnce(waitingApprovalActionsFixture()) // initial load
+      .mockRejectedValueOnce(new Error("actions 500")); // refresh after 409
+    mockGetEvent
+      .mockResolvedValueOnce({ data: makeDetail({ status: "waiting_approval" }) })
+      .mockRejectedValueOnce(new Error("event 500"));
+    mockApproveAction.mockRejectedValueOnce(
+      new ApiError({
+        error_code: "approval_decision_conflict",
+        error_message: "already decided",
+      }),
+    );
+
+    renderPage("/events/evt-70#actions");
+    await user.click(await screen.findByRole("tab", { name: /安全处置/ }));
+    await screen.findByTestId("approve-action-act-70");
+    await user.click(screen.getByTestId("approve-action-act-70"));
+    const dialog = await screen.findByRole("dialog", { name: "批准动作" });
+    await user.click(within(dialog).getByRole("button", { name: /批\s*准/ }));
+
+    // 409 is reported, and the failed re-sync is not disguised as a success.
+    expect(
+      await screen.findByText(
+        "该审批已由其他审批者处理，但页面刷新未完成，请手动刷新查看最新状态。",
+      ),
+    ).toBeInTheDocument();
+    // Even with the refresh failed, the row must not offer a second approve
+    // (locally marked decided on 409 — ISSUE-207 review).
+    expect(screen.getByTestId("approval-decided-act-70")).toBeInTheDocument();
+    expect(screen.queryByTestId("approve-action-act-70")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reject-action-act-70")).not.toBeInTheDocument();
   });
 });

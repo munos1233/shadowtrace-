@@ -33,6 +33,13 @@ type DetailResource =
   | "dispositions"
   | "writebacks";
 
+/** Per-resource fetch success flags (ISSUE-207 review): callers like the inline
+ *  approval flow must be able to tell a refresh failure from a success. */
+export interface DetailRefreshResult {
+  actionsOk: boolean;
+  eventOk: boolean;
+}
+
 export interface EventWriteback extends WritebackResponse {
   provider_job_id?: string | null;
   provider_message?: string | null;
@@ -105,10 +112,10 @@ export function useEventDetail(eventId: string | undefined) {
   actionsRef.current = actions;
 
   const refresh = useCallback(
-    async (resource: DetailResource = "all") => {
+    async (resource: DetailResource = "all"): Promise<DetailRefreshResult> => {
       if (!eventId) {
         setLoading(false);
-        return;
+        return { actionsOk: false, eventOk: false };
       }
       const isAll = resource === "all";
       if (isAll) setLoading(true);
@@ -136,13 +143,16 @@ export function useEventDetail(eventId: string | undefined) {
           dispositionsPromise,
           connectorsPromise,
         ]);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) return { actionsOk: false, eventOk: false };
 
+      let actionsOk = false;
+      let eventOk = false;
       let nextEvent = eventRef.current;
       if (eventResult.status === "fulfilled" && eventResult.value) {
         nextEvent = eventResult.value.data;
         eventRef.current = nextEvent;
         setEvent(nextEvent);
+        eventOk = true;
       }
       if (tracesResult.status === "fulfilled" && tracesResult.value) {
         setTraces(tracesResult.value.data.items);
@@ -153,6 +163,7 @@ export function useEventDetail(eventId: string | undefined) {
         nextActions = actionsResult.value.data.items;
         actionsRef.current = nextActions;
         setActions(nextActions);
+        actionsOk = true;
       }
       if (dispositionsResult.status === "fulfilled" && dispositionsResult.value) {
         setDispositions(dispositionsResult.value.data.items);
@@ -223,6 +234,7 @@ export function useEventDetail(eventId: string | undefined) {
       }
 
       if (isAll && mountedRef.current) setLoading(false);
+      return { actionsOk, eventOk };
     },
     [eventId],
   );

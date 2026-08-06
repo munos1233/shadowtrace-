@@ -38,6 +38,18 @@ export interface ActionListResponse {
   items: Action[];
 }
 
+/** POST /actions/{id}/approve|reject — matches backend ActionOperationResponse. */
+export interface ActionOperationResponse {
+  action_id: string;
+  status: string;
+  decision_id?: string | null;
+  message: string;
+  /** Graph resume outcome after approval (backend ISSUE-193). */
+  resume_status?: "ok" | "failed" | "skipped" | null;
+  /** Backend operated in degraded (LLM/partial) mode. */
+  degraded?: boolean | null;
+}
+
 export type ResolveUnknownResolution =
   | "mark_success"
   | "mark_failed"

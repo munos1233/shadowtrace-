@@ -110,7 +110,7 @@ export function buildEventTodos(input: BuildEventTodosInput): EventTodoItem[] {
       label: "待审批处置",
       description: "存在 waiting_approval 动作，请前往审批中心或动作表处理。",
       tabKey: "actions",
-      externalHref: "/approvals",
+      externalHref: `/approvals?event_id=${encodeURIComponent(detail.event.event_id)}`,
       priority: 10,
     });
   }

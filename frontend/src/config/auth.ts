@@ -42,6 +42,26 @@ export function currentAuthRoles(): string[] {
   return ["analyst"];
 }
 
+/**
+ * True when the frontend can actually determine the operator's roles.
+ *
+ * In production the backend resolves the principal from trusted-proxy
+ * ``X-Auth-Roles`` (see backend/app/core/auth.py get_principal), which the UI
+ * cannot read. In that case ``currentAuthRoles()`` falls back to ``["analyst"]``
+ * and must NOT be used for hard UI gating — leave the action enabled and let the
+ * backend answer with 200/403 (ISSUE-207 review). Mock/Compose stages that set
+ * ``VITE_AUTH_ROLES`` or a known ``VITE_DEV_AUTH_TOKEN`` do know the roles.
+ */
+export function hasKnownAuthRoles(): boolean {
+  // Only the single-token dev/compose mode pins roles to one principal. In
+  // trusted-proxy production the bundle-wide VITE_AUTH_ROLES / VITE_DEV_AUTH_TOKEN
+  // cannot represent the per-request principal (backend get_principal prefers
+  // X-Auth-Roles), so never trust static config for hard gating there
+  // (ISSUE-207 review). Deployments must not set VITE_AUTH_ROLES in production.
+  const token = import.meta.env.VITE_DEV_AUTH_TOKEN?.trim();
+  return Boolean(token && KNOWN_DEV_TOKEN_ROLES[token]);
+}
+
 export function canPromoteKnowledgeReviews(): boolean {
   return currentAuthRoles().includes(APPROVER_ROLE);
 }

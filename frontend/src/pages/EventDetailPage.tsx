@@ -12,6 +12,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  message,
 } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -35,7 +36,7 @@ import { isEventChatEnabled } from "../config/features";
 import { listMemoryReviews } from "../services/knowledgeApi";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEventDetail, type EventWriteback } from "../hooks/useEventDetail";
-import type { Action } from "../types/action";
+import type { Action, ActionOperationResponse } from "../types/action";
 import type {
   ConnectorPublic,
   DispositionResponse,
@@ -43,6 +44,13 @@ import type {
   TargetWritebackResult,
   WritebackStatus,
 } from "../types/event";
+import ApprovalActionModal from "../components/approval/ApprovalActionModal";
+import {
+  useApprovalStore,
+  type ApprovalDecisionBody,
+} from "../stores/approvalStore";
+import { currentAuthRoles, hasKnownAuthRoles } from "../config/auth";
+import { ApiError } from "../services/apiClient";
 
 const BASE_TAB_KEYS = [
   "source",
@@ -136,11 +144,60 @@ const ACTION_NAME_LABELS: Record<string, string> = {
   generate_report: "自动生成分析报告",
 };
 
+/**
+ * Surface resume_status / degraded to the operator after approve/reject (ISSUE-207).
+ * resume "failed" must not pretend the investigation continued.
+ */
+function showResumeFeedback(
+  actionId: string,
+  mode: "approve" | "reject",
+  result?: ActionOperationResponse,
+): void {
+  const verb = mode === "approve" ? "已批准" : "已拒绝";
+  if (!result) {
+    message.success(`动作 ${actionId} ${verb}`);
+    return;
+  }
+  const degradedSuffix = result.degraded ? "（降级模式运行）" : "";
+  switch (result.resume_status) {
+    case "ok":
+      message.success(`动作 ${actionId} ${verb}，调查流程已继续${degradedSuffix}`);
+      break;
+    case "skipped":
+      message.info(`动作 ${actionId} ${verb}（当前无待继续的调查流程）${degradedSuffix}`);
+      break;
+    case "failed":
+      message.error(
+        `动作 ${actionId} ${verb}，但调查流程继续失败，请查看事件状态${degradedSuffix}`,
+      );
+      break;
+    default:
+      message.success(`动作 ${actionId} ${verb}${degradedSuffix}`);
+  }
+}
+
 function actionDisplayName(action: Action): string {
   return ACTION_NAME_LABELS[action.action_name] ?? action.action_name;
 }
 
-function ActionsPanel({ actions }: { actions: Action[] }) {
+interface ActionsPanelProps {
+  actions: Action[];
+  onApprove: (actionId: string) => void;
+  onReject: (actionId: string) => void;
+  /** Disable inline approval buttons when the operator lacks approver/admin role (ISSUE-207). */
+  approvalDisabled: boolean;
+  /** action_id -> decided locally (approve/reject succeeded, awaiting re-sync).
+   *  Prevents a second submit while the table is still stale (ISSUE-207 review). */
+  decidedActionIds?: Record<string, boolean>;
+}
+
+function ActionsPanel({
+  actions,
+  onApprove,
+  onReject,
+  approvalDisabled,
+  decidedActionIds = {},
+}: ActionsPanelProps) {
   const columns: ColumnsType<Action> = [
     { title: "action_id", dataIndex: "action_id", width: 170 },
     {
@@ -166,6 +223,48 @@ function ActionsPanel({ actions }: { actions: Action[] }) {
     { title: "执行主体", dataIndex: "execution_owner", render: (value) => value || "暂无数据" },
     { title: "状态", dataIndex: "status", render: (value) => <Tag>{value}</Tag> },
     { title: "目标", dataIndex: "target", render: (value) => value || "暂无数据" },
+    {
+      title: "审批",
+      key: "approval",
+      width: 130,
+      fixed: "right",
+      render: (_value: unknown, action) => {
+        if (action.status !== "waiting_approval") return "—";
+        if (decidedActionIds[action.action_id]) {
+          return (
+            <Typography.Text
+              type="secondary"
+              data-testid={`approval-decided-${action.action_id}`}
+            >
+              已处理，同步中…
+            </Typography.Text>
+          );
+        }
+        return (
+          <Space size={4}>
+            <Button
+              size="small"
+              type="link"
+              disabled={approvalDisabled}
+              data-testid={`approve-action-${action.action_id}`}
+              onClick={() => onApprove(action.action_id)}
+            >
+              批准
+            </Button>
+            <Button
+              size="small"
+              type="link"
+              danger
+              disabled={approvalDisabled}
+              data-testid={`reject-action-${action.action_id}`}
+              onClick={() => onReject(action.action_id)}
+            >
+              拒绝
+            </Button>
+          </Space>
+        );
+      },
+    },
   ];
 
   const systemActions = actions.filter((a) => a.action_category === "system");
@@ -448,6 +547,83 @@ export default function EventDetailPage() {
   } = useEventDetail(eventId);
   const selectedTab = activeTab(location.hash);
   const [pendingMemoryReviewCount, setPendingMemoryReviewCount] = useState(0);
+  const { approve, reject } = useApprovalStore();
+  const [approvalModal, setApprovalModal] = useState<{
+    open: boolean;
+    actionId: string | null;
+    mode: "approve" | "reject";
+  }>({ open: false, actionId: null, mode: "approve" });
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  // Locally decided actions (approve/reject succeeded, awaiting re-sync) —
+  // blocks a duplicate submit if the follow-up refresh fails (ISSUE-207 review).
+  const [decidedActionIds, setDecidedActionIds] = useState<Record<string, boolean>>({});
+
+  const roles = currentAuthRoles();
+  const rolesKnown = hasKnownAuthRoles();
+  // Backend /actions/{id}/approve|reject: require_roles(ROLE_APPROVER); admin bypasses.
+  // Hard-disable only when the frontend truly knows the roles (mock/compose stage);
+  // otherwise keep enabled and let the backend answer 200/403 for the real
+  // trusted-proxy principal (ISSUE-207 review blocker fix).
+  const canApproveRole = roles.includes("approver") || roles.includes("admin");
+  const approvalDisabled = rolesKnown && !canApproveRole;
+
+  const openApprovalModal = (actionId: string, mode: "approve" | "reject") => {
+    setApprovalModal({ open: true, actionId, mode });
+  };
+
+  const handleApprovalCancel = () => {
+    setApprovalModal({ open: false, actionId: null, mode: "approve" });
+  };
+
+  const handleApprovalConfirm = async (actionId: string, body: ApprovalDecisionBody) => {
+    setApprovalSubmitting(true);
+    try {
+      const result =
+        approvalModal.mode === "approve"
+          ? await approve(actionId, body)
+          : await reject(actionId, body);
+      setApprovalModal({ open: false, actionId: null, mode: "approve" });
+      setDecidedActionIds((prev) => ({ ...prev, [actionId]: true }));
+      showResumeFeedback(actionId, approvalModal.mode, result);
+      // Locked refresh (ISSUE-207): re-pull the actions table (ActionsPanel data
+      // source) and the event so the todo bar recomputes — not just a toast.
+      const [actionsRefresh, eventRefresh] = await Promise.all([
+        refresh("actions"),
+        refresh("event"),
+      ]);
+      if (!actionsRefresh.actionsOk || !eventRefresh.eventOk) {
+        // Approval itself succeeded; only the re-sync failed — surface it as a
+        // refresh problem, never as an approval failure (ISSUE-207 review).
+        message.warning("审批已成功，但页面刷新失败，请手动刷新查看最新状态。");
+      }
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.error_code === "approval_decision_conflict") {
+        // Another approver already decided this action: mark it locally decided
+        // BEFORE re-syncing so a failed refresh cannot leave a stale approve
+        // button behind for more 409s (ISSUE-207 review).
+        setApprovalModal({ open: false, actionId: null, mode: "approve" });
+        setDecidedActionIds((prev) => ({ ...prev, [actionId]: true }));
+        const [actionsRefresh, eventRefresh] = await Promise.all([
+          refresh("actions"),
+          refresh("event"),
+        ]);
+        const refreshed = actionsRefresh.actionsOk && eventRefresh.eventOk;
+        message.warning(
+          refreshed
+            ? "该审批已由其他审批者处理，已刷新最新状态。"
+            : "该审批已由其他审批者处理，但页面刷新未完成，请手动刷新查看最新状态。",
+        );
+      } else if (err instanceof ApiError && err.error_code === "forbidden") {
+        message.error("无审批权限（403）：需要 approver 角色，请联系管理员授权。");
+      } else if (err instanceof ApiError) {
+        message.error(err.message || err.error_code || "审批操作失败");
+      } else {
+        message.error("审批操作失败");
+      }
+    } finally {
+      setApprovalSubmitting(false);
+    }
+  };
 
   const navigateTab = useCallback(
     (tabKey: string) => {
@@ -656,7 +832,31 @@ export default function EventDetailPage() {
         />
       ),
     },
-    { key: "actions", label: `处置动作（${actions.length}）`, children: <ActionsPanel actions={actions} /> },
+    {
+      key: "actions",
+      label: `处置动作（${actions.length}）`,
+      children: (
+        <>
+          {actions.some((a) => a.status === "waiting_approval") && approvalDisabled && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="当前角色无审批权限"
+              description="内联批准/拒绝需要 approver 或 admin 角色，按钮已禁用；请使用具备审批角色的账号操作。"
+              data-testid="approval-role-hint"
+            />
+          )}
+          <ActionsPanel
+            actions={actions}
+            onApprove={(actionId) => openApprovalModal(actionId, "approve")}
+            onReject={(actionId) => openApprovalModal(actionId, "reject")}
+            approvalDisabled={approvalDisabled}
+            decidedActionIds={decidedActionIds}
+          />
+        </>
+      ),
+    },
     {
       key: "writeback",
       label: `外部写回（${writebacks.length}）`,
@@ -716,7 +916,12 @@ export default function EventDetailPage() {
           刷新
         </Button>
       </Space>
-      <EventOverviewCard detail={event} onRefresh={() => refresh("all")} />
+      <EventOverviewCard
+        detail={event}
+        onRefresh={async () => {
+          await refresh("all");
+        }}
+      />
       <InvestigationPhaseBanner detail={event} />
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={14}>
@@ -727,7 +932,9 @@ export default function EventDetailPage() {
             evidenceDetail={evidenceDetail}
             pendingMemoryReviewCount={pendingMemoryReviewCount}
             onNavigateTab={navigateTab}
-            onRefresh={() => refresh("all")}
+            onRefresh={async () => {
+              await refresh("all");
+            }}
           />
         </Col>
         <Col xs={24} xl={10}>
@@ -763,6 +970,14 @@ export default function EventDetailPage() {
           }
         />
       </Card>
+      <ApprovalActionModal
+        open={approvalModal.open}
+        actionId={approvalModal.actionId}
+        mode={approvalModal.mode}
+        loading={approvalSubmitting}
+        onConfirm={handleApprovalConfirm}
+        onCancel={handleApprovalCancel}
+      />
     </Space>
   );
 }
