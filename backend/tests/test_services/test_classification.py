@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.services.classification import (
     apply_event_type_to_triage_payload,
     derive_classification_source,
+    human_override_event_type,
 )
 
 
@@ -52,3 +53,13 @@ def test_apply_event_type_to_triage_payload_syncs_dict() -> None:
     same, unchanged = apply_event_type_to_triage_payload(updated, "data_exfiltration")
     assert unchanged is False
     assert same is updated
+
+
+def test_human_override_event_type_helper() -> None:
+    assert human_override_event_type(None) is None
+    assert human_override_event_type({"source": "heuristic", "event_type": "other"}) is None
+    assert (
+        human_override_event_type({"source": "human", "event_type": "data_exfiltration"})
+        == "data_exfiltration"
+    )
+    assert human_override_event_type({"source": "human", "event_type": "  "}) is None

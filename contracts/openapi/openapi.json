@@ -353,6 +353,26 @@
               }
             }
           },
+          "403": {
+            "description": "Caller lacks analyst (or admin) role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "classification_conflict_active_investigation — event is executing_response or verifying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -5090,6 +5110,29 @@
         "type": "object",
         "title": "EntitySet",
         "description": "Container of the six entity categories."
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error_code": {
+            "type": "string",
+            "title": "Error Code"
+          },
+          "error_message": {
+            "type": "string",
+            "title": "Error Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error_code",
+          "error_message"
+        ],
+        "title": "ErrorResponse"
       },
       "EventCloseRequest": {
         "properties": {

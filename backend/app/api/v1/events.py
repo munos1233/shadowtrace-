@@ -922,6 +922,19 @@ async def _schedule_investigation(
 @router.patch(
     "/events/{event_id}/classification",
     response_model=s.ClassificationUpdateResponse,
+    responses={
+        403: {
+            "model": s.ErrorResponse,
+            "description": "Caller lacks analyst (or admin) role.",
+        },
+        409: {
+            "model": s.ErrorResponse,
+            "description": (
+                "classification_conflict_active_investigation — "
+                "event is executing_response or verifying."
+            ),
+        },
+    },
 )
 async def update_event_classification(
     event_id: str,

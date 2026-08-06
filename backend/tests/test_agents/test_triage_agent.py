@@ -465,6 +465,35 @@ class TestTriageAgentBasic:
         assert result.event_type == EventType.MALICIOUS_PROCESS
 
     @pytest.mark.asyncio
+    async def test_human_classification_override_wins_over_heuristic_keywords(self):
+        """ISSUE-209: reinvestigate must keep analyst event_type in triage_result."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        await wm.write(
+            "evt-human-override",
+            "classification_override",
+            {
+                "source": "human",
+                "event_type": "insider_threat",
+                "reason": "analyst override",
+                "operator": "analyst-1",
+            },
+        )
+        agent = TriageAgent(working_memory=wm)
+        input_ = _make_input(
+            "evt-human-override",
+            raw_event_summary=(
+                "User zhangsan uploaded confidential data to 203.0.113.88 (evil.example.com)"
+            ),
+        )
+        result = await agent._run(input_)
+        assert result.event_type == EventType.INSIDER_THREAT
+        assert "human classification override" in (result.decision_summary or "")
+        stored = await wm.read("evt-human-override", "triage_result")
+        assert isinstance(stored, dict)
+        assert stored.get("event_type") == "insider_threat"
+        assert "event_type_from_heuristic" not in (stored.get("degradation_reasons") or [])
+
+    @pytest.mark.asyncio
     async def test_single_login_failure_is_low(self):
         """Single login failure → account_anomaly → low severity."""
         wm = _MockBoundWorkingMemory(writer_name="TriageAgent")

@@ -213,6 +213,33 @@ async def test_classification_conflict_during_active_investigation(
 
 
 @pytest.mark.asyncio
+async def test_classification_conflict_during_verifying(
+    client: TestClient,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    event_id = await _create_event(event_service, title="Locked verifying")
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.SecurityEvent, event_id)
+            assert row is not None
+            row.status = EventStatus.VERIFYING.value
+
+    resp = client.patch(
+        f"/api/v1/events/{event_id}/classification",
+        json={
+            "event_type": "lateral_movement",
+            "reason": "should be blocked while verifying",
+        },
+        headers=_hdr(),
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error_code"] == "classification_conflict_active_investigation"
+    detail = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
+    assert detail.json()["event"]["event_type"] == "other"
+
+
+@pytest.mark.asyncio
 async def test_classification_forbidden_and_illegal_type(
     client: TestClient,
     event_service: EventService,

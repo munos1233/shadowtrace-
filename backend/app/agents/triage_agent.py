@@ -52,6 +52,7 @@ from app.models.entities import (
     ProcessEntity,
 )
 from app.models.enums import EventType, Severity
+from app.services.classification import human_override_event_type
 from app.services.entity_merge import EntityMergeResult, merge_entity_sets
 from app.services.working_memory import BoundWorkingMemory
 
@@ -478,10 +479,24 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         summary_notes: list[str] = []
 
         # 1. Map event type from source_snapshot (file fallback via raw_alert_snapshot).
+        # ISSUE-209: durable human override wins over source/heuristic/LLM remapping
+        # so reinvestigate keeps ResponseAgent rules aligned with the analyst type.
+        human_type_value = await self._read_human_override_event_type(input.event_id)
         snapshot = await self._read_source_snapshot(input.event_id)
         raw_type = _resolve_alert_type_from_snapshot(snapshot)
         authoritative_type = _source_event_type_authoritative(raw_type)
-        event_type = _map_event_type(raw_type, input.raw_event_summary)
+        if human_type_value is not None:
+            try:
+                event_type = EventType(human_type_value)
+            except ValueError:
+                event_type = _map_event_type(raw_type, input.raw_event_summary)
+                human_type_value = None
+            else:
+                summary_notes.append(
+                    f"Event type retained from human classification override: {event_type.value}."
+                )
+        else:
+            event_type = _map_event_type(raw_type, input.raw_event_summary)
 
         # 2. Entity extraction — LLM primary, regex fallback; merge with source hints.
         extraction = await self._extract_entities(
@@ -505,28 +520,29 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
         degradation_reasons = list(merge_result.degradation_reasons)
         degraded = extraction.text_degraded and source_validated.entity_set == EntitySet()
 
-        if authoritative_type is None and event_type is not EventType.OTHER:
-            degradation_reasons.append("event_type_from_heuristic")
-            await self._persist_event_type_audit_flag(
-                input.event_id,
-                "event_type_from_heuristic",
-                event_type.value,
-            )
+        if human_type_value is None:
+            if authoritative_type is None and event_type is not EventType.OTHER:
+                degradation_reasons.append("event_type_from_heuristic")
+                await self._persist_event_type_audit_flag(
+                    input.event_id,
+                    "event_type_from_heuristic",
+                    event_type.value,
+                )
 
-        if (
-            event_type is EventType.OTHER
-            and extraction.llm_event_type is not None
-            and extraction.llm_event_type is not EventType.OTHER
-            and get_settings().triage_llm_event_type_fallback
-        ):
-            event_type = extraction.llm_event_type
-            degradation_reasons.append("event_type_from_llm_fallback")
-            summary_notes.append(f"Event type adopted from LLM fallback: {event_type.value}.")
-            await self._persist_event_type_audit_flag(
-                input.event_id,
-                "event_type_from_llm_fallback",
-                event_type.value,
-            )
+            if (
+                event_type is EventType.OTHER
+                and extraction.llm_event_type is not None
+                and extraction.llm_event_type is not EventType.OTHER
+                and get_settings().triage_llm_event_type_fallback
+            ):
+                event_type = extraction.llm_event_type
+                degradation_reasons.append("event_type_from_llm_fallback")
+                summary_notes.append(f"Event type adopted from LLM fallback: {event_type.value}.")
+                await self._persist_event_type_audit_flag(
+                    input.event_id,
+                    "event_type_from_llm_fallback",
+                    event_type.value,
+                )
 
         if extraction.text_degraded and not degraded:
             summary_notes.append("Text entity extraction empty; using structured source entities.")
@@ -933,6 +949,30 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    async def _read_human_override_event_type(self, event_id: str) -> str | None:
+        """Read durable ISSUE-209 human classification override, if present."""
+        wm = self.working_memory
+        if wm is None:
+            return None
+        try:
+            value = await wm.read(event_id, "classification_override")
+        except GuardrailViolationError:
+            logger.exception(
+                "GuardrailViolationError reading classification_override for event=%s",
+                event_id,
+            )
+            raise
+        except (DependencyUnavailableError, ConnectionError, TimeoutError):
+            return None
+        except Exception:
+            logger.warning(
+                "classification_override read failed event=%s",
+                event_id,
+                exc_info=True,
+            )
+            return None
+        return human_override_event_type(value if isinstance(value, dict) else None)
 
     async def _read_source_snapshot(self, event_id: str) -> dict[str, Any] | None:
         """Read the ``source_snapshot`` field from working memory.

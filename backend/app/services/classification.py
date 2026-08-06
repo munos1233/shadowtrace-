@@ -117,3 +117,18 @@ def build_human_classification_override(
         "updated_at": updated_at,
         "reinvestigate": bool(reinvestigate),
     }
+
+
+def human_override_event_type(
+    classification_override: dict[str, Any] | None,
+) -> str | None:
+    """Return the human-overridden event_type value, or None if not applicable."""
+    if not isinstance(classification_override, dict):
+        return None
+    if str(classification_override.get("source") or "") != "human":
+        return None
+    raw = classification_override.get("event_type")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None

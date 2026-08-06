@@ -46,7 +46,7 @@ const SOURCE_LABEL: Record<ClassificationSource, string> = {
   human: "人工",
 };
 
-function isLowConfidenceClassification(
+export function isLowConfidenceClassification(
   eventType: EventType | string | undefined,
   source: ClassificationSource | null | undefined,
 ): boolean {
@@ -91,19 +91,26 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
 
   const submit = async () => {
     const values = await form.validateFields();
+    const reason = values.reason.trim();
+    if (!reason) {
+      message.warning("请填写改类型原因");
+      return;
+    }
     setSubmitting(true);
     try {
       const response = await patchEventClassification(event.event_id, {
         event_type: values.event_type,
-        reason: values.reason.trim(),
+        reason,
         reinvestigate: Boolean(values.reinvestigate),
       });
       const result = response.data;
-      message.success(
-        result.reinvestigate_started
-          ? "类型已更新，并已启动受控重调查"
-          : "事件类型已更新（已审计）",
-      );
+      if (result.reinvestigate_requested && !result.reinvestigate_started) {
+        message.success("事件类型已更新（已审计）；当前状态未立即启动重调查");
+      } else if (result.reinvestigate_started) {
+        message.success("类型已更新，并已启动受控重调查");
+      } else {
+        message.success("事件类型已更新（已审计）");
+      }
       setOpen(false);
       await onRefresh?.();
     } catch (err) {
@@ -187,11 +194,13 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
       <Modal
         title="修正事件类型"
         open={open}
-        onCancel={() => setOpen(false)}
+        onCancel={() => {
+          if (!submitting) setOpen(false);
+        }}
         onOk={() => void submit()}
         confirmLoading={submitting}
         okText="保存"
-        destroyOnClose
+        destroyOnHidden
         data-testid="reclassify-modal"
       >
         <Alert
@@ -213,7 +222,13 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
             label="原因（审计）"
             rules={[
               { required: true, message: "请填写改类型原因" },
-              { min: 1, message: "原因不能为空" },
+              {
+                validator: async (_, value: string) => {
+                  if (!String(value ?? "").trim()) {
+                    throw new Error("原因不能为空");
+                  }
+                },
+              },
             ]}
           >
             <Input.TextArea rows={3} maxLength={500} showCount placeholder="说明为何覆盖当前类型" />
