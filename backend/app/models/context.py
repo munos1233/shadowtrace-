@@ -67,6 +67,10 @@ class EventContext(BaseModel):
     impact_assessments: list[ImpactAssessment] = Field(default_factory=list)
     report: InvestigationReport | None = None
     memory_output: dict[str, Any] | None = None
+    # ISSUE-208: early (analysis-only, profile-only) MemoryAgent output — kept
+    # separate from ``memory_output`` so a later CLOSED consolidation is not
+    # short-circuited and repeated early runs are idempotent.
+    memory_output_early: dict[str, Any] | None = None
 
     # --- external writeback family ---
     disposition_commands: list[DispositionCommand] = Field(default_factory=list)

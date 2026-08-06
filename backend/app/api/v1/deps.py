@@ -766,6 +766,7 @@ async def _build_investigation_agents() -> dict[str, Any]:
         audit_service=_get_audit_log(),
         event_bus=_get_event_bus(),
         degraded_flags=_get_degraded_flags(),
+        early_enqueue_enabled=settings.memory_enqueue_after_analysis,
     )
 
     # ISSUE-075: every stage Agent must receive EventBus so BaseAgent.execute
@@ -938,6 +939,7 @@ async def get_pipeline() -> Any:
             working_memory=stack["wm"],
             degraded_flags=stack["degraded_flags"],
             settings=stack["settings"],
+            memory_agent=stack["memory"],
             agent_task_service=_get_agent_task_service(),
             agent_artifact_service=_get_agent_artifact_service(),
             content_projection_service=_get_content_projection_service(),

@@ -1,4 +1,11 @@
-"""Post-closure knowledge consolidation agent (ISSUE-080)."""
+"""Memory knowledge consolidation agent with per-candidate-type gates (ISSUE-080 / ISSUE-208).
+
+Candidate enqueue gates (ISSUE-208): ``profile`` candidates may be enqueued after
+analysis-only completion (``REPORTING`` + ``analysis_only_complete``/generated report)
+when ``early_enqueue_enabled``; ``fp_rule`` / ``history_case`` candidates always require
+``CLOSED``. Only ``pending`` candidates are enqueued — promotion to retrieval stores
+stays manual via the knowledge review flow.
+"""
 
 from __future__ import annotations
 
@@ -40,7 +47,15 @@ class _FpRuleDraft(BaseModel):
 
 
 class MemoryAgent(BaseAgent[MemoryAgentInput, MemoryOutput]):
-    """Archive closed cases and derive reviewable knowledge artifacts."""
+    """Derive reviewable knowledge artifacts from a completed investigation.
+
+    Per-candidate-type enqueue gates (ISSUE-208):
+    - ``profile``: allowed after analysis-only completion (REPORTING +
+      analysis_only_complete or generated report) when ``early_enqueue_enabled``,
+      and after CLOSED.
+    - ``fp_rule`` / ``history_case``: CLOSED only (they carry closure semantics).
+    Nothing is auto-promoted to retrieval stores; review approval stays mandatory.
+    """
 
     agent_name = "memory_agent"
 
@@ -59,6 +74,7 @@ class MemoryAgent(BaseAgent[MemoryAgentInput, MemoryOutput]):
         audit_service: Any | None = None,
         event_bus: Any | None = None,
         degraded_flags: Any | None = None,
+        early_enqueue_enabled: bool = True,
     ) -> None:
         super().__init__(
             llm_client=llm_client,
@@ -74,14 +90,39 @@ class MemoryAgent(BaseAgent[MemoryAgentInput, MemoryOutput]):
         self.memory_governance = memory_governance
         self.context_store: Any = context_store
         self.degraded_flags: Any = degraded_flags
+        # ISSUE-208: allow profile-only enqueue after analysis completion (REPORTING).
+        self.early_enqueue_enabled = early_enqueue_enabled
 
     async def _run(self, input: MemoryAgentInput) -> MemoryOutput:
-        if input.investigation_result.final_status is not EventStatus.CLOSED:
-            raise ValueError("MemoryAgent only accepts CLOSED investigations")
+        final_status = input.investigation_result.final_status
+        is_closed = final_status is EventStatus.CLOSED
+        if not is_closed:
+            if not self.early_enqueue_enabled:
+                raise ValueError("MemoryAgent only accepts CLOSED investigations")
+            if final_status is not EventStatus.REPORTING:
+                raise ValueError(
+                    "MemoryAgent accepts CLOSED or REPORTING (analysis-complete) investigations"
+                )
 
         context = await self.context_store.get_full_context(input.event_id)
         if context.memory_output is not None:
             return MemoryOutput.model_validate(context.memory_output)
+
+        # ISSUE-208: early enqueue requires an analysis-complete snapshot. This
+        # also guards the CLOSED path when a REPORTING snapshot races a close.
+        is_early_analysis = not is_closed and (
+            context.analysis_only_complete or context.report is not None
+        )
+        if not is_closed and not is_early_analysis:
+            raise ValueError(
+                "MemoryAgent: REPORTING requires analysis_only_complete or a "
+                "generated report for profile-only early enqueue"
+            )
+
+        # ISSUE-208: an earlier early pass already ran and persisted its output —
+        # short-circuit so repeated triggers do not re-enqueue profile candidates.
+        if is_early_analysis and context.memory_output_early is not None:
+            return MemoryOutput.model_validate(context.memory_output_early)
 
         output = MemoryOutput()
         queued: list[MemoryCandidate] = []
@@ -92,42 +133,49 @@ class MemoryAgent(BaseAgent[MemoryAgentInput, MemoryOutput]):
                 "MemoryAgent consolidation skipped for externally unsynced event=%s",
                 input.event_id,
             )
-            return await self._persist_output(input.event_id, output)
-
-        try:
-            history_case = await self.case_kb_service.prepare_history_case(input.event_id)
-            record = CaseRecordSummary(
-                case_id=history_case.case_id,
-                event_id=input.event_id,
-                summary=history_case.summary,
-                archived=False,
-                pending_review=True,
-            )
-            candidate = MemoryCandidate(
-                kb_name=HISTORY_KB_NAME,
-                candidate_type="history_case",
-                payload=history_case.model_dump(mode="json"),
-                confidence=_candidate_confidence(context),
-            )
-            record.review_id = await self._queue_candidate(input.event_id, candidate)
-            if record.review_id is None:
-                record.pending_review = False
-            output.case_records.append(record)
-            queued.append(candidate)
-        except ValueError as exc:
-            logger.info(
-                "MemoryAgent case archival ineligible event=%s reason=%s",
+            return await self._persist_output(
                 input.event_id,
-                exc,
-            )
-        except Exception:
-            logger.warning(
-                "MemoryAgent case archival failed event=%s",
-                input.event_id,
-                exc_info=True,
+                output,
+                key="memory_output_early" if is_early_analysis else "memory_output",
             )
 
-        if input.investigation_result.final_verdict is FinalVerdict.FALSE_POSITIVE:
+        # history_case: closure semantics — CLOSED only (ISSUE-208 gate).
+        if is_closed:
+            try:
+                history_case = await self.case_kb_service.prepare_history_case(input.event_id)
+                record = CaseRecordSummary(
+                    case_id=history_case.case_id,
+                    event_id=input.event_id,
+                    summary=history_case.summary,
+                    archived=False,
+                    pending_review=True,
+                )
+                candidate = MemoryCandidate(
+                    kb_name=HISTORY_KB_NAME,
+                    candidate_type="history_case",
+                    payload=history_case.model_dump(mode="json"),
+                    confidence=_candidate_confidence(context),
+                )
+                record.review_id = await self._queue_candidate(input.event_id, candidate)
+                if record.review_id is None:
+                    record.pending_review = False
+                output.case_records.append(record)
+                queued.append(candidate)
+            except ValueError as exc:
+                logger.info(
+                    "MemoryAgent case archival ineligible event=%s reason=%s",
+                    input.event_id,
+                    exc,
+                )
+            except Exception:
+                logger.warning(
+                    "MemoryAgent case archival failed event=%s",
+                    input.event_id,
+                    exc_info=True,
+                )
+
+        # fp_rule: closure semantics — CLOSED only (ISSUE-208 gate).
+        if is_closed and input.investigation_result.final_verdict is FinalVerdict.FALSE_POSITIVE:
             try:
                 fp_rule = await self._build_fp_rule(input.event_id, context)
                 candidate = MemoryCandidate(
@@ -192,7 +240,14 @@ class MemoryAgent(BaseAgent[MemoryAgentInput, MemoryOutput]):
                     exc_info=True,
                 )
 
-        return await self._persist_output(input.event_id, output)
+        return await self._persist_output(
+            input.event_id,
+            output,
+            # ISSUE-208: the early (REPORTING, profile-only) pass writes a
+            # separate key so a later CLOSED pass is not short-circuited by
+            # ``memory_output`` — history_case / fp_rule must still enqueue.
+            key="memory_output_early" if is_early_analysis else "memory_output",
+        )
 
     async def _queue_candidate(self, event_id: str, candidate: MemoryCandidate) -> str | None:
         for attempt in range(len(_ENQUEUE_RETRY_DELAYS) + 1):
@@ -274,12 +329,18 @@ class MemoryAgent(BaseAgent[MemoryAgentInput, MemoryOutput]):
                 exc_info=True,
             )
 
-    async def _persist_output(self, event_id: str, output: MemoryOutput) -> MemoryOutput:
+    async def _persist_output(
+        self,
+        event_id: str,
+        output: MemoryOutput,
+        *,
+        key: str = "memory_output",
+    ) -> MemoryOutput:
         if self.working_memory is None:
             raise RuntimeError("MemoryAgent requires working_memory")
         await self.working_memory.write(
             event_id,
-            "memory_output",
+            key,
             output.model_dump(mode="json"),
         )
         return output

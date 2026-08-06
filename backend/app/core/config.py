@@ -346,6 +346,17 @@ class Settings(BaseSettings):
     )
     auto_response_event_types: str = Field(default="", alias="AUTO_RESPONSE_EVENT_TYPES")
 
+    memory_enqueue_after_analysis: bool = Field(
+        default=True,
+        alias="MEMORY_ENQUEUE_AFTER_ANALYSIS",
+        description=(
+            "When true, MemoryAgent may enqueue profile candidates after "
+            "analysis-only completion (REPORTING + analysis_only_complete / "
+            "report_generated). fp_rule / history_case candidates still require "
+            "CLOSED. Set false to fall back to CLOSED-only scheduling (ISSUE-208)."
+        ),
+    )
+
     neo4j_enabled: bool = Field(default=False, alias="NEO4J_ENABLED")
     neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", alias="NEO4J_USER")

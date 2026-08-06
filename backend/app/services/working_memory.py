@@ -52,6 +52,7 @@ FIELD_OWNERSHIP: dict[str, str] = {
     "impact_assessments": "ImpactAssessmentService",
     "report": "ReportAgent",
     "memory_output": "MemoryAgent",
+    "memory_output_early": "MemoryAgent",
     "disposition_commands": "DispositionSyncService",
     "disposition_receipts": "DispositionSyncService",
     "writeback_summary": "DispositionSyncService",

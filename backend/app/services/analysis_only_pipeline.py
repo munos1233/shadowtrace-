@@ -7,10 +7,16 @@ without blocking downstream scoring or reporting.
 038 lifecycle features (NEW guard, short-circuit close, disposition policy,
 ``analysis_only_complete`` persistence) are preserved. 047 RAG wiring is reused by
 ``rag_node`` in ``app.orchestration.workflow_graph``.
+
+ISSUE-208: when a ``memory_agent`` is wired and ``MEMORY_ENQUEUE_AFTER_ANALYSIS``
+is enabled, profile candidates are enqueued for review after analysis completion
+(REPORTING) without blocking the pipeline; fp_rule / history_case still require
+CLOSED inside MemoryAgent.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -31,6 +37,7 @@ from app.models.agent_io import (
     EvidenceOutput,
     GraphAgentInput,
     GraphOutput,
+    MemoryAgentInput,
     RAGAgentInput,
     RAGOutput,
     RiskAgentInput,
@@ -196,6 +203,7 @@ class AnalysisOnlyPipeline:
         working_memory: Any | None = None,
         degraded_flags: Any | None = None,
         settings: Settings | None = None,
+        memory_agent: Any | None = None,
         agent_task_service: Any | None = None,
         agent_artifact_service: Any | None = None,
         content_projection_service: Any | None = None,
@@ -214,6 +222,8 @@ class AnalysisOnlyPipeline:
         self._working_memory = working_memory
         self._degraded_flags = degraded_flags
         self._settings = settings
+        self._memory_agent = memory_agent
+        self._memory_tasks: set[asyncio.Task[Any]] = set()
         self._agent_task_service = agent_task_service
         self._agent_artifact_service = agent_artifact_service
         self._content_projection_service = content_projection_service
@@ -449,6 +459,7 @@ class AnalysisOnlyPipeline:
                     event_id,
                 )
                 await self._persist_analysis_only_complete(event_id)
+                self._schedule_memory_after_analysis(event_id)
                 return AnalysisOnlyPipelineResult(
                     event_id=event_id,
                     triage_result=triage_result,
@@ -481,6 +492,9 @@ class AnalysisOnlyPipeline:
                 ),
             )
             await self._persist_analysis_only_complete(event_id)
+            # ISSUE-208: analysis-only auto-close — schedule full CLOSED
+            # consolidation (history_case + fp_rule + profile).
+            self._schedule_memory_after_close(event_id)
             return AnalysisOnlyPipelineResult(
                 event_id=event_id,
                 triage_result=triage_result,
@@ -496,6 +510,7 @@ class AnalysisOnlyPipeline:
             )
 
         await self._persist_analysis_only_complete(event_id)
+        self._schedule_memory_after_analysis(event_id)
         return AnalysisOnlyPipelineResult(
             event_id=event_id,
             triage_result=triage_result,
@@ -696,6 +711,99 @@ class AnalysisOnlyPipeline:
                             exc_info=True,
                         )
 
+    def _schedule_memory_after_analysis(self, event_id: str) -> asyncio.Task[Any] | None:
+        """Fire-and-forget profile-only early enqueue after analysis completion.
+
+        ISSUE-208: REPORTING snapshot → MemoryAgent enqueues profile-only
+        candidates (fp_rule / history_case still require CLOSED inside
+        MemoryAgent). Failures never block the analysis pipeline.
+        """
+        return self._spawn_memory_task(event_id, EventStatus.REPORTING)
+
+    def _schedule_memory_after_close(self, event_id: str) -> asyncio.Task[Any] | None:
+        """Fire-and-forget full consolidation for analysis-only CLOSED events.
+
+        ISSUE-208: the analysis-only pipeline owns its CLOSED transitions (short
+        circuit / auto-close), so it must schedule the full MemoryAgent pass
+        (history_case + fp_rule + profile) itself — SuperAgent's close hook does
+        not run on this path.
+        """
+        return self._spawn_memory_task(event_id, EventStatus.CLOSED)
+
+    def _spawn_memory_task(
+        self,
+        event_id: str,
+        expected_status: EventStatus,
+    ) -> asyncio.Task[Any] | None:
+        if (
+            self._memory_agent is None
+            or self._context_store is None
+            or self._settings is None
+        ):
+            return None
+        # ISSUE-208 rollback: flag=false disables only the early (REPORTING)
+        # enqueue; CLOSED consolidation always stays on (matches SuperAgent).
+        if (
+            expected_status is EventStatus.REPORTING
+            and not self._settings.memory_enqueue_after_analysis
+        ):
+            return None
+        task = asyncio.create_task(
+            self._run_memory_consolidation(event_id, expected_status),
+            name=f"memory-consolidation:{event_id}",
+        )
+        # Hold a strong reference so the task is never GC-dropped mid-await.
+        self._memory_tasks.add(task)
+        task.add_done_callback(self._memory_tasks.discard)
+        return task
+
+    async def _run_memory_consolidation(
+        self,
+        event_id: str,
+        expected_status: EventStatus,
+    ) -> None:
+        """Best-effort MemoryAgent pass; knowledge failures degrade."""
+        try:
+            context = await self._context_store.get_full_context(event_id)
+            if context.event is None or context.event.status is not expected_status:
+                # Snapshot moved past the scheduled status (e.g. REPORTING was
+                # closed meanwhile) — the current-status path owns consolidation.
+                return
+            # Lazy import: super_agent pulls heavy orchestration deps that
+            # create a circular import at module load time.
+            from app.agents.super_agent import _investigation_result_from_context
+
+            result = _investigation_result_from_context(context)
+            await self._memory_agent.execute(
+                MemoryAgentInput(event_id=event_id, investigation_result=result)
+            )
+        except Exception as exc:
+            flag_name = (
+                "memory_after_analysis_failed"
+                if expected_status is EventStatus.REPORTING
+                else "memory_after_close_failed"
+            )
+            logger.warning(
+                "AnalysisOnlyPipeline: memory consolidation failed event=%s flag=%s: %s",
+                event_id,
+                flag_name,
+                exc,
+            )
+            if self._degraded_flags is not None:
+                try:
+                    await self._degraded_flags.set_flag(
+                        event_id,
+                        flag_name,
+                        type(exc).__name__,
+                        writer=_PIPELINE_OPERATOR,
+                    )
+                except Exception:
+                    logger.warning(
+                        "AnalysisOnlyPipeline: failed to record degraded flag event=%s",
+                        event_id,
+                        exc_info=True,
+                    )
+
     async def _short_circuit_close(
         self,
         event_id: str,
@@ -745,6 +853,8 @@ class AnalysisOnlyPipeline:
         )
 
         await self._persist_analysis_only_complete(event_id)
+        # ISSUE-208: short-circuit close — schedule full CLOSED consolidation.
+        self._schedule_memory_after_close(event_id)
         return AnalysisOnlyPipelineResult(
             event_id=event_id,
             triage_result=triage_result,

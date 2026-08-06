@@ -138,7 +138,12 @@ class _WorkingMemory:
 
     async def write(self, event_id: str, key: str, value: Any) -> None:
         self.writes.append((event_id, key, value))
-        self.context.memory_output = value
+        # Only the canonical key maps onto EventContext.memory_output; ISSUE-208
+        # early-pass key ("memory_output_early") must not mark full consolidation.
+        if key == "memory_output":
+            self.context.memory_output = value
+        elif key == "memory_output_early":
+            self.context.memory_output_early = value
 
 
 class _UnavailableLLM:
@@ -182,13 +187,16 @@ def _context(
     verdict: FinalVerdict,
     *,
     external_unsynced: bool = False,
+    status: EventStatus = EventStatus.CLOSED,
+    analysis_only_complete: bool = False,
+    with_report: bool = True,
 ) -> EventContext:
     return EventContext(
         event=EventSummary(
             event_id=EVENT_ID,
             event_type=EventType.DATA_EXFILTRATION,
             title="Suspicious upload by zhangsan",
-            status=EventStatus.CLOSED,
+            status=status,
             severity=Severity.HIGH,
             risk_score=88,
             final_verdict=verdict,
@@ -247,15 +255,20 @@ def _context(
             "overall_confidence": 0.95,
             "collection_status": "complete",
         },
-        report=InvestigationReport(
-            report_id="rpt-memory-1",
-            event_id=EVENT_ID,
-            title="Confirmed exfiltration",
-            summary="Evidence confirms a WebDAV upload.",
-            final_verdict=verdict,
-            risk_score=88,
-            severity=Severity.HIGH,
+        report=(
+            InvestigationReport(
+                report_id="rpt-memory-1",
+                event_id=EVENT_ID,
+                title="Confirmed exfiltration",
+                summary="Evidence confirms a WebDAV upload.",
+                final_verdict=verdict,
+                risk_score=88,
+                severity=Severity.HIGH,
+            )
+            if with_report
+            else None
         ),
+        analysis_only_complete=analysis_only_complete,
     )
 
 
@@ -263,12 +276,13 @@ def _input(
     verdict: FinalVerdict,
     *,
     external_unsynced: bool = False,
+    final_status: EventStatus = EventStatus.CLOSED,
 ) -> MemoryAgentInput:
     return MemoryAgentInput(
         event_id=EVENT_ID,
         investigation_result=InvestigationResult(
             event_id=EVENT_ID,
-            final_status=EventStatus.CLOSED,
+            final_status=final_status,
             final_verdict=verdict,
             external_unsynced=external_unsynced,
             writeback_required=False,
@@ -654,3 +668,247 @@ def test_response_success_requires_verified_effect_and_synchronized_writeback() 
 def test_profile_id_is_stable_and_case_insensitive() -> None:
     assert profile_id_for("account", "zhangsan").startswith("prf-")
     assert profile_id_for(" Account ", "ZhangSan") == profile_id_for("account", "zhangsan")
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-208: profile-only early enqueue after analysis completion
+# --------------------------------------------------------------------------- #
+
+
+def _make_agent(
+    *,
+    context: EventContext,
+    early_enqueue_enabled: bool = True,
+) -> MemoryAgent:
+    return MemoryAgent(
+        case_kb_service=_CaseKB(),  # type: ignore[arg-type]
+        profile_service=_Profiles(),  # type: ignore[arg-type]
+        memory_governance=_Governance(),  # type: ignore[arg-type]
+        context_store=_ContextStore(context),
+        working_memory=_WorkingMemory(context),
+        early_enqueue_enabled=early_enqueue_enabled,
+    )
+
+
+@pytest.mark.asyncio
+async def test_reporting_analysis_complete_enqueues_profile_only() -> None:
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=True,
+    )
+    governance = _Governance()
+    agent = MemoryAgent(
+        case_kb_service=_CaseKB(),  # type: ignore[arg-type]
+        profile_service=_Profiles(),  # type: ignore[arg-type]
+        memory_governance=governance,  # type: ignore[arg-type]
+        context_store=_ContextStore(context),
+        working_memory=_WorkingMemory(context),
+    )
+
+    output = await agent.execute(
+        _input(FinalVerdict.CONFIRMED_THREAT, final_status=EventStatus.REPORTING)
+    )
+
+    # Only profile candidates may be enqueued early (ISSUE-208 gate).
+    assert [c.candidate_type for c in governance.candidates] == ["profile"]
+    assert output.profile_updates[0].pending_review is True
+    # Closure-semantics artifacts stay absent before CLOSED.
+    assert output.case_records == []
+    assert output.fp_rules == []
+    # Sigma draft is a local working-memory artifact (not enqueued), so it may
+    # exist for confirmed threats even in the early path.
+    assert len(output.sigma_drafts) == 1
+
+
+@pytest.mark.asyncio
+async def test_reporting_without_analysis_complete_raises() -> None:
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=False,
+        with_report=False,
+    )
+    agent = _make_agent(context=context)
+
+    with pytest.raises(ValueError, match="analysis_only_complete or a"):
+        await agent.execute(
+            _input(FinalVerdict.CONFIRMED_THREAT, final_status=EventStatus.REPORTING)
+        )
+
+
+@pytest.mark.asyncio
+async def test_early_enqueue_flag_off_keeps_closed_only_contract() -> None:
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=True,
+    )
+    agent = _make_agent(context=context, early_enqueue_enabled=False)
+
+    with pytest.raises(ValueError, match="only accepts CLOSED"):
+        await agent.execute(
+            _input(FinalVerdict.CONFIRMED_THREAT, final_status=EventStatus.REPORTING)
+        )
+
+
+@pytest.mark.asyncio
+async def test_closed_still_enqueues_all_types_with_flag_on() -> None:
+    # Regression: with early enqueue enabled, CLOSED keeps the full contract
+    # (history_case + fp_rule + profile), not just profile.
+    context = _context(
+        FinalVerdict.FALSE_POSITIVE,
+        status=EventStatus.CLOSED,
+    )
+    governance = _Governance()
+    agent = MemoryAgent(
+        case_kb_service=_CaseKB(),  # type: ignore[arg-type]
+        profile_service=_Profiles(),  # type: ignore[arg-type]
+        memory_governance=governance,  # type: ignore[arg-type]
+        context_store=_ContextStore(context),
+        working_memory=_WorkingMemory(context),
+    )
+
+    output = await agent.execute(_input(FinalVerdict.FALSE_POSITIVE))
+
+    assert [c.candidate_type for c in governance.candidates] == [
+        "history_case",
+        "fp_rule",
+        "profile",
+    ]
+    assert len(output.fp_rules) == 1
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-208: SuperAgent schedules profile-only early enqueue after analysis
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_schedule_memory_after_analysis_fires_for_reporting_snapshot() -> None:
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=True,
+    )
+    context_store = _ContextStore(context)
+    memory_agent = _SuccessfulMemoryAgent()
+    super_agent = SuperAgent(
+        memory_agent=memory_agent,
+        context_store=context_store,
+    )
+
+    task = await super_agent._schedule_memory_after_analysis(EVENT_ID, context)
+    assert task is not None
+    await task
+
+    assert len(memory_agent.inputs) == 1
+    assert memory_agent.inputs[0].investigation_result.final_status is EventStatus.REPORTING
+
+
+@pytest.mark.asyncio
+async def test_schedule_memory_after_analysis_skipped_for_non_reporting() -> None:
+    context = _context(FinalVerdict.CONFIRMED_THREAT)
+    context.event.status = EventStatus.ANALYZING  # type: ignore[union-attr]
+    context_store = _ContextStore(context)
+    memory_agent = _SuccessfulMemoryAgent()
+    super_agent = SuperAgent(
+        memory_agent=memory_agent,
+        context_store=context_store,
+    )
+
+    task = await super_agent._schedule_memory_after_analysis(EVENT_ID, context)
+
+    assert task is None
+    assert memory_agent.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_memory_after_analysis_skipped_when_early_enqueue_off() -> None:
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=True,
+    )
+    context_store = _ContextStore(context)
+    memory_agent = _SuccessfulMemoryAgent()
+    memory_agent.early_enqueue_enabled = False  # type: ignore[attr-defined]
+    super_agent = SuperAgent(
+        memory_agent=memory_agent,
+        context_store=context_store,
+    )
+
+    task = await super_agent._schedule_memory_after_analysis(EVENT_ID, context)
+
+    assert task is None
+    assert memory_agent.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_early_enqueue_does_not_short_circuit_closed_consolidation() -> None:
+    """ISSUE-208 regression: the early (REPORTING) pass must not block the later
+    CLOSED pass from enqueueing closure-semantics candidates."""
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=True,
+    )
+    governance = _Governance()
+    memory = _WorkingMemory(context)
+    agent = MemoryAgent(
+        case_kb_service=_CaseKB(),  # type: ignore[arg-type]
+        profile_service=_Profiles(),  # type: ignore[arg-type]
+        memory_governance=governance,  # type: ignore[arg-type]
+        context_store=_ContextStore(context),
+        working_memory=memory,
+    )
+
+    # Early pass (REPORTING): profile-only, writes a separate memory key.
+    await agent.execute(_input(FinalVerdict.CONFIRMED_THREAT, final_status=EventStatus.REPORTING))
+    assert [c.candidate_type for c in governance.candidates] == ["profile"]
+    assert context.memory_output is None  # full consolidation is NOT marked done
+
+    # Event closes; the CLOSED pass must still enqueue history_case (+ profile).
+    context.event.status = EventStatus.CLOSED  # type: ignore[union-attr]
+    governance.candidates.clear()
+    await agent.execute(_input(FinalVerdict.CONFIRMED_THREAT))
+    assert [c.candidate_type for c in governance.candidates] == ["history_case", "profile"]
+
+
+@pytest.mark.asyncio
+async def test_early_path_is_idempotent() -> None:
+    """Repeated early triggers must not re-enqueue profile candidates."""
+    context = _context(
+        FinalVerdict.CONFIRMED_THREAT,
+        status=EventStatus.REPORTING,
+        analysis_only_complete=True,
+    )
+    governance = _Governance()
+    memory = _WorkingMemory(context)
+    agent = MemoryAgent(
+        case_kb_service=_CaseKB(),  # type: ignore[arg-type]
+        profile_service=_Profiles(),  # type: ignore[arg-type]
+        memory_governance=governance,  # type: ignore[arg-type]
+        context_store=_ContextStore(context),
+        working_memory=memory,
+    )
+    input_early = _input(
+        FinalVerdict.CONFIRMED_THREAT,
+        final_status=EventStatus.REPORTING,
+    )
+
+    await agent.execute(input_early)
+    assert [c.candidate_type for c in governance.candidates] == ["profile"]
+    assert context.memory_output_early is not None
+
+    # Second early trigger: short-circuits on the persisted early marker.
+    await agent.execute(input_early)
+    assert [c.candidate_type for c in governance.candidates] == ["profile"]
+    assert len(governance.candidates) == 1
+
+
+def test_memory_output_early_is_registered_working_memory_field() -> None:
+    """The early key must be a legal WorkingMemory field (ISSUE-208 blocker)."""
+    from app.services.working_memory import FIELD_OWNERSHIP
+
+    assert FIELD_OWNERSHIP["memory_output_early"] == "MemoryAgent"

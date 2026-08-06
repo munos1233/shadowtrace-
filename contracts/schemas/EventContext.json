@@ -2034,6 +2034,19 @@
       "default": null,
       "title": "Memory Output"
     },
+    "memory_output_early": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Memory Output Early"
+    },
     "disposition_commands": {
       "items": {
         "$ref": "#/$defs/DispositionCommand"

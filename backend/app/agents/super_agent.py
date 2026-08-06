@@ -445,6 +445,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             await self._persist_event_context(ec)
             if not include_response_execution:
                 await self._persist_analysis_only_complete(event_id)
+                await self._schedule_memory_after_analysis(event_id, ec)
             if ec.event is not None and ec.event.status is EventStatus.CLOSED:
                 await self._schedule_memory_after_close(event_id, ec)
 
@@ -1457,6 +1458,54 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                 event_id,
                 exc_info=True,
             )
+
+    async def _schedule_memory_after_analysis(
+        self,
+        event_id: str,
+        context: EventContext,
+    ) -> asyncio.Task[None] | None:
+        """Schedule profile-only early consolidation after analysis completion.
+
+        ISSUE-208: fires only for REPORTING (analysis-only) snapshots and only
+        when the wired MemoryAgent has early enqueue enabled. fp_rule /
+        history_case candidates still require CLOSED inside MemoryAgent, so a
+        CLOSED snapshot goes through ``_schedule_memory_after_close`` instead.
+        """
+        if (
+            self.memory_agent is None
+            or self.context_store is None
+            or context.event is None
+            or context.event.status is not EventStatus.REPORTING
+            or not getattr(self.memory_agent, "early_enqueue_enabled", True)
+        ):
+            return None
+        task = asyncio.create_task(
+            self._run_memory_after_analysis(event_id),
+            name=f"memory-after-analysis:{event_id}",
+        )
+        self._memory_tasks.add(task)
+        task.add_done_callback(self._memory_tasks.discard)
+        return task
+
+    async def _run_memory_after_analysis(self, event_id: str) -> None:
+        """Best-effort background hook; knowledge failures never reopen the event."""
+        memory_agent = self.memory_agent
+        context_store = self.context_store
+        if memory_agent is None or context_store is None:
+            return
+        try:
+            context = await context_store.get_full_context(event_id)
+            if context.event is None or context.event.status is not EventStatus.REPORTING:
+                return
+            result = _investigation_result_from_context(context)
+            await memory_agent.execute(
+                MemoryAgentInput(
+                    event_id=event_id,
+                    investigation_result=result,
+                )
+            )
+        except Exception as exc:
+            await self._record_memory_failure(event_id, exc, stage="after_analysis")
 
     async def _schedule_memory_after_close(
         self,
