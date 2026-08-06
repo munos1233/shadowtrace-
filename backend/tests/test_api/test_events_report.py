@@ -9,7 +9,7 @@ import pytest
 from app.api.v1.deps import reset_deps
 from app.core.config import get_settings
 from app.core.errors import InvalidStateTransitionError
-from app.models.enums import DispositionPolicy, EventStatus, EventType, Severity
+from app.models.enums import DispositionPolicy, EventStatus
 from app.models.workflow import TransitionContext, validate_closed_gate
 from app.services.investigation_guidance import derive_investigation_guidance
 
@@ -76,9 +76,8 @@ def test_investigate_response_echoes_generate_report() -> None:
 
 
 def test_route_after_report_skips_close_when_report_not_requested() -> None:
-    from app.orchestration.workflow_graph import route_after_report
     from app.orchestration.graph_state import InvestigationState
-    from app.models.enums import DispositionPolicy
+    from app.orchestration.workflow_graph import route_after_report
 
     state: InvestigationState = {
         "event_id": "evt-204",
@@ -89,7 +88,7 @@ def test_route_after_report_skips_close_when_report_not_requested() -> None:
 
 
 def test_route_after_triage_skips_close_when_generate_report_false() -> None:
-    from app.orchestration.workflow_graph import route_after_triage, ROUTE_REPORT
+    from app.orchestration.workflow_graph import ROUTE_REPORT, route_after_triage
 
     assert (
         route_after_triage(
