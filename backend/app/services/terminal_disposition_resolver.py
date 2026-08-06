@@ -5,12 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from app.models.agent_io import EffectStatus, VerificationOverallStatus, VerificationResult
+from app.models.agent_io import (
+    EffectStatus,
+    VerificationOverallStatus,
+    VerificationResult,
+)
 from app.models.enums import (
     DispositionPolicy,
     FinalVerdict,
     SourceDisposition,
     WritebackReadiness,
+)
+from app.models.verification_readiness import (
+    applicable_effect_results,
+    has_immediate_effect_pending,
 )
 
 SkippedReason = Literal[
@@ -65,6 +73,8 @@ class TerminalDispositionResolver:
 
         resolved: SourceDisposition | None
         if final_verdict is FinalVerdict.FALSE_POSITIVE:
+            if has_immediate_effect_pending(verification):
+                return TerminalDispositionResolveResult(need_manual_resolution=True)
             resolved = SourceDisposition.IGNORED
         elif final_verdict is FinalVerdict.CONFIRMED_THREAT:
             resolved = self._threat_terminal(verification=verification, approved_set=approved_set)
@@ -87,6 +97,8 @@ class TerminalDispositionResolver:
             return None
         if verification.need_action_replan or verification.need_manual_resolution:
             return None
+        if has_immediate_effect_pending(verification):
+            return None
         if verification.overall_status is VerificationOverallStatus.FAILED:
             return None
         if verification.overall_status is VerificationOverallStatus.PARTIAL:
@@ -96,14 +108,7 @@ class TerminalDispositionResolver:
         if verification.overall_status is not VerificationOverallStatus.SUCCESS:
             return None
 
-        applicable = [
-            item
-            for item in verification.results
-            if not (
-                item.effect_status is EffectStatus.SKIPPED
-                and item.detail == "deferred_pending_activation"
-            )
-        ]
+        applicable = applicable_effect_results(verification)
         if any(item.effect_status is EffectStatus.FAILED for item in applicable):
             if SourceDisposition.SUSPENDED in approved_set:
                 return SourceDisposition.SUSPENDED

@@ -430,6 +430,37 @@ async def _seed_effect_verification(
     await store.set(event_id, "verification_result", payload.model_dump(mode="json"))
 
 
+async def _seed_immediate_pending_verification(
+    store: EventContextStore,
+    event_id: str,
+    *,
+    immediate_id: str,
+    deferred_id: str,
+    overall_status: VerificationOverallStatus = VerificationOverallStatus.WAITING,
+) -> None:
+    payload = VerificationResult(
+        results=[
+            VerificationActionResult(
+                action_id=immediate_id,
+                effect_status=EffectStatus.SKIPPED,
+                detail="pending_execution",
+                writeback_required=False,
+                writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+            ),
+            VerificationActionResult(
+                action_id=deferred_id,
+                effect_status=EffectStatus.SKIPPED,
+                detail="deferred_pending_activation",
+                writeback_required=True,
+                writeback_readiness=WritebackReadiness.READY,
+            ),
+        ],
+        overall_status=overall_status,
+        verification_phase=VerificationPhase.EFFECT,
+    )
+    await store.set(event_id, "verification_result", payload.model_dump(mode="json"))
+
+
 @pytest.mark.asyncio
 async def test_activate_required_plan_submits_event_status_update(
     session_factory: async_sessionmaker[AsyncSession],
@@ -849,3 +880,202 @@ def test_resolver_false_positive_to_ignored() -> None:
         writeback_readiness=WritebackReadiness.READY,
     )
     assert result.disposition is SourceDisposition.IGNORED
+
+
+def test_resolver_false_positive_blocked_when_immediate_pending() -> None:
+    from app.services.terminal_disposition_resolver import TerminalDispositionResolver
+
+    verification = VerificationResult(
+        results=[
+            VerificationActionResult(
+                action_id="act-imm-pending",
+                effect_status=EffectStatus.SKIPPED,
+                detail="pending_execution",
+                writeback_required=False,
+                writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+            ),
+        ],
+        overall_status=VerificationOverallStatus.SUCCESS,
+        verification_phase=VerificationPhase.EFFECT,
+    )
+    resolver = TerminalDispositionResolver()
+    result = resolver.resolve(
+        final_verdict=FinalVerdict.FALSE_POSITIVE,
+        verification=verification,
+        approved_terminal_dispositions=[SourceDisposition.IGNORED],
+        disposition_only=False,
+        disposition_policy=DispositionPolicy.REQUIRED,
+        writeback_readiness=WritebackReadiness.READY,
+    )
+    assert result.disposition is None
+    assert result.need_manual_resolution is True
+
+
+def test_resolver_threat_blocked_when_immediate_pending() -> None:
+    from app.services.terminal_disposition_resolver import TerminalDispositionResolver
+
+    verification = VerificationResult(
+        results=[
+            VerificationActionResult(
+                action_id="act-imm-pending",
+                effect_status=EffectStatus.SKIPPED,
+                detail="pending_execution",
+                writeback_required=False,
+                writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+            ),
+        ],
+        overall_status=VerificationOverallStatus.SUCCESS,
+        verification_phase=VerificationPhase.EFFECT,
+    )
+    resolver = TerminalDispositionResolver()
+    result = resolver.resolve(
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        verification=verification,
+        approved_terminal_dispositions=[
+            SourceDisposition.SUSPENDED,
+            SourceDisposition.CONTAINED,
+        ],
+        disposition_only=False,
+        disposition_policy=DispositionPolicy.REQUIRED,
+        writeback_readiness=WritebackReadiness.READY,
+    )
+    assert result.disposition is None
+    assert result.need_manual_resolution is True
+
+
+@pytest.mark.asyncio
+async def test_immediate_pending_fp_does_not_enqueue_terminal_outbox(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    disposition_service: EventDispositionService,
+    cleanup: None,
+) -> None:
+    """ISSUE-216: FP + IMMEDIATE still pending must not activate terminal outbox."""
+    event_id = await _create_event(
+        session_factory,
+        store,
+        final_verdict=FinalVerdict.FALSE_POSITIVE,
+        disposition_only=False,
+    )
+    immediate_id = f"act-imm-pending-{_sfx()}"
+    deferred = _deferred_action(
+        event_id=event_id,
+        approved=[SourceDisposition.IGNORED],
+    )
+    locator = _locator()
+    await _insert_action(
+        session_factory,
+        event_id,
+        Action.model_validate(
+            {
+                "action_id": immediate_id,
+                "event_id": event_id,
+                "plan_revision": 1,
+                "action_fingerprint": f"fp-{immediate_id}",
+                "action_category": ActionCategory.RESPONSE,
+                "action_name": "block ip",
+                "tool_name": "block_ip",
+                "action_level": ActionLevel.L2,
+                "execution_phase": ActionExecutionPhase.IMMEDIATE,
+                "execution_owner": ExecutionOwner.XDR_MANAGED,
+                "status": ActionStatus.EXECUTING,
+                "target_type": "ip",
+                "target": "203.0.113.88",
+                "writeback_required": True,
+                "writeback_applicable": True,
+                "writeback_readiness": WritebackReadiness.READY,
+                "disposition_source_ref": locator,
+                "idempotency_key": f"idem-{immediate_id}",
+            }
+        ),
+    )
+    await _insert_action(session_factory, event_id, deferred)
+    await _seed_immediate_pending_verification(
+        store,
+        event_id,
+        immediate_id=immediate_id,
+        deferred_id=deferred.action_id,
+        overall_status=VerificationOverallStatus.WAITING,
+    )
+    await seed_minimum_disposition_audit(session_factory, event_id)
+
+    result = await disposition_service.activate_and_submit(event_id, 1, "test-operator")
+    assert result.activated is False
+    assert result.skipped_reason == "effect_not_ready"
+
+    async with session_factory() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(orm.DispositionOutbox)
+            .where(orm.DispositionOutbox.event_id == event_id)
+        )
+        assert int(count or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_immediate_pending_fp_blocks_even_if_verification_success_forged(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    disposition_service: EventDispositionService,
+    cleanup: None,
+) -> None:
+    """Defense in depth: forged SUCCESS with pending SKIPPED rows still blocks."""
+    event_id = await _create_event(
+        session_factory,
+        store,
+        final_verdict=FinalVerdict.FALSE_POSITIVE,
+        disposition_only=False,
+    )
+    immediate_id = f"act-imm-forged-{_sfx()}"
+    deferred = _deferred_action(
+        event_id=event_id,
+        approved=[SourceDisposition.IGNORED],
+    )
+    locator = _locator()
+    await _insert_action(
+        session_factory,
+        event_id,
+        Action.model_validate(
+            {
+                "action_id": immediate_id,
+                "event_id": event_id,
+                "plan_revision": 1,
+                "action_fingerprint": f"fp-{immediate_id}",
+                "action_category": ActionCategory.RESPONSE,
+                "action_name": "block ip",
+                "tool_name": "block_ip",
+                "action_level": ActionLevel.L2,
+                "execution_phase": ActionExecutionPhase.IMMEDIATE,
+                "execution_owner": ExecutionOwner.XDR_MANAGED,
+                "status": ActionStatus.EXECUTING,
+                "target_type": "ip",
+                "target": "203.0.113.88",
+                "writeback_required": True,
+                "writeback_applicable": True,
+                "writeback_readiness": WritebackReadiness.READY,
+                "disposition_source_ref": locator,
+                "idempotency_key": f"idem-{immediate_id}",
+            }
+        ),
+    )
+    await _insert_action(session_factory, event_id, deferred)
+    await _seed_immediate_pending_verification(
+        store,
+        event_id,
+        immediate_id=immediate_id,
+        deferred_id=deferred.action_id,
+        overall_status=VerificationOverallStatus.SUCCESS,
+    )
+    await seed_minimum_disposition_audit(session_factory, event_id)
+
+    result = await disposition_service.activate_and_submit(event_id, 1, "test-operator")
+    assert result.activated is False
+    assert result.skipped_reason == "effect_not_ready"
+
+    async with session_factory() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(orm.DispositionOutbox)
+            .where(orm.DispositionOutbox.event_id == event_id)
+        )
+        assert int(count or 0) == 0

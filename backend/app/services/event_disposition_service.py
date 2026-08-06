@@ -28,6 +28,7 @@ from app.models.enums import (
     WritebackReadiness,
 )
 from app.models.ids import new_disposition_id
+from app.models.verification_readiness import has_immediate_effect_pending
 from app.models.workflow import validate_action_status_transition
 from app.services.context_service import EventContextStore
 from app.services.disposition_command_factory import DispositionCommandFactory
@@ -464,6 +465,8 @@ class EventDispositionService:
             "waiting",
             "manual_resolution",
         }:
+            return False
+        if has_immediate_effect_pending(verification):
             return False
         return True
 

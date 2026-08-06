@@ -1542,6 +1542,103 @@ class TestRegressionShouldFix:
         assert action.action_id not in result.failed_actions
         assert result.need_action_replan is False
 
+    async def test_phase1_persist_waiting_when_immediate_pending(self):
+        """ISSUE-216: phase-1 EDS gate must not write SUCCESS while IMMEDIATE pending."""
+        deferred = _action(
+            tool_name=TERMINAL_DISPOSITION_TOOL,
+            action_name="terminal",
+            execution_phase=ActionExecutionPhase.POST_VERIFY,
+            status=ActionStatus.APPROVED,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+            writeback_required=True,
+        )
+        immediate = _action(
+            tool_name="block_ip",
+            status=ActionStatus.EXECUTING,
+            execution_job_id="job-0001",
+        )
+        wm = FakeWorkingMemory()
+        verification_writes: list[dict[str, Any]] = []
+
+        async def _capture_write(event_id: str, key: str, value: Any) -> None:
+            if key == "verification_result":
+                verification_writes.append(value)
+            await wm.write(event_id, key, value)
+
+        wm.write = _capture_write  # type: ignore[method-assign]
+
+        ed_svc = FakeEventDispositionService(activated=False, skipped_reason="effect_not_ready")
+        agent = VerifyAgent(
+            working_memory=wm,
+            trace_service=FakeTraceService(),
+            event_disposition_service=ed_svc,
+        )
+        agent._load_execution_state = AsyncMock(  # type: ignore[method-assign]
+            return_value=([immediate, deferred], {}, {})
+        )
+        agent._load_disposition_policy = AsyncMock(  # type: ignore[method-assign]
+            return_value=DispositionPolicy.REQUIRED,
+        )
+
+        result = await agent.execute(_input(actions=[immediate, deferred]))
+
+        assert len(verification_writes) >= 1
+        phase1_gate = verification_writes[0]
+        assert phase1_gate["overall_status"] == VerificationOverallStatus.WAITING.value
+        assert phase1_gate["verification_phase"] == VerificationPhase.EFFECT.value
+        immediate_rows = [
+            row
+            for row in phase1_gate["results"]
+            if row["action_id"] == immediate.action_id
+        ]
+        assert immediate_rows[0]["detail"] == "pending_execution"
+        assert result.overall_status is not VerificationOverallStatus.SUCCESS
+
+    async def test_phase1_persist_success_when_only_deferred_pending(self):
+        """ISSUE-216: deferred-only plans must still persist SUCCESS for EDS gate."""
+        deferred = _action(
+            tool_name=TERMINAL_DISPOSITION_TOOL,
+            action_name="terminal",
+            execution_phase=ActionExecutionPhase.POST_VERIFY,
+            status=ActionStatus.APPROVED,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+            writeback_required=True,
+        )
+        wm = FakeWorkingMemory()
+        verification_writes: list[dict[str, Any]] = []
+
+        async def _capture_write(event_id: str, key: str, value: Any) -> None:
+            if key == "verification_result":
+                verification_writes.append(value)
+            await wm.write(event_id, key, value)
+
+        wm.write = _capture_write  # type: ignore[method-assign]
+
+        ed_svc = FakeEventDispositionService(activated=True, writeback_id="wbk-deferred-only")
+        agent = VerifyAgent(
+            working_memory=wm,
+            trace_service=FakeTraceService(),
+            event_disposition_service=ed_svc,
+            session_factory=_mock_terminal_confirm_session_factory("wbk-deferred-only"),
+        )
+        agent._load_execution_state = AsyncMock(  # type: ignore[method-assign]
+            return_value=([deferred], {}, {})
+        )
+        agent._load_disposition_policy = AsyncMock(  # type: ignore[method-assign]
+            return_value=DispositionPolicy.REQUIRED,
+        )
+
+        await agent.execute(_input(actions=[deferred]))
+
+        assert len(verification_writes) >= 1
+        phase1_gate = verification_writes[0]
+        assert phase1_gate["overall_status"] == VerificationOverallStatus.SUCCESS.value
+        assert phase1_gate["verification_phase"] == VerificationPhase.EFFECT.value
+        deferred_rows = [
+            row for row in phase1_gate["results"] if row["action_id"] == deferred.action_id
+        ]
+        assert deferred_rows[0]["detail"] == "deferred_pending_activation"
+
     async def test_finalize_failure_during_exception_handling(self):
         """_finalize_verification_action failure → logged, not swallowed.
 

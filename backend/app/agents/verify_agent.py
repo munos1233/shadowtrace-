@@ -58,6 +58,7 @@ from app.models.enums import (
 )
 from app.models.execution import ActionExecutionJob
 from app.models.tool_meta import ToolResult, ToolResultStatus
+from app.models.verification_readiness import has_immediate_effect_pending
 from app.services.event_disposition_service import DispositionActivationResult
 from app.services.working_memory import BoundWorkingMemory
 
@@ -1848,9 +1849,14 @@ class VerifyAgent(BaseAgent[VerifyAgentInput, VerificationResult]):
         phase1_failed: set[str],
     ) -> None:
         """Persist phase-1-only verification so EDS can pass after_effect_resolution_ready."""
+        overall_status = (
+            VerificationOverallStatus.WAITING
+            if has_immediate_effect_pending(None, results=phase1_results)
+            else VerificationOverallStatus.SUCCESS
+        )
         interim = VerificationResult(
             results=phase1_results,
-            overall_status=VerificationOverallStatus.SUCCESS,
+            overall_status=overall_status,
             failed_actions=list(phase1_failed),
             verification_phase=VerificationPhase.EFFECT,
             need_action_replan=False,
