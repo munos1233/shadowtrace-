@@ -167,6 +167,12 @@ async def _build_authoritative_context(
     )
     current_closure_cycle = await _read_closure_cycle(session, event_id)
 
+    # Derive disposition_is_mock from active config (ISSUE-227 CLOSED gate).
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    disposition_is_mock = "mock" in settings.disposition_mode.strip().lower()
+
     return TransitionContext(
         final_verdict=FinalVerdict(row.final_verdict),
         disposition_policy=DispositionPolicy(row.disposition_policy),
@@ -183,6 +189,7 @@ async def _build_authoritative_context(
         need_investigation=caller.need_investigation,
         recommendation=caller.recommendation,
         escalated=caller.escalated,
+        disposition_is_mock=disposition_is_mock,
     )
 
 
@@ -254,6 +261,17 @@ async def _build_terminal_writeback_view(
     actual_parsed = _actual_disposition_from_command_payload(payload)
     actual_enum = actual_parsed if actual_parsed is not None else SourceDisposition.PENDING
 
+    # Read simulated flag from the latest receipt for this writeback (ISSUE-227).
+    simulated: bool | None = None
+    latest_receipt = await session.scalar(
+        select(orm.DispositionReceipt)
+        .where(orm.DispositionReceipt.writeback_id == outbox.writeback_id)
+        .order_by(orm.DispositionReceipt.sequence.desc())
+        .limit(1)
+    )
+    if latest_receipt is not None:
+        simulated = bool(latest_receipt.simulated)
+
     return TerminalEventWritebackView(
         action_id=deferred_action.action_id,
         disposition_id=outbox.disposition_id,
@@ -264,6 +282,7 @@ async def _build_terminal_writeback_view(
         actual_disposition=actual_enum,
         receipt_status=wb_status,
         plan_revision=current_revision,
+        simulated=simulated,
     )
 
 

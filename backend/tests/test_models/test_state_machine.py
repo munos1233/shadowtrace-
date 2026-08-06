@@ -359,6 +359,56 @@ def test_closed_gate_required_happy_path() -> None:
     validate_closed_gate(_closed_ctx())
 
 
+# --------------------------------------------------------------------------- #
+# CLOSED gate — simulated receipt gating (ISSUE-227)
+# --------------------------------------------------------------------------- #
+
+
+def test_closed_gate_mock_accepts_simulated_terminal() -> None:
+    """Mock mode (disposition_is_mock=True) always accepts simulated=True terminal."""
+    validate_closed_gate(
+        _closed_ctx(
+            disposition_is_mock=True,
+            terminal_event_writeback=_terminal_ok(simulated=True),
+        )
+    )
+
+
+def test_closed_gate_non_mock_rejects_simulated_terminal() -> None:
+    """Non-mock disposition must refuse a simulated terminal receipt."""
+    with pytest.raises(
+        InvalidStateTransitionError, match="simulated terminal receipt rejected"
+    ):
+        validate_closed_gate(
+            _closed_ctx(
+                disposition_is_mock=False,
+                terminal_event_writeback=_terminal_ok(simulated=True),
+            )
+        )
+
+
+def test_closed_gate_non_mock_accepts_unsimulated_terminal() -> None:
+    """Non-mock disposition accepts terminal receipt when simulated is not True."""
+    # simulated=False → real writeback
+    validate_closed_gate(
+        _closed_ctx(
+            disposition_is_mock=False,
+            terminal_event_writeback=_terminal_ok(simulated=False),
+        )
+    )
+
+
+def test_closed_gate_non_mock_accepts_unknown_simulated_terminal() -> None:
+    """Non-mock disposition accepts terminal receipt when simulated is None
+    (no receipt record yet — gate falls through to other guards)."""
+    validate_closed_gate(
+        _closed_ctx(
+            disposition_is_mock=False,
+            terminal_event_writeback=_terminal_ok(simulated=None),
+        )
+    )
+
+
 def test_actual_disposition_from_command_payload_reads_nested_operation_params() -> None:
     from app.services.state_machine_service import _actual_disposition_from_command_payload
 

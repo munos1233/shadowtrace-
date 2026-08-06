@@ -517,6 +517,10 @@ class TerminalEventWritebackView(BaseModel):
     actual_disposition: SourceDisposition
     receipt_status: WritebackStatus
     plan_revision: int
+    # Projected from the latest DispositionReceipt for this writeback (ISSUE-227).
+    # Only meaningful when disposition_is_mock=False; mock receipts are always
+    # simulated=True and the CLOSED gate accepts them unconditionally.
+    simulated: bool | None = None
 
 
 class TransitionContext(BaseModel):
@@ -551,6 +555,10 @@ class TransitionContext(BaseModel):
     # to human review.  Written to security_event.escalated by the state
     # machine's pre-transition side effects for CONTAINED / FAILED.
     escalated: bool = False
+    # Whether the active disposition adapter is mock (ISSUE-227 CLOSED gate).
+    # Default True preserves existing Mock behaviour; StateMachineService sets
+    # this from app_env / disposition_mode at transition time.
+    disposition_is_mock: bool = True
 
 
 # --------------------------------------------------------------------------- #
@@ -954,6 +962,24 @@ def validate_closed_gate(ctx: TransitionContext) -> None:
             "required CLOSED gate: terminal receipt must be CONFIRMED",
             target=EventStatus.CLOSED,
             details={"receipt_status": terminal.receipt_status.value},
+        )
+
+    # ISSUE-227: When disposition is NOT mock, a simulated CONFIRMED receipt
+    # must not pass as "real writeback".  Mock receipts are always
+    # simulated=True and the gate accepts them unconditionally (P0 demo).
+    # In staging / hybrid deployments where disposition_is_mock=False, a
+    # simulated terminal writeback is evidence that the writeback was a
+    # mock-side-effect — not a genuine XDR confirmation — and CLOSED must
+    # be refused.
+    if not ctx.disposition_is_mock and terminal.simulated is True:
+        raise InvalidStateTransitionError(
+            "required CLOSED gate: simulated terminal receipt rejected "
+            "in non-mock disposition mode",
+            target=EventStatus.CLOSED,
+            details={
+                "simulated": True,
+                "disposition_is_mock": False,
+            },
         )
 
 
