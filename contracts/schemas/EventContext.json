@@ -716,6 +716,29 @@
           "$ref": "#/$defs/ClassificationSource",
           "default": "source"
         },
+        "evidence_limited": {
+          "default": false,
+          "title": "Evidence Limited",
+          "type": "boolean"
+        },
+        "scoring_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScoringMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verdict_reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Verdict Reason Codes",
+          "type": "array"
+        },
         "disposition_policy": {
           "$ref": "#/$defs/DispositionPolicy"
         },
@@ -1225,6 +1248,14 @@
       ],
       "title": "ReportSection",
       "type": "object"
+    },
+    "ScoringMode": {
+      "enum": [
+        "llm_and_rule",
+        "rule_only"
+      ],
+      "title": "ScoringMode",
+      "type": "string"
     },
     "SetEventDispositionParams": {
       "additionalProperties": false,

@@ -5560,6 +5560,28 @@
           "classification_source": {
             "$ref": "#/components/schemas/ClassificationSource",
             "default": "source"
+          },
+          "evidence_limited": {
+            "type": "boolean",
+            "title": "Evidence Limited",
+            "default": false
+          },
+          "scoring_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoringMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdict_reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Verdict Reason Codes"
           }
         },
         "additionalProperties": false,
@@ -5714,6 +5736,28 @@
           "classification_source": {
             "$ref": "#/components/schemas/ClassificationSource",
             "default": "source"
+          },
+          "evidence_limited": {
+            "type": "boolean",
+            "title": "Evidence Limited",
+            "default": false
+          },
+          "scoring_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoringMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdict_reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Verdict Reason Codes"
           },
           "disposition_policy": {
             "$ref": "#/components/schemas/DispositionPolicy"
@@ -7528,6 +7572,14 @@
         ],
         "title": "ResponsePhaseState",
         "description": "Derived UX phase for analysis vs response (ISSUE-103)."
+      },
+      "ScoringMode": {
+        "type": "string",
+        "enum": [
+          "llm_and_rule",
+          "rule_only"
+        ],
+        "title": "ScoringMode"
       },
       "SearchResponse": {
         "properties": {

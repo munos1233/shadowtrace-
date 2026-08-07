@@ -154,6 +154,13 @@
       ],
       "default": null,
       "title": "Confidence Cap Version"
+    },
+    "verdict_reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Verdict Reason Codes",
+      "type": "array"
     }
   },
   "required": [

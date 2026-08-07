@@ -576,7 +576,9 @@ class ReportSectionBuilder:
             )
             lines.append(
                 "evidence_limited_note: threat signal retained while evidence "
-                f"collection failed or returned empty; {cap_note}."
+                f"collection failed or returned empty; {cap_note}. "
+                "Do not equate risk_score>=70 with confirmed_threat when "
+                "verdict_reason_codes include evidence_limited demotion."
             )
         for factor in risk_assessment.risk_factors:
             lines.append(
