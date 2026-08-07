@@ -138,17 +138,25 @@ def test_otel_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_celery_worker_init_calls_setup_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
+    log_calls: list[list[object]] = []
 
     def _capture(**kwargs: object) -> None:
         calls.append(dict(kwargs))
 
+    def _capture_log(*args: object, **__kwargs: object) -> None:
+        log_calls.append(list(args))
+
     monkeypatch.setattr("app.core.telemetry.setup_telemetry", _capture)
+    monkeypatch.setattr("app.core.sanitization.configure_app_logging", _capture_log)
     from app.core.celery_app import init_worker_telemetry
     from app.db.session_provider import reset_session_provider
 
     reset_session_provider()
     init_worker_telemetry(sender=None)
     assert len(calls) == 1
+    assert len(log_calls) == 1, (
+        f"Expected configure_app_logging to be called once, got {len(log_calls)} call(s)"
+    )
     assert "engine" in calls[0]
     from sqlalchemy.pool import NullPool
 

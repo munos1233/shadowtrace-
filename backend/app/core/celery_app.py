@@ -24,11 +24,25 @@ def _resolve_broker_url() -> str:
 
 
 def init_worker_telemetry(**kwargs: object) -> None:
-    """Bootstrap SessionProvider + OpenTelemetry in each Celery child (ISSUE-118/092)."""
+    """Bootstrap SessionProvider + OpenTelemetry in each Celery child (ISSUE-118/092).
+
+    Also installs ``RedactingFormatter`` on the ``app`` package logger so
+    that Celery worker log output receives the same credential redaction
+    as the API process (ISSUE-223).
+    """
     del kwargs
+    from app.core.sanitization import configure_app_logging
     from app.core.telemetry import setup_telemetry
     from app.db.session_provider import init_worker_session_provider
 
+    configure_app_logging()
+    # ISSUE-223 (P1): Celery's worker_hijack_root_logger=True installs a root
+    # logger handler that has no RedactingFormatter.  If propagate stays True
+    # (Python default), every log record emitted by an "app" logger also reaches
+    # the Celery root handler *unredacted*, leaking credentials to stderr.
+    # Turning off propagation keeps the redacted StreamHandler as the sole
+    # output path for app loggers.
+    logging.getLogger("app").propagate = False
     provider = init_worker_session_provider()
     setup_telemetry(engine=provider.engine())
     logger.debug("Celery worker session provider + telemetry initialized")

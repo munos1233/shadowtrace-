@@ -13,10 +13,16 @@ from app.api.v1.errors import register_exception_handlers
 from app.api.v1.health import shutdown_health_clients
 from app.core.config import get_settings
 from app.core.redis_client import RedisClient
+from app.core.sanitization import configure_app_logging
 from app.core.socketio_manager import SocketIOManager
 from app.core.telemetry import setup_telemetry
 from app.db.session import dispose_session_provider, get_session_provider
 from app.orchestration.orchestration_config import assert_orchestration_mode
+
+# ISSUE-223: install RedactingFormatter on the "app" logger before any
+# application code emits log records.  Idempotent — safe across hot-
+# reload and multi-worker restarts.
+configure_app_logging()
 
 logger = logging.getLogger(__name__)
 

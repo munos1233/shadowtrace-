@@ -115,9 +115,51 @@ class RedactingFormatter(logging.Formatter):
         return redact_sensitive_text(super().format(record))
 
 
+_REDACTING_LOGGING_CONFIGURED = False
+
+
+def configure_app_logging(
+    *,
+    level: int = logging.INFO,
+    fmt: str | None = None,
+) -> None:
+    """Install ``RedactingFormatter`` on the ``app`` package logger (ISSUE-223).
+
+    Idempotent across repeated calls — only the first invocation takes
+    effect so that callers in tests or multi-worker setups never
+    double-wrap or double-log.
+
+    The formatter is attached to a single ``StreamHandler`` on the
+    ``"app"`` logger; propagation to the root logger is left enabled
+    so that operators can still route structured / JSON logs above the
+    application boundary.  Only the ``app`` package boundary is
+    redacted because external libraries (uvicorn, sqlalchemy, redis)
+    are configured separately.
+
+    Telemetry spans (OpenTelemetry) are **not** touched — their log
+    correlation is via trace-id injection, not formatter-level secret
+    scanning.
+    """
+    global _REDACTING_LOGGING_CONFIGURED
+    if _REDACTING_LOGGING_CONFIGURED:
+        return
+
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(level)
+
+    _has_redacting = any(isinstance(h.formatter, RedactingFormatter) for h in app_logger.handlers)
+    if not _has_redacting:
+        handler = logging.StreamHandler()
+        handler.setFormatter(RedactingFormatter(fmt))
+        app_logger.addHandler(handler)
+
+    _REDACTING_LOGGING_CONFIGURED = True
+
+
 __all__ = [
     "REDACTED",
     "RedactingFormatter",
+    "configure_app_logging",
     "is_sensitive_key",
     "redact_sensitive_text",
     "sanitize_data",
