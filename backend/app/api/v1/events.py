@@ -2025,7 +2025,7 @@ async def get_decision_trace(
     return s.DecisionTraceResponse(
         event_id=trace.event_id,
         entries=[e.model_dump(mode="json") for e in page_entries],
-        summary=trace.summary.model_dump(),
+        summary=trace.summary,
         missing_sources=trace.missing_sources,
         page=page,
         page_size=page_size,

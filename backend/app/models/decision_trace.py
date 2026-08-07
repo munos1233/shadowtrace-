@@ -47,7 +47,24 @@ class DecisionTraceSummary(BaseModel):
     action_execution_count: int = 0
     disposition_count: int = 0
     writeback_count: int = 0
-    total_duration_ms: int | None = None
+    total_duration_ms: int | None = Field(
+        default=None,
+        description=(
+            "Wall-clock span from the first to last timeline entry (ms). "
+            "Includes WAITING_* idle such as approval/writeback waits. "
+            "Preserved for backward-compatible dashboards; prefer "
+            "active_duration_ms for investigation effort."
+        ),
+    )
+    active_duration_ms: int | None = Field(
+        default=None,
+        description=(
+            "Effective investigation duration (ms): wall-clock span minus "
+            "halt gaps where timeline state is WAITING_* "
+            "(e.g. waiting_approval, waiting_writeback). "
+            "Use this for ops/eval '调查耗时' displays."
+        ),
+    )
 
 
 class DecisionTrace(BaseModel):

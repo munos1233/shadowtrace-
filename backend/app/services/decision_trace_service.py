@@ -37,6 +37,17 @@ _ENTRY_TYPE_ORDER: dict[DecisionTraceEntryType, int] = {
     DecisionTraceEntryType.WRITEBACK: 7,
 }
 
+# Halt / idle statuses excluded from active_duration_ms (ISSUE-253).
+# Includes EventStatus.waiting_approval and ExecutionSubstate waiting_* values
+# so any recorded to_status matching these subtracts from effective effort.
+_HALT_STATUSES: frozenset[str] = frozenset(
+    {
+        "waiting_approval",
+        "waiting_execution",
+        "waiting_writeback",
+    }
+)
+
 
 def _new_entry_id() -> str:
     return f"dte-{secrets.token_hex(4)}"
@@ -499,6 +510,66 @@ def _sort_key(entry: DecisionTraceEntry) -> tuple[datetime, int, str]:
     )
 
 
+def _is_halt_status(status: object) -> bool:
+    """Return True when *status* represents operator/system WAITING_* idle."""
+    if not isinstance(status, str):
+        return False
+    normalized = status.strip().lower()
+    if not normalized or normalized in {"?", "none"}:
+        return False
+    if normalized in _HALT_STATUSES:
+        return True
+    # Future-proof: any waiting_* label recorded on the timeline.
+    return normalized.startswith("waiting_")
+
+
+def _ms_between(start: datetime, end: datetime) -> int:
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _compute_timeline_durations(
+    entries: list[DecisionTraceEntry],
+) -> tuple[int | None, int | None]:
+    """Return ``(total_duration_ms, active_duration_ms)`` for a sorted timeline.
+
+    * ``total_duration_ms`` — wall clock ``last_ts - first_ts`` (unchanged semantics).
+    * ``active_duration_ms`` — wall clock minus contiguous halt intervals inferred
+      from ``STATE_TRANSITION`` entries whose ``to_status`` is WAITING_*.
+
+    Open halt at end of timeline counts through ``last_ts``.
+    """
+    if not entries:
+        return None, None
+
+    first_ts = entries[0].timestamp
+    last_ts = entries[-1].timestamp
+    total_ms = _ms_between(first_ts, last_ts)
+
+    idle_ms = 0
+    halt_started: datetime | None = None
+    for entry in entries:
+        if entry.entry_type != DecisionTraceEntryType.STATE_TRANSITION:
+            continue
+        to_status = entry.detail.get("to_status")
+        if to_status is None:
+            continue
+        in_halt = _is_halt_status(to_status)
+        if in_halt and halt_started is None:
+            halt_started = entry.timestamp
+        elif not in_halt and halt_started is not None:
+            idle_ms += _ms_between(halt_started, entry.timestamp)
+            halt_started = None
+
+    if halt_started is not None:
+        idle_ms += _ms_between(halt_started, last_ts)
+
+    # Clamp: never report active above wall, and never negative.
+    if idle_ms > total_ms:
+        idle_ms = total_ms
+    active_ms = total_ms - idle_ms
+    return total_ms, active_ms
+
+
 # --------------------------------------------------------------------------- #
 # Service
 # --------------------------------------------------------------------------- #
@@ -590,11 +661,9 @@ class DecisionTraceService:
         all_entries.sort(key=_sort_key)
 
         summary = self._compute_summary(all_entries)
-
-        if all_entries:
-            first_ts = all_entries[0].timestamp
-            last_ts = all_entries[-1].timestamp
-            summary.total_duration_ms = max(0, int((last_ts - first_ts).total_seconds() * 1000))
+        total_ms, active_ms = _compute_timeline_durations(all_entries)
+        summary.total_duration_ms = total_ms
+        summary.active_duration_ms = active_ms
 
         return DecisionTrace(
             event_id=event_id,

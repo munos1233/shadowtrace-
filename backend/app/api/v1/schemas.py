@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.models.action import Action
 from app.models.agent_io import CollectionStatus
+from app.models.decision_trace import DecisionTraceSummary
 from app.models.disposition import (
     DispositionCommand,
     SetEventDispositionParams,
@@ -385,7 +386,14 @@ class EventEvidenceResponse(BaseModel):
 class DecisionTraceResponse(BaseModel):
     event_id: str
     entries: list[dict[str, Any]] = Field(default_factory=list)
-    summary: dict[str, Any] = Field(default_factory=dict)
+    summary: DecisionTraceSummary = Field(
+        default_factory=DecisionTraceSummary,
+        description=(
+            "Trace aggregates. total_duration_ms is wall-clock (includes WAITING_* "
+            "idle); active_duration_ms is effective investigation time excluding "
+            "waiting_approval / waiting_writeback halt gaps (ISSUE-253)."
+        ),
+    )
     missing_sources: list[str] = Field(default_factory=list)
     page: int = 1
     page_size: int = 50
