@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -206,6 +206,18 @@ async def execution_service(
         state_machine=state_machine,
         context_store=store,
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_mock_tool_provider() -> Iterator[None]:
+    """Prevent singleton MockToolProvider state leaking between integration tests."""
+    import app.providers.tools.mock_provider as mock_provider_module
+
+    mock_provider_module._default_provider = None
+    mock_provider_module._execution_context.set(None)
+    yield
+    mock_provider_module._default_provider = None
+    mock_provider_module._execution_context.set(None)
 
 
 @pytest_asyncio.fixture
@@ -1282,23 +1294,29 @@ async def test_direct_tool_replan_execution_result_enqueues_with_snapshot(
     enqueued only after the action reached SUCCESS — it must use
     closure_cycle=2 and the approved snapshot resolved while the action was
     still EXECUTING (resolve by status would find an empty set)."""
-    oid = f"INC-{_sfx()}"
+    oid = f"INC-replan-{_sfx()}"
+    target_ip = f"203.0.113.{int(uuid.uuid4().hex[:2], 16) % 200 + 1}"
     await _seed_connector_and_source(session_factory, object_id=oid)
     event_id = await _create_event(session_factory, store, object_id=oid)
-    await _insert_action(
+    action = await _insert_action(
         session_factory,
         event_id,
         _action_model(
             event_id=event_id,
             execution_owner=ExecutionOwner.DIRECT_TOOL,
             disposition_source_ref=_locator(object_id=oid),
+            target=target_ip,
+            parameters={"target_type": "ip", "target": target_ip},
             plan_revision=2,
         ),
     )
 
-    await execution_service.execute_plan(event_id)
+    summary = await execution_service.execute_plan(event_id)
 
     async with session_factory() as session:
+        action_row = await session.get(orm.Action, action.action_id)
+        assert action_row is not None
+        assert action_row.status == ActionStatus.SUCCESS.value
         outboxes = (
             await session.scalars(
                 select(orm.DispositionOutbox).where(orm.DispositionOutbox.event_id == event_id)
@@ -1310,3 +1328,5 @@ async def test_direct_tool_replan_execution_result_enqueues_with_snapshot(
         )
         assert outboxes[0].intent_kind == "execution_result_record"
         assert outboxes[0].closure_cycle == 2
+        assert outboxes[0].action_id == action.action_id
+    assert summary.writeback_ids
