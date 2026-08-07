@@ -25,9 +25,12 @@ from typing import Any
 from app.agents.base import BaseAgent
 from app.agents.evidence_agent import EVIDENCE_QUERY_ORDER
 from app.agents.prompts.planner_prompt import (
+    PlanGenerateLLMResponse,
+    PlanStepLLM,
     build_plan_generate_messages,
     build_plan_revise_messages,
 )
+from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 from app.agents.rules.default_plans import (
     MIN_PLAN_STEPS,
     get_default_plan,
@@ -131,6 +134,30 @@ def _validate_plan_step(step: PlanStep) -> PlanStep | None:
         required_tools=clean_tools,
         success_criteria=step.success_criteria,
     )
+
+
+def _steps_from_wire(wire_steps: list[PlanStepLLM]) -> list[PlanStep]:
+    """Convert tolerant LLM steps into domain PlanStep values."""
+
+    steps: list[PlanStep] = []
+    for idx, step in enumerate(wire_steps, start=1):
+        agent = step.assigned_agent
+        if agent not in _VALID_AGENT_NAMES:
+            logger.warning(
+                "PlannerAgent: dropping wire step with invalid assigned_agent=%r",
+                agent,
+            )
+            continue
+        steps.append(
+            PlanStep(
+                step_order=step.step_order or idx,
+                step_goal=step.step_goal,
+                assigned_agent=agent,  # type: ignore[arg-type]
+                required_tools=list(step.required_tools),
+                success_criteria=step.success_criteria,
+            )
+        )
+    return steps
 
 
 def _validate_execution_plan(plan: ExecutionPlan) -> ExecutionPlan:
@@ -377,19 +404,20 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             agent_name=self.agent_name,
             prompt_key="plan_generate",
             json_mode=True,
-            response_model=ExecutionPlan,
+            response_model=PlanGenerateLLMResponse,
+            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
         )
 
-        if response.parsed is not None and isinstance(response.parsed, ExecutionPlan):
-            plan = response.parsed
+        if response.parsed is not None and isinstance(response.parsed, PlanGenerateLLMResponse):
+            wire = response.parsed
         else:
-            raise ValueError("LLM did not return a valid ExecutionPlan")
+            raise ValueError("LLM did not return a valid PlanGenerateLLMResponse")
 
         plan = ExecutionPlan(
             plan_id=_generate_plan_id(event_id, 0),
             event_id=event_id,
-            steps=plan.steps,
-            budget=plan.budget if isinstance(plan.budget, PlanBudget) else PlanBudget(),
+            steps=_steps_from_wire(wire.steps),
+            budget=wire.budget if isinstance(wire.budget, PlanBudget) else PlanBudget(),
             revision=0,
             revise_reason=None,
             degraded=bool(response.degraded_reason),
@@ -417,20 +445,21 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             agent_name=self.agent_name,
             prompt_key="plan_revise",
             json_mode=True,
-            response_model=ExecutionPlan,
+            response_model=PlanGenerateLLMResponse,
+            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
         )
 
-        if response.parsed is not None and isinstance(response.parsed, ExecutionPlan):
-            plan = response.parsed
+        if response.parsed is not None and isinstance(response.parsed, PlanGenerateLLMResponse):
+            wire = response.parsed
         else:
-            raise ValueError("LLM did not return a valid ExecutionPlan")
+            raise ValueError("LLM did not return a valid PlanGenerateLLMResponse")
 
         new_revision = previous_plan.revision + 1
         plan = ExecutionPlan(
             plan_id=previous_plan.plan_id,
             event_id=event_id,
-            steps=plan.steps,
-            budget=plan.budget if isinstance(plan.budget, PlanBudget) else previous_plan.budget,
+            steps=_steps_from_wire(wire.steps),
+            budget=wire.budget if isinstance(wire.budget, PlanBudget) else previous_plan.budget,
             revision=new_revision,
             revise_reason=failure_reason,
             degraded=bool(response.degraded_reason),

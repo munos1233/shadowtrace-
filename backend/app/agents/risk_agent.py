@@ -8,7 +8,11 @@ from typing import Any
 
 from app.agents.base import BaseAgent
 from app.agents.confidence_calibration import DEFAULT_TEMPERATURE, calibrate_confidence
-from app.agents.prompts.risk_prompt import FACTOR_NAMES, build_risk_messages
+from app.agents.prompts.risk_prompt import (
+    FACTOR_NAMES,
+    RiskScoreLLMResponse,
+    build_risk_messages,
+)
 from app.agents.risk_llm_admissibility import classify_llm_risk_response
 from app.agents.risk_scoring_engine import (
     FACTOR_WEIGHTS,
@@ -23,6 +27,7 @@ from app.agents.triage_risk_consistency import (
 )
 from app.agents.verdict_resolver import VerdictResolver
 from app.core.errors import LLMError
+from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 from app.core.llm.scenario_context import resolve_llm_scenario_id
 from app.models.agent_io import (
     LlmAdmissibility,
@@ -269,33 +274,25 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
                 source_snapshot=source_snapshot,
             ),
             json_mode=True,
+            response_model=RiskScoreLLMResponse,
+            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            max_tokens=2048,
         )
-        payload = response.parsed
-        if payload is not None and hasattr(payload, "model_dump"):
-            data = payload.model_dump(mode="json")
+        if isinstance(response.parsed, RiskScoreLLMResponse):
+            wire = response.parsed
         else:
             data = json.loads(response.content)
-        if not isinstance(data, dict):
-            raise LLMError("risk_score LLM response is not an object")
-
-        factors_raw = data.get("factors") or {}
-        if not isinstance(factors_raw, dict):
-            raise LLMError("risk_score LLM factors must be an object")
+            if not isinstance(data, dict):
+                raise LLMError("risk_score LLM response is not an object")
+            wire = RiskScoreLLMResponse.model_validate(data)
 
         scores: dict[str, tuple[float, str]] = {}
         for name in FACTOR_NAMES:
-            entry = factors_raw.get(name) or {}
-            if not isinstance(entry, dict):
+            entry = wire.factors.get(name)
+            if entry is None or entry.score is None:
                 continue
-            raw_score = entry.get("score")
-            if raw_score is None:
-                continue
-            try:
-                score = float(raw_score)
-            except (TypeError, ValueError):
-                continue
-            score = max(0.0, min(100.0, score))
-            reason = str(entry.get("reason") or entry.get("reasoning") or "llm")
+            score = max(0.0, min(100.0, float(entry.score)))
+            reason = entry.reason or "llm"
             scores[name] = (score, reason)
 
         if len(scores) < len(FACTOR_NAMES):
@@ -304,11 +301,7 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
                 details={"present": sorted(scores)},
             )
 
-        try:
-            conf = float(data.get("raw_confidence", 0.75))
-        except (TypeError, ValueError):
-            conf = 0.75
-        conf = max(0.0, min(1.0, conf))
+        conf = max(0.0, min(1.0, float(wire.raw_confidence)))
         admissibility = classify_llm_risk_response(response)
         if admissibility is not LlmAdmissibility.VALID:
             logger.info(

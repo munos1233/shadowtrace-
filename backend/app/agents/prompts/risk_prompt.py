@@ -1,9 +1,11 @@
-"""Risk scoring prompt builders (ISSUE-035)."""
+"""Risk scoring prompt builders (ISSUE-035 / ISSUE-251)."""
 
 from __future__ import annotations
 
 import json
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.llm.base import LLMMessage
 from app.models.agent_io import EvidenceOutput, TriageResult
@@ -18,6 +20,85 @@ FACTOR_NAMES: tuple[str, ...] = (
 )
 
 
+class RiskFactorLLM(BaseModel):
+    """One dimension score from risk_score structured output."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    score: float | None = None
+    reason: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reasoning_alias(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if not data.get("reason") and data.get("reasoning") is not None:
+            data["reason"] = data.get("reasoning")
+        return data
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _coerce_score(cls, value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _coerce_reason(cls, value: Any) -> str:
+        return "" if value is None else str(value)
+
+
+class RiskScoreLLMResponse(BaseModel):
+    """Slim wire model so JSON repair embeds a real schema (ISSUE-251)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    factors: dict[str, RiskFactorLLM] = Field(default_factory=dict)
+    raw_confidence: float = 0.75
+    evidence_limited: bool = False
+
+    @field_validator("factors", mode="before")
+    @classmethod
+    def _coerce_factors(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, Any] = {}
+        for key, entry in value.items():
+            if not isinstance(entry, dict):
+                continue
+            try:
+                parsed = RiskFactorLLM.model_validate(entry)
+            except Exception:
+                continue
+            if parsed.score is None:
+                continue
+            out[str(key)] = parsed
+        return out
+
+    @field_validator("raw_confidence", mode="before")
+    @classmethod
+    def _coerce_confidence(cls, value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.75
+
+    @field_validator("evidence_limited", mode="before")
+    @classmethod
+    def _coerce_limited(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes"}
+        return bool(value)
+
+
 def build_risk_messages(
     *,
     triage_result: TriageResult,
@@ -29,12 +110,19 @@ def build_risk_messages(
     """Build JSON-mode messages that request per-dimension scores only (no CoT)."""
     system = (
         "You are ShadowTrace RiskAgent. Score residual cyber risk for one security "
-        "event across six fixed dimensions. Reply with JSON only. Do not include "
-        "hidden chain-of-thought. For each dimension provide score (0-100) and a "
-        "short evidence-based reason (one sentence). "
-        "Important: missing or failed evidence collection does NOT mean low threat—"
-        "preserve source alert severity when evidence is sparse and set "
-        "evidence_limited=true with factor explanations."
+        "event across six fixed dimensions. Return a single JSON object only "
+        "(no markdown fences, no commentary) with shape:\n"
+        '{"factors":{"asset_impact":{"score":0,"reason":"..."},'
+        '"behavior_anomaly":{"score":0,"reason":"..."},'
+        '"evidence_confidence":{"score":0,"reason":"..."},'
+        '"attack_stage":{"score":0,"reason":"..."},'
+        '"data_sensitivity":{"score":0,"reason":"..."},'
+        '"threat_intel":{"score":0,"reason":"..."}},'
+        '"raw_confidence":0.0,"evidence_limited":false}\n'
+        "Each score is 0-100 with a one-sentence evidence-based reason. "
+        "Do not include chain-of-thought. Missing or failed evidence collection "
+        "does NOT mean low threat — preserve source alert severity when evidence "
+        "is sparse and set evidence_limited=true."
     )
     source_context: dict[str, Any] = {}
     if isinstance(source_snapshot, dict):
@@ -72,26 +160,20 @@ def build_risk_messages(
         "rag": rag_summary or {},
         "graph_summary": graph_summary or {},
         "required_factors": list(FACTOR_NAMES),
-        "response_schema": {
-            "factors": {
-                "<factor_name>": {"score": "0-100", "reason": "short string"},
-            },
-            "raw_confidence": "0-1",
-            "evidence_limited": "boolean — true when collection failed/degraded with zero evidence",
-        },
     }
     user = (
-        "Score the event. Return JSON shaped like:\n"
-        '{"factors":{"asset_impact":{"score":80,"reason":"..."},'
-        '"behavior_anomaly":{"score":70,"reason":"..."},'
-        '"evidence_confidence":{"score":75,"reason":"..."},'
-        '"attack_stage":{"score":85,"reason":"..."},'
-        '"data_sensitivity":{"score":70,"reason":"..."},'
-        '"threat_intel":{"score":80,"reason":"..."}},'
-        '"raw_confidence":0.82,"evidence_limited":false}\n'
+        "Score the event and respond with JSON only.\n"
         f"Context:\n{json.dumps(payload, ensure_ascii=False)}"
     )
     return [
         LLMMessage(role="system", content=system),
         LLMMessage(role="user", content=user),
     ]
+
+
+__all__ = [
+    "FACTOR_NAMES",
+    "RiskFactorLLM",
+    "RiskScoreLLMResponse",
+    "build_risk_messages",
+]

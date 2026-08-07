@@ -34,6 +34,7 @@ from app.core.errors import (
     ShadowTraceError,
 )
 from app.core.llm.base import LLMResponse
+from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 from app.core.llm.scenario_context import resolve_llm_scenario_id
 from app.core.network_utils import is_internal_ip
 from app.models.agent_io import (
@@ -662,8 +663,9 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                 json_mode=True,
                 response_model=TriageLLMResponse,
                 temperature=0.3,
-                max_tokens=4096,
-                timeout=15.0,
+                max_tokens=2048,
+                # ISSUE-251: intentional short demo/eval timeout (vs LLM_TIMEOUT=30).
+                timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
             )
 
             if response.parsed is not None and isinstance(response.parsed, TriageLLMResponse):

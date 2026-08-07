@@ -1,49 +1,203 @@
-"""TriageAgent LLM prompt templates (ISSUE-032).
+"""TriageAgent LLM prompt templates (ISSUE-032 / ISSUE-251).
 
-Provides the system prompt with entity type definitions and two few-shot
-examples, plus a helper to build the full message list for an LLM call.
-
-The ``TriageLLMResponse`` wrapper model bridges the prompt's three-key output
-(``event_type``, ``entities``, ``decision_summary``) and the ``EntitySet`` model so
-that LLM responses validate correctly — fixing the prompt/response_model
-mismatch noted in the PR review.
+Provides a compact JSON-only system prompt plus a helper to build the message
+list. ``TriageLLMResponse`` accepts a tolerant wire shape (optional
+``entity_id``, ignore unknown keys, coerce unknown ``event_type``) and
+materializes a domain ``EntitySet`` for downstream validation.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+import re
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.llm.base import LLMMessage
 from app.models.entities import EntitySet
 from app.models.enums import EventType
 
 _MAX_TRIAGE_SUMMARY_CHARS = 512
+_ENTITY_ID_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slug_entity_id(prefix: str, value: str) -> str:
+    cleaned = _ENTITY_ID_RE.sub("", (value or "").lower())[:24] or "unknown"
+    return f"{prefix}-{cleaned}"
+
+
+_ENTITY_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
+    "accounts": frozenset(
+        {"entity_id", "entity_type", "username", "domain", "display_name", "source_refs", "attributes"}
+    ),
+    "hosts": frozenset(
+        {"entity_id", "entity_type", "hostname", "ip", "os", "source_refs", "attributes"}
+    ),
+    "ips": frozenset(
+        {"entity_id", "entity_type", "address", "scope", "source_refs", "attributes"}
+    ),
+    "domains": frozenset({"entity_id", "entity_type", "fqdn", "source_refs", "attributes"}),
+    "processes": frozenset(
+        {
+            "entity_id",
+            "entity_type",
+            "name",
+            "pid",
+            "command_line",
+            "hash",
+            "source_refs",
+            "attributes",
+        }
+    ),
+    "files": frozenset(
+        {"entity_id", "entity_type", "path", "name", "hash", "source_refs", "attributes"}
+    ),
+}
+
+
+def _fill_entity_id(item: dict[str, Any], *, prefix: str, natural_key: str) -> dict[str, Any]:
+    entity_id = item.get("entity_id")
+    if isinstance(entity_id, str) and entity_id.strip():
+        return item
+    natural = item.get(natural_key)
+    if not isinstance(natural, str) or not natural.strip():
+        for key in ("name", "address", "hostname", "fqdn", "username", "path"):
+            candidate = item.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                natural = candidate
+                break
+        else:
+            natural = "unknown"
+    item["entity_id"] = _slug_entity_id(prefix, str(natural))
+    return item
+
+
+def _coerce_entity_list(
+    raw: Any,
+    *,
+    category: str,
+    prefix: str,
+    natural_key: str,
+    default_entity_type: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    allowed = _ENTITY_ALLOWED_FIELDS[category]
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cleaned = {key: value for key, value in item.items() if key in allowed}
+        cleaned.setdefault("entity_type", default_entity_type)
+        if "source_refs" in cleaned and not isinstance(cleaned["source_refs"], list):
+            cleaned.pop("source_refs", None)
+        if "attributes" in cleaned and not isinstance(cleaned["attributes"], dict):
+            cleaned.pop("attributes", None)
+        out.append(_fill_entity_id(cleaned, prefix=prefix, natural_key=natural_key))
+    return out
+
+
+def coerce_entities_payload(entities: Any) -> dict[str, Any]:
+    """Normalize LLM entity payload: keep known fields, fill missing entity_id."""
+
+    if not isinstance(entities, dict):
+        return {
+            "accounts": [],
+            "hosts": [],
+            "ips": [],
+            "domains": [],
+            "processes": [],
+            "files": [],
+        }
+    return {
+        "accounts": _coerce_entity_list(
+            entities.get("accounts"),
+            category="accounts",
+            prefix="acct",
+            natural_key="username",
+            default_entity_type="account",
+        ),
+        "hosts": _coerce_entity_list(
+            entities.get("hosts"),
+            category="hosts",
+            prefix="host",
+            natural_key="hostname",
+            default_entity_type="host",
+        ),
+        "ips": _coerce_entity_list(
+            entities.get("ips"),
+            category="ips",
+            prefix="ip",
+            natural_key="address",
+            default_entity_type="ip",
+        ),
+        "domains": _coerce_entity_list(
+            entities.get("domains"),
+            category="domains",
+            prefix="dom",
+            natural_key="fqdn",
+            default_entity_type="domain",
+        ),
+        "processes": _coerce_entity_list(
+            entities.get("processes"),
+            category="processes",
+            prefix="proc",
+            natural_key="name",
+            default_entity_type="process",
+        ),
+        "files": _coerce_entity_list(
+            entities.get("files"),
+            category="files",
+            prefix="file",
+            natural_key="name",
+            default_entity_type="file",
+        ),
+    }
 
 
 class TriageLLMResponse(BaseModel):
-    """Wrapper that matches the three top-level keys the prompt asks for.
+    """Wire model for ``triage_extract`` structured output (ISSUE-251).
 
-    The prompt's few-shot examples produce ``event_type``, ``entities``, and
-    ``decision_summary`` at the top level.  Passing ``EntitySet`` directly as the
-    ``response_model`` would reject ``event_type`` and ``decision_summary`` as
-    forbidden extra fields.  This wrapper accepts all three; the agent extracts
-    ``.entities`` for downstream use.  ``event_type`` is only adopted when
-    ``TRIAGE_LLM_EVENT_TYPE_FALLBACK`` is enabled and source+heuristic both
-    resolved to OTHER (ISSUE-197).
+    Tolerant on purpose: real models often omit ``entity_id``, add commentary
+    keys, or invent unknown event types. Domain ``EntitySet`` remains strict;
+    this wrapper coerces then re-validates into entity models.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
-    event_type: EventType
+    event_type: EventType = EventType.OTHER
     entities: EntitySet = Field(default_factory=EntitySet)
     decision_summary: str = Field(default="", max_length=_MAX_TRIAGE_SUMMARY_CHARS)
     # Deprecated ISSUE-131: legacy key retained for parse compatibility only.
     reasoning: str = Field(default="", deprecated=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_wire_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data["entities"] = coerce_entities_payload(data.get("entities"))
+        if "decision_summary" not in data or data.get("decision_summary") is None:
+            data["decision_summary"] = ""
+        return data
+
+    @field_validator("event_type", mode="before")
+    @classmethod
+    def _coerce_event_type(cls, value: Any) -> Any:
+        if isinstance(value, EventType):
+            return value
+        if isinstance(value, str):
+            try:
+                return EventType(value)
+            except ValueError:
+                return EventType.OTHER
+        return EventType.OTHER
+
     @field_validator("decision_summary")
     @classmethod
     def _bound_summary(cls, value: str) -> str:
-        return value[:_MAX_TRIAGE_SUMMARY_CHARS]
+        return (value or "")[:_MAX_TRIAGE_SUMMARY_CHARS]
 
     @field_validator("reasoning")
     @classmethod
@@ -51,112 +205,30 @@ class TriageLLMResponse(BaseModel):
         return ""
 
 
-ENTITY_TYPE_DEFINITIONS = """
-Entity types to extract (only these six categories):
-- account: A user or service account name (e.g. "zhangsan", "svc-backup", "admin@corp.local").
-- host: A machine hostname (e.g. "PC-FIN-023", "web-server-01").
-- ip: An IPv4 address with scope hint ("external" or "internal").
-- domain: A fully-qualified domain name (e.g. "unknown-upload-example.com").
-- process: A process binary name with optional command line
-  (e.g. "powershell.exe", "7z.exe a -p archive.7z").
-- file: A file name with extension (e.g. "finance_report.zip", "data.csv").
-"""
-
-FEW_SHOT_EXAMPLE_1 = """
-Alert: "Account zhangsan on host PC-FIN-023 executed powershell.exe which compressed \
-finance_report.zip via 7z.exe and uploaded to 203.0.113.88 \
-(unknown-upload-example.com). Source IP 45.153.12.88 triggered geographic anomaly."
-
-Expected output:
-{
-  "event_type": "data_exfiltration",
-  "entities": {
-    "accounts": [
-      {"entity_type": "account", "username": "zhangsan",
-       "entity_id": "acct-zhangsan"}
-    ],
-    "hosts": [
-      {"entity_type": "host", "hostname": "PC-FIN-023",
-       "entity_id": "host-pcfin023"}
-    ],
-    "ips": [
-      {"entity_type": "ip", "address": "203.0.113.88",
-       "scope": "external", "entity_id": "ip-20300113088"},
-      {"entity_type": "ip", "address": "45.153.12.88",
-       "scope": "external", "entity_id": "ip-4515301288"}
-    ],
-    "domains": [
-      {"entity_type": "domain", "fqdn": "unknown-upload-example.com",
-       "entity_id": "dom-unknownupload"}
-    ],
-    "processes": [
-      {"entity_type": "process", "name": "powershell.exe",
-       "entity_id": "proc-powershell"},
-      {"entity_type": "process", "name": "7z.exe",
-       "entity_id": "proc-7z"}
-    ],
-    "files": [
-      {"entity_type": "file", "name": "finance_report.zip",
-       "entity_id": "file-financereport"}
-    ]
-  },
-  "decision_summary": "Insider data exfiltration pattern: account compressed \
-sensitive file and uploaded to external IP and domain."
-}
-"""  # noqa: E501
-
-FEW_SHOT_EXAMPLE_2 = """
-Alert: "User svc-backup failed to login 1 time from 10.50.1.10 \
-to host PC-OPS-JUMP-01."
-
-Expected output:
-{
-  "event_type": "account_anomaly",
-  "entities": {
-    "accounts": [
-      {"entity_type": "account", "username": "svc-backup",
-       "entity_id": "acct-svcbackup"}
-    ],
-    "hosts": [
-      {"entity_type": "host", "hostname": "PC-OPS-JUMP-01",
-       "entity_id": "host-pcopsjump01"}
-    ],
-    "ips": [
-      {"entity_type": "ip", "address": "10.50.1.10",
-       "scope": "internal", "entity_id": "ip-10500110"}
-    ],
-    "domains": [],
-    "processes": [],
-    "files": []
-  },
-  "decision_summary": "Single failed login from internal IP; likely not a threat."
-}
-"""  # noqa: E501
-
+# Compact contract: one short shape example (not multi-entity few-shots).
+# entity_id is optional — server fills it when omitted (ISSUE-251).
 TRIAGE_SYSTEM_PROMPT: str = (
-    f"You are a security triage specialist. Your job is to parse a security alert "
-    f"and extract structured entities and event type information.\n\n"
-    f"{ENTITY_TYPE_DEFINITIONS}"
-    f"""
-Event types (choose exactly one):
-- data_exfiltration: Unauthorized data transfer to external destination.
-- insider_threat: Internal user performing suspicious actions.
-- malicious_process: Malicious or suspicious process execution.
-- suspicious_domain: Communication with suspicious or known-bad domains.
-- lateral_movement: Internal host-to-host movement patterns.
-- host_compromise: Evidence of host-level compromise.
-- account_anomaly: Unusual account behavior (login anomalies, privilege changes).
-- other: None of the above clearly applies.
-
-Few-shot examples:
-{FEW_SHOT_EXAMPLE_1}
-
-{FEW_SHOT_EXAMPLE_2}
-
-Always output valid JSON with these top-level keys: event_type, entities, decision_summary.
-Entities must follow the exact field schema shown in the examples.
-decision_summary must be a bounded structured summary (max 512 chars) — never chain-of-thought.
-If no entities of a category are found, return an empty list for that category."""
+    "You are a security triage specialist. Return a single JSON object only "
+    "(no markdown fences, no commentary) with shape:\n"
+    '{"event_type":"<enum>","entities":{"accounts":[],"hosts":[],"ips":[],'
+    '"domains":[],"processes":[],"files":[]},"decision_summary":"<short>"}\n\n'
+    "event_type must be exactly one of: data_exfiltration, insider_threat, "
+    "malicious_process, suspicious_domain, lateral_movement, host_compromise, "
+    "account_anomaly, other.\n\n"
+    "Entity object fields (omit entity_id if unsure — server will assign):\n"
+    '- accounts: {"username":"..."}\n'
+    '- hosts: {"hostname":"..."}\n'
+    '- ips: {"address":"...","scope":"external|internal|unknown"}\n'
+    '- domains: {"fqdn":"..."}\n'
+    '- processes: {"name":"..."}\n'
+    '- files: {"name":"..."}\n'
+    "Use empty lists for absent categories. decision_summary max 512 chars; "
+    "never include chain-of-thought.\n\n"
+    "Minimal example:\n"
+    '{"event_type":"account_anomaly","entities":{"accounts":[{"username":'
+    '"svc-backup"}],"hosts":[{"hostname":"PC-OPS-01"}],"ips":[{"address":'
+    '"10.50.1.10","scope":"internal"}],"domains":[],"processes":[],"files":[]},'
+    '"decision_summary":"Single failed login from internal IP."}'
 )
 
 
@@ -180,7 +252,10 @@ def build_triage_messages(alert_text: str) -> list[LLMMessage]:
         )
     return [
         LLMMessage(role="system", content=TRIAGE_SYSTEM_PROMPT),
-        LLMMessage(role="user", content=f"Alert: {alert_text}"),
+        LLMMessage(
+            role="user",
+            content=f"Parse this alert and respond with JSON only:\n{alert_text}",
+        ),
     ]
 
 
@@ -188,4 +263,5 @@ __all__ = [
     "TriageLLMResponse",
     "TRIAGE_SYSTEM_PROMPT",
     "build_triage_messages",
+    "coerce_entities_payload",
 ]

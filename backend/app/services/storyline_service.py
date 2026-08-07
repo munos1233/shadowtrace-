@@ -12,8 +12,12 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
-from app.agents.prompts.storyline_prompt import build_storyline_messages
+from app.agents.prompts.storyline_prompt import (
+    StorylineLLMResponse,
+    build_storyline_messages,
+)
 from app.core.errors import ShadowTraceError
+from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 
 # LLMError / LLMProviderError are runtime-importable from app.core.llm.base
 # even though only LLMProviderError is listed in __all__.  Catch Exception
@@ -197,77 +201,69 @@ class StorylineService:
             agent_name="storyline_service",
             prompt_key="storyline_generate",
             json_mode=True,
+            response_model=StorylineLLMResponse,
+            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            max_tokens=2048,
         )
         import json as _json
 
-        # Parse from response.content (str) — never rely on response.parsed
-        # because MockLLMClient returns a raw dict when json_mode=True without
-        # a response_model, and LLMResponse.parsed is typed BaseModel | None.
-        if isinstance(response.content, str):
+        if isinstance(response.parsed, StorylineLLMResponse):
+            wire = response.parsed
+        elif isinstance(response.content, str):
             try:
                 llm_data: Any = _json.loads(response.content)
             except (_json.JSONDecodeError, TypeError):
                 return None
             if not isinstance(llm_data, dict):
                 return None
-        elif isinstance(response.content, dict):
-            llm_data = response.content
+            try:
+                wire = StorylineLLMResponse.model_validate(llm_data)
+            except Exception:
+                return None
         else:
             return None
 
-        narrative = str(llm_data.get("narrative_summary", ""))[:300]
-        raw_phases: list[dict[str, Any]] = llm_data.get("phases") or []
-        if not isinstance(raw_phases, list):
-            raw_phases = []
+        narrative = wire.narrative_summary[:300]
 
         # Build evidence_id lookup
         valid_evidence_ids: set[str] = {e.get("evidence_id", "") for e in evidence_list}
 
         phases: list[StorylinePhase] = []
-        for rp in raw_phases:
-            if not isinstance(rp, dict):
-                continue
-            phase_name_str = str(rp.get("phase_name", ""))
-            phase_name = _parse_phase_name(phase_name_str)
+        for rp in wire.phases:
+            phase_name = _parse_phase_name(rp.phase_name)
             if phase_name is None:
                 logger.warning(
                     "LLM returned unrecognized phase_name=%r for event=%s, skipping phase",
-                    phase_name_str,
+                    rp.phase_name,
                     event_id,
                 )
                 continue
 
             entries: list[TimelineEntry] = []
-            raw_entries: list[dict[str, Any]] = rp.get("entries") or []
-            if not isinstance(raw_entries, list):
-                raw_entries = []
-            for re_entry in raw_entries:
-                if not isinstance(re_entry, dict):
-                    continue
-                evidence_id = str(re_entry.get("evidence_id", ""))
+            for re_entry in rp.entries:
+                evidence_id = (re_entry.evidence_id or "").strip()
                 # Remove entries whose evidence_id doesn't exist in input (spec: 剔除)
                 if not evidence_id or evidence_id not in valid_evidence_ids:
                     continue
                 entries.append(
                     TimelineEntry(
-                        timestamp=_parse_ts(re_entry.get("timestamp")) or _TS_MIN,
-                        description=str(re_entry.get("description", ""))[:500],
+                        timestamp=_parse_ts(re_entry.timestamp) or _TS_MIN,
+                        description=(re_entry.description or "")[:500],
                         evidence_id=evidence_id,
-                        technique_id=re_entry.get("technique_id"),
-                        severity_hint=_parse_severity(re_entry.get("severity_hint")),
+                        technique_id=re_entry.technique_id,
+                        severity_hint=_parse_severity(re_entry.severity_hint),
                     )
                 )
 
             if not entries:
                 continue
 
-            tactic = rp.get("tactic")
             phases.append(
                 StorylinePhase(
                     phase_order=_PHASE_ORDER.get(phase_name, len(phases) + 1),
                     phase_name=phase_name,
-                    tactic=str(tactic) if tactic else None,
-                    narrative=str(rp.get("narrative", ""))[:500],
+                    tactic=str(rp.tactic) if rp.tactic else None,
+                    narrative=(rp.narrative or "")[:500],
                     entries=entries,
                 )
             )

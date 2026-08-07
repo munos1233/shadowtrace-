@@ -14,7 +14,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agents.base import BaseAgent
-from app.agents.prompts.response_prompt import build_response_plan_messages
+from app.agents.prompts.response_prompt import (
+    ResponsePlanLLMResponse,
+    build_response_plan_messages,
+)
 from app.agents.rules.default_response_rules import ResponseRuleAction, get_rule_actions
 from app.agents.rules.response_plan_quality_gate import (
     CONTAINMENT_TOOLS,
@@ -25,6 +28,7 @@ from app.agents.rules.response_plan_quality_gate import (
 )
 from app.core.errors import LLMError
 from app.core.errors import ValidationError as ShadowValidationError
+from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 from app.core.llm.scenario_context import resolve_llm_scenario_id
 from app.db import models as orm
 from app.models.action import Action
@@ -1033,32 +1037,30 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
                 raw_alert_snapshot=raw_alert_snapshot,
             ),
             json_mode=True,
+            response_model=ResponsePlanLLMResponse,
+            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            max_tokens=2048,
         )
-        payload = response.parsed
-        if payload is not None and hasattr(payload, "model_dump"):
-            data = payload.model_dump(mode="json")
+        if isinstance(response.parsed, ResponsePlanLLMResponse):
+            wire = response.parsed
         else:
             data = json.loads(response.content)
-        if not isinstance(data, dict):
-            raise LLMError("response_plan LLM response is not an object")
-        raw_actions = data.get("actions") or []
-        if not isinstance(raw_actions, list):
-            raise LLMError("response_plan actions must be a list")
+            if not isinstance(data, dict):
+                raise LLMError("response_plan LLM response is not an object")
+            wire = ResponsePlanLLMResponse.model_validate(data)
 
         candidates: list[ActionCandidate] = []
-        for idx, item in enumerate(raw_actions):
-            if not isinstance(item, dict):
-                continue
-            tool_name = str(item.get("tool_name") or "")
+        for idx, item in enumerate(wire.actions):
+            tool_name = item.tool_name.strip()
             if not tool_name or tool_name == VIRTUAL_DISPOSITION_TOOL:
                 continue
             candidates.append(
                 ActionCandidate(
                     tool_name=tool_name,
-                    target_type=item.get("target_type"),
-                    target=item.get("target"),
-                    parameters=dict(item.get("parameters") or {}),
-                    reason=str(item.get("reason") or "llm proposal"),
+                    target_type=item.target_type,
+                    target=item.target,
+                    parameters=dict(item.parameters or {}),
+                    reason=item.reason or "llm proposal",
                     step_order=idx + 1,
                 )
             )

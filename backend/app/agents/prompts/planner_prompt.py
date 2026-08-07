@@ -1,53 +1,116 @@
-"""Prompt templates for PlannerAgent (ISSUE-049)."""
+"""Prompt templates for PlannerAgent (ISSUE-049 / ISSUE-251).
+
+Wire model asks only for steps (+ optional budget). Server owns plan_id,
+event_id, revision, and revise_reason — shrinking required LLM fields and
+avoiding AgentName/enum schema_validation failures on the full ExecutionPlan.
+"""
 
 from __future__ import annotations
 
 import json
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.agents.evidence_agent import EVIDENCE_QUERY_ORDER
-from app.models.agent_io import ExecutionPlan, TriageResult
+from app.models.agent_io import ExecutionPlan, PlanBudget, TriageResult
 
 _CANONICAL_EVIDENCE_TOOLS = ", ".join(EVIDENCE_QUERY_ORDER)
+
+
+class PlanStepLLM(BaseModel):
+    """Tolerant step wire shape for plan_generate / plan_revise."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    step_order: int = 0
+    step_goal: str = ""
+    assigned_agent: str
+    required_tools: list[str] = Field(default_factory=list)
+    success_criteria: str = ""
+
+    @field_validator("assigned_agent", mode="before")
+    @classmethod
+    def _coerce_agent(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("required_tools", mode="before")
+    @classmethod
+    def _coerce_tools(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    @field_validator("step_goal", "success_criteria", mode="before")
+    @classmethod
+    def _coerce_text(cls, value: Any) -> str:
+        return str(value or "")
+
+
+class PlanGenerateLLMResponse(BaseModel):
+    """Slim structured output for planner LLM calls (ISSUE-251)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    steps: list[PlanStepLLM] = Field(default_factory=list)
+    budget: PlanBudget | None = None
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _coerce_steps(cls, value: Any) -> list[Any]:
+        if not isinstance(value, list):
+            return []
+        out: list[PlanStepLLM] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            try:
+                out.append(PlanStepLLM.model_validate(item))
+            except Exception:
+                continue
+        return out
+
+    @field_validator("budget", mode="before")
+    @classmethod
+    def _coerce_budget(cls, value: Any) -> Any:
+        if value is None or isinstance(value, PlanBudget):
+            return value
+        if not isinstance(value, dict):
+            return None
+        try:
+            return PlanBudget.model_validate(value)
+        except Exception:
+            return None
+
 
 # --------------------------------------------------------------------------- #
 # Plan generation prompt
 # --------------------------------------------------------------------------- #
 
 PLAN_GENERATE_SYSTEM = f"""\
-You are a security investigation planner. Given a triage result, produce a structured
-investigation plan as JSON. The plan must include concrete steps, each assigned to a
-specific agent and listing required tools by their canonical names.
+You are a security investigation planner. Return a single JSON object only \
+(no markdown fences, no commentary) with shape:
+{{"steps":[{{"step_order":1,"step_goal":"...","assigned_agent":"evidence_agent",\
+"required_tools":["query_threat_intel"],"success_criteria":"..."}}],\
+"budget":{{"max_tool_calls":30,"max_llm_calls":20,"max_duration_s":300}}}}
 
-Available agents and the tools they can use:
+Do NOT emit plan_id, event_id, revision, revise_reason, or degraded — the \
+server owns those fields.
 
+Available agents and tools:
 - evidence_agent: {_CANONICAL_EVIDENCE_TOOLS}
-
-- risk_agent: (no tools — uses evidence output directly)
-
-- response_agent: (no tools — generates disposition plan)
-
-- rag_agent: (no tools — uses RetrievalPipeline; only if P1 RAG enabled)
-
-- graph_agent: (no tools — uses evidence output directly)
-
-Output a JSON object with these fields:
-- plan_id: "pln-{{8 hex chars}}" (generate a random 8-char hex)
-- event_id: the event_id from the input
-- steps: list of {{ step_order, step_goal, assigned_agent, required_tools, success_criteria }}
-- budget: {{ max_tool_calls: 30, max_llm_calls: 20, max_duration_s: 300 }}
-- revision: 0
-- revise_reason: null
-- degraded: false
+- risk_agent: (no tools)
+- response_agent: (no tools)
+- rag_agent: (no tools; only if ATT&CK mapping is clearly needed)
+- graph_agent: (no tools; only if entity relationship analysis is needed)
 
 Rules:
-1. Always include evidence_agent steps first to collect evidence.
-2. Always include a risk_agent step for scoring.
-3. Always include a response_agent step for disposition planning.
-4. Only include rag_agent or graph_agent steps if the triage event_type strongly suggests
-   ATT&CK mapping (e.g. malicious_process, lateral_movement) or entity relationship analysis.
-5. Every step must have assigned_agent set to one of the valid agent names listed above.
-6. Every tool in required_tools must be from the canonical evidence_agent list above.
-7. Plan must have at least 4 steps.
+1. Include evidence_agent steps first.
+2. Always include a risk_agent step and a response_agent step.
+3. assigned_agent must be one of the agent names above.
+4. evidence_agent required_tools must use canonical names from the list.
+5. Emit at least 4 steps.
+6. budget is optional; omit it to use defaults.
 """
 
 PLAN_GENERATE_USER = """\
@@ -56,7 +119,7 @@ Event ID: {event_id}
 Triage result:
 {triage_json}
 
-Generate the investigation plan as JSON only (no extra text)."""
+Generate the investigation plan steps as JSON only (no extra text)."""
 
 
 def build_plan_generate_messages(
@@ -85,23 +148,21 @@ def build_plan_generate_messages(
 # --------------------------------------------------------------------------- #
 
 PLAN_REVISE_SYSTEM = """\
-You are a security investigation planner. A previous investigation plan failed or produced
-insufficient results. Revise the plan to address the failure reason.
+You are a security investigation planner. A previous plan failed or produced \
+insufficient results. Return a single JSON object only (no markdown fences) \
+with shape:
+{"steps":[{"step_order":1,"step_goal":"...","assigned_agent":"evidence_agent",\
+"required_tools":[],"success_criteria":"..."}],\
+"budget":{"max_tool_calls":30,"max_llm_calls":20,"max_duration_s":300}}
 
-Output a JSON object with these fields:
-- plan_id: same plan_id as the previous plan
-- event_id: the event_id from the input
-- steps: list of { step_order, step_goal, assigned_agent, required_tools, success_criteria }
-- budget: same as previous or adjusted
-- revision: previous.revision + 1
-- revise_reason: the failure reason from the input
-- degraded: false
+Do NOT emit plan_id, event_id, revision, revise_reason, or degraded — the \
+server owns those fields.
 
 Rules:
-1. Keep steps that produced useful results; replace or augment those that failed.
-2. Add more specific tools or broader evidence collection as needed.
-3. The new plan must have steps that are NOT identical to the previous plan.
-4. When assigned_agent is evidence_agent, required_tools must use canonical query tool names.
+1. Keep useful steps; replace or augment failed ones.
+2. Steps must not be identical to the previous plan.
+3. When assigned_agent is evidence_agent, required_tools must use canonical \
+query tool names.
 """
 
 PLAN_REVISE_USER = """\
@@ -112,7 +173,7 @@ Failure reason: {failure_reason}
 Previous plan:
 {previous_plan_json}
 
-Generate the revised plan as JSON only (no extra text)."""
+Generate the revised plan steps as JSON only (no extra text)."""
 
 
 def build_plan_revise_messages(
@@ -143,6 +204,8 @@ __all__ = [
     "PLAN_GENERATE_USER",
     "PLAN_REVISE_SYSTEM",
     "PLAN_REVISE_USER",
+    "PlanGenerateLLMResponse",
+    "PlanStepLLM",
     "build_plan_generate_messages",
     "build_plan_revise_messages",
 ]
