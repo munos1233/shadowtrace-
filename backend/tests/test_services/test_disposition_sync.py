@@ -35,6 +35,7 @@ from app.mock_xdr.api import create_app
 from app.mock_xdr.state import MockXDRState
 from app.models.action import Action
 from app.models.disposition import SourceObjectLocator, TargetWritebackResult
+from app.models.execution import ActionExecutionJob, TargetExecutionResult
 from app.models.enums import (
     ActionCategory,
     ActionExecutionPhase,
@@ -44,12 +45,14 @@ from app.models.enums import (
     DispositionPolicy,
     EventStatus,
     EventType,
+    ExecutionJobStatus,
     ExecutionOwner,
     ExecutionSubstate,
     FinalVerdict,
     OutboxDeliveryStatus,
     Severity,
     SourceObjectKind,
+    TargetExecutionStatus,
     TargetWritebackStatus,
     WritebackReadiness,
     WritebackStatus,
@@ -2207,6 +2210,97 @@ async def test_deliver_rejects_after_approval_revoked(
 
 
 @pytest.mark.asyncio
+async def test_worker_deliver_rejects_after_approval_revoked(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+    cleanup: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-235: production worker lease path must also fail-closed after revoke."""
+    from app.models.enums import OutboxDeliveryStatus
+    from app.services.disposition_sync_service import OutboxWorker
+    from app.services.writeback_side_effect_fence import WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+    (
+        event_id,
+        action_id,
+        source_record_id,
+        locator,
+        concurrency_token,
+    ) = await _seed_event_action_source(session_factory, store, mock_xdr_client)
+    sync = _sync_service(session_factory, store, mock_xdr_client)
+    factory = DispositionCommandFactory()
+    action = Action.model_validate(
+        {
+            "action_id": action_id,
+            "event_id": event_id,
+            "plan_revision": 1,
+            "action_fingerprint": "fp-worker-revoke",
+            "action_category": ActionCategory.RESPONSE,
+            "action_name": "block ip",
+            "tool_name": "block_ip",
+            "action_level": ActionLevel.L2,
+            "execution_owner": ExecutionOwner.XDR_MANAGED,
+            "status": ActionStatus.EXECUTING,
+            "target": "203.0.113.88",
+            "writeback_required": True,
+            "writeback_applicable": True,
+            "writeback_readiness": WritebackReadiness.READY,
+            "disposition_source_ref": locator,
+            "idempotency_key": f"idem-{_sfx()}",
+        }
+    )
+    command = factory.build_entity_action_submit(
+        action,
+        source_locator=locator,
+        source_concurrency_token=concurrency_token,
+        operator_id="ActionExecutionService",
+        disposition_id=new_disposition_id(),
+        writeback_id="pending",
+        closure_cycle=1,
+        entity_action_code="block_ip",
+    )
+    async with session_factory() as session:
+        async with session.begin():
+            record = await sync.enqueue_command(
+                session,
+                command=command,
+                event_id=event_id,
+                source_record_id=source_record_id,
+            )
+
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.Action, action_id, with_for_update=True)
+            assert row is not None
+            row.status = ActionStatus.REJECTED.value
+            row.superseded_by_revision = 2
+
+    submit_calls = 0
+    adapter = sync._adapters.get("mock_xdr")
+    assert adapter is not None
+    original_submit = adapter.submit
+
+    async def _tracked_submit(cmd):  # type: ignore[no-untyped-def]
+        nonlocal submit_calls
+        submit_calls += 1
+        return await original_submit(cmd)
+
+    monkeypatch.setattr(adapter, "submit", _tracked_submit)
+
+    worker = OutboxWorker(sync)
+    assert await worker.run_once(limit=1) == 1
+    assert submit_calls == 0
+
+    async with session_factory() as session:
+        row = await session.get(orm.DispositionOutbox, record.outbox_id)
+        assert row is not None
+        assert row.delivery_status == OutboxDeliveryStatus.DEAD_LETTER.value
+        assert row.last_error_code == WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+
+@pytest.mark.asyncio
 async def test_deliver_execution_result_rejected_after_supersede(
     session_factory: async_sessionmaker[AsyncSession],
     store: EventContextStore,
@@ -2217,7 +2311,7 @@ async def test_deliver_execution_result_rejected_after_supersede(
     """ISSUE-235: an EXECUTION_RESULT_RECORD whose action was superseded after
     enqueue (supersede-only — status may still be SUCCESS) must not be
     delivered; the delivery-time re-check fails closed."""
-    from app.models.enums import ExecutionJobStatus, OutboxDeliveryStatus
+    from app.models.enums import OutboxDeliveryStatus
     from app.services.writeback_side_effect_fence import WRITEBACK_FENCE_BLOCKED_ERROR_CODE
 
     (
@@ -2249,16 +2343,21 @@ async def test_deliver_execution_result_rejected_after_supersede(
             "idempotency_key": f"idem-{_sfx()}",
         }
     )
-    job = orm.ActionExecutionJob(
+    job = ActionExecutionJob(
         job_id=f"job-{_sfx()}",
         event_id=event_id,
         action_id=action_id,
         provider_name="mock_tool_provider",
         idempotency_key=f"idem-job-{_sfx()}",
-        status=ExecutionJobStatus.SUCCESS.value,
-        claimed_by="worker",
-        lease_expires_at=None,
-        attempt=1,
+        status=ExecutionJobStatus.SUCCESS,
+        target_results=[
+            TargetExecutionResult(
+                canonical_target="ip:203.0.113.88",
+                status=TargetExecutionStatus.SUCCESS,
+                code="block_success",
+                message="block success",
+            )
+        ],
     )
     command = factory.build_execution_result_record(
         action,
@@ -2279,11 +2378,12 @@ async def test_deliver_execution_result_rejected_after_supersede(
             )
     assert record.intent_kind.value == "execution_result_record"
 
-    # Supersede-only: the action stays SUCCESS but is superseded by rev 2.
+    # Supersede-only: mirror production timing — action already SUCCESS, then superseded.
     async with session_factory() as session:
         async with session.begin():
             row = await session.get(orm.Action, action_id, with_for_update=True)
             assert row is not None
+            row.status = ActionStatus.SUCCESS.value
             row.superseded_by_revision = 2
 
     submit_calls = 0

@@ -36,6 +36,7 @@ from app.core.telemetry import disposition_span
 from app.db import models as orm
 from app.models.disposition import DispositionCommand, DispositionOutboxRecord, DispositionReceipt
 from app.models.enums import (
+    ActionStatus,
     ConfirmationEvidence,
     DispositionIntentKind,
     ExecutionOwner,
@@ -738,15 +739,13 @@ class DispositionSyncService:
                     DispositionIntentKind.ENTITY_ACTION_SUBMIT,
                     DispositionIntentKind.EXECUTION_RESULT_RECORD,
                 }:
-                    from app.models.enums import ActionStatus as _DeliverActionStatus
-
                     if (
                         action_row.status
                         not in {
-                            _DeliverActionStatus.APPROVED.value,
-                            _DeliverActionStatus.EXECUTING.value,
-                            _DeliverActionStatus.SUCCESS.value,
-                            _DeliverActionStatus.PARTIAL_SUCCESS.value,
+                            ActionStatus.APPROVED.value,
+                            ActionStatus.EXECUTING.value,
+                            ActionStatus.SUCCESS.value,
+                            ActionStatus.PARTIAL_SUCCESS.value,
                         }
                         or action_row.superseded_by_revision is not None
                     ):
@@ -767,11 +766,11 @@ class DispositionSyncService:
                             ),
                         )
                         return
-                # ISSUE-224: the outbox was already validated against the
-                # real approved set at enqueue time; the delivery-time guard
-                # re-validates source_locator, message_code, and analysis
-                # content but does not re-derive approved_action_ids (the
-                # action has already moved past APPROVED into EXECUTING).
+                # ISSUE-224: enqueue validated against resolve_approved_action_ids;
+                # delivery-time guard re-validates source_locator, message_code,
+                # and analysis content but does not re-derive the approved list.
+                # ISSUE-235 adds a separate action-row status/supersede re-check
+                # for entity-class commands above (not EVENT_STATUS_UPDATE).
                 await self._guard.validate(
                     command,
                     {
