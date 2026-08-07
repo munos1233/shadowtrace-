@@ -15,8 +15,14 @@
 #   make up                # start core services
 #   make up WORKER=1       # start with Celery investigation worker
 #   make up-demo           # core + worker + scheduler + observability (ISSUE-141)
-#   make bootstrap         # migrate + seed demo data
+#   make bootstrap         # migrate + seed demo data (+ ensure playbook release)
 #   make down              # stop everything, keep volumes
+#
+# Playbook readiness (ISSUE-245 / #820):
+#   Backend entrypoint seeds + activates data/knowledge/playbooks.json when
+#   SEED_PLAYBOOK_RELEASE=true (Compose default) so health.playbook_resources
+#   is ready before traffic. Demo profile also sets PLAYBOOK_REQUIRED=true
+#   (health 503 if not ready). Investigation stack stays fail-soft.
 # ============================================================================
 
 services:
@@ -121,6 +127,12 @@ services:
       # --- Dev auth (ISSUE-088 bootstrap + ISSUE-077 e2e compatibility) ---
       DEV_AUTH_TOKENS: '{"bootstrap-token":{"subject":"bootstrap","roles":["analyst","admin","approver","disposition_operator"],"tenant_id":"tenant-a"},"e2e-token":{"subject":"e2e-operator","display_name":"E2E Operator","roles":["analyst","approver"],"tenant_id":"tenant-a"}}'
 
+      # --- Playbook release seed + demo health gate (ISSUE-245 / #820) ---
+      # Backend owns seed (entrypoint after alembic). Workers must not set this.
+      SEED_PLAYBOOK_RELEASE: ${SEED_PLAYBOOK_RELEASE:-true}
+      # Demo/ops gate only — does not refuse investigations (fail-soft retained).
+      PLAYBOOK_REQUIRED: ${PLAYBOOK_REQUIRED:-false}
+
       # --- Optional graph mirror (override host default when neo4j profile is on) ---
       NEO4J_URI: bolt://neo4j:7687
 
@@ -143,7 +155,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 45s
+      # Playbook seed adds a few seconds after migrate on cold volumes.
+      start_period: 90s
 
   # --------------------------------------------------------------------------
   # Frontend — React SPA served by nginx with /api + /socket.io proxy
@@ -203,6 +216,8 @@ services:
       DISPOSITION_BASE_URL: http://mock-xdr:8100
       TASK_MODE: celery
       CELERY_BROKER_URL: redis://redis:6379/0
+      # Backend owns migrate + playbook seed (ISSUE-245).
+      SEED_PLAYBOOK_RELEASE: "false"
       # Optional OTel (ISSUE-092): point at host collector when observability stack runs locally
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
@@ -267,6 +282,8 @@ services:
       BEHAVIOR_OBSERVATION_RETRY_ENABLED: "true"
       BEHAVIOR_OBSERVATION_RETRY_INTERVAL_S: ${BEHAVIOR_OBSERVATION_RETRY_INTERVAL_S:-120}
       CELERY_BROKER_URL: redis://redis:6379/0
+      # Backend owns migrate + playbook seed (ISSUE-245).
+      SEED_PLAYBOOK_RELEASE: "false"
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
       OTEL_SERVICE_NAME: shadowtrace-scheduler-beat
@@ -313,6 +330,8 @@ services:
       INGESTION_SCHEDULER_ENABLED: "true"
       INGESTION_POLL_INTERVAL_S: ${INGESTION_POLL_INTERVAL_S:-60}
       CELERY_BROKER_URL: redis://redis:6379/0
+      # Backend owns migrate + playbook seed (ISSUE-245).
+      SEED_PLAYBOOK_RELEASE: "false"
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
       OTEL_SERVICE_NAME: shadowtrace-scheduler-worker

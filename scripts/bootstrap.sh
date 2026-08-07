@@ -3,8 +3,8 @@
 # ShadowTrace bootstrap — one-command demo setup (ISSUE-088)
 #
 # Usage:
-#   make bootstrap               # migrate + seed 3 demo scenarios
-#   LOAD_KB=true make bootstrap  # also load knowledge bases (P1, slower)
+#   make bootstrap               # migrate + seed 3 demo scenarios + playbook release
+#   LOAD_KB=true make bootstrap  # also load attack/case knowledge bases (P1, slower)
 #
 # Prerequisites:
 #   - Docker Compose core services must be healthy (make up).
@@ -13,11 +13,13 @@
 # What this does:
 #   1. Wait for backend + mock-xdr health endpoints.
 #   2. Run alembic upgrade head inside the backend container (idempotent).
-#   3. For each demo scenario: seed standalone mock-xdr, then poll-ingest via
+#   3. Ensure playbook release is staged+activated (ISSUE-245; idempotent).
+#   4. For each demo scenario: seed standalone mock-xdr, then poll-ingest via
 #      SourceAdapter (keeps PostgreSQL + mock-xdr writeback objects aligned).
-#   4. Trigger investigation on ingested events via API (with retry).
-#   5. Optionally load attack/case/playbook knowledge bases.
-#   6. Print access URLs.
+#   5. Trigger investigation on ingested events via API (with retry).
+#   6. Optionally load attack/case knowledge bases.
+#   7. Verify health.playbook_resources.status=ready (demo gate).
+#   8. Print access URLs.
 # ============================================================================
 
 set -euo pipefail
@@ -108,6 +110,19 @@ done
 echo "[bootstrap] running alembic upgrade head ..."
 ${COMPOSE_CMD} exec -T backend python3 -m alembic upgrade head
 echo "[bootstrap] migrations complete"
+
+# --------------------------------------------------------------------------
+# 2a. Ensure playbook release is active (ISSUE-245 / #820)
+#     Compose backend entrypoint also seeds when SEED_PLAYBOOK_RELEASE=true;
+#     bootstrap re-runs for older images / FORCE paths (idempotent).
+# --------------------------------------------------------------------------
+echo "[bootstrap] ensuring playbook release is active ..."
+if ! ${COMPOSE_CMD} exec -T backend bash -c "cd /app/backend && python3 -m scripts.load_playbook_release"; then
+  echo -e "${RED}[bootstrap] ERROR: playbook release seed failed${NC}" >&2
+  echo -e "${RED}[bootstrap] Response/Playbook binding will silently degrade without an active release${NC}" >&2
+  exit 1
+fi
+echo "[bootstrap] playbook release ready"
 
 # --------------------------------------------------------------------------
 # 2b. Skip re-seed when demo events already exist (idempotent bootstrap)
@@ -217,13 +232,14 @@ print(f"Investigation triggered on {triggered} event(s)")
 PYTHON_SCRIPT
 
 # --------------------------------------------------------------------------
-# 5. Optional: load knowledge bases (P1 — slower, ~30–60 s extra)
+# 5. Optional: load attack/case knowledge bases (P1 — slower, ~30–60 s extra)
+#     Playbook release is always loaded in step 2a (not optional).
 # --------------------------------------------------------------------------
 if [ "${LOAD_KB:-false}" = "true" ]; then
-  echo "[bootstrap] LOAD_KB=true — loading knowledge bases ..."
+  echo "[bootstrap] LOAD_KB=true — loading attack/case knowledge bases ..."
   kb_failed=0
-  for loader in load_attack_kb load_case_kb load_playbook_kb; do
-    if ! ${COMPOSE_CMD} exec -T backend bash -c "cd backend && python3 -m scripts.${loader}"; then
+  for loader in load_attack_kb load_case_kb; do
+    if ! ${COMPOSE_CMD} exec -T backend bash -c "cd /app/backend && python3 -m scripts.${loader}"; then
       echo -e "${RED}[bootstrap] ERROR: ${loader} failed${NC}" >&2
       kb_failed=1
     fi
@@ -233,11 +249,39 @@ if [ "${LOAD_KB:-false}" = "true" ]; then
   fi
   echo "[bootstrap] knowledge bases loaded"
 else
-  echo "[bootstrap] knowledge bases skipped (set LOAD_KB=true to load)"
+  echo "[bootstrap] attack/case knowledge bases skipped (set LOAD_KB=true to load)"
 fi
 
 # --------------------------------------------------------------------------
-# 6. Print access URLs
+# 6. Demo gate: playbook_resources must be ready (ISSUE-245)
+# --------------------------------------------------------------------------
+echo "[bootstrap] verifying health.playbook_resources.status=ready ..."
+# Use curl without -f so PLAYBOOK_REQUIRED=503 still yields a JSON body for diagnostics.
+if ! curl -s "${BACKEND_HEALTH}" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f'health endpoint returned non-JSON: {exc}: {raw[:200]!r}') from exc
+pb = data.get('playbook_resources') or {}
+status = pb.get('status')
+release_id = pb.get('active_release_id') or ''
+print(f\"  playbook_resources.status={status} active_release_id={release_id or '(none)'}\")
+if status != 'ready':
+    raise SystemExit(
+        'playbook_resources not ready — demo Response/Playbook binding is degraded. '
+        'Re-run bootstrap or check SEED_PLAYBOOK_RELEASE on backend.'
+    )
+if not release_id:
+    raise SystemExit('playbook_resources ready but active_release_id is empty')
+"; then
+  echo -e "${RED}[bootstrap] ERROR: playbook readiness gate failed${NC}" >&2
+  exit 1
+fi
+
+# --------------------------------------------------------------------------
+# 7. Print access URLs
 # --------------------------------------------------------------------------
 echo ""
 echo -e "${GREEN}============================================${NC}"
@@ -249,6 +293,7 @@ echo -e "  API 文档:  ${YELLOW}http://127.0.0.1:${BACKEND_PORT}/docs${NC}"
 echo -e "  健康检查:  ${YELLOW}${BACKEND_HEALTH}${NC}"
 echo -e "  Mock XDR:  ${YELLOW}${MOCK_XDR_HEALTH}${NC}"
 echo ""
+echo -e "  演示门禁:  curl -s ${BACKEND_HEALTH} | jq .playbook_resources"
 echo -e "  冒烟验证:  bash scripts/smoke_bootstrap.sh"
 echo -e "  查看日志:  ${COMPOSE_CMD} logs -f backend"
 echo -e "  make down  停止并移除容器（数据卷保留）"

@@ -185,8 +185,10 @@ async def health(
     llm_ok = llm_provider.get("status") == "ok"
     loaded_ok = loaded_resources.get("status") == "ready"
     playbook_ok = playbook_resources.get("status") == "ready"
+    # Production / PLAYBOOK_RELEASE_REQUIRE_ACTIVE / demo PLAYBOOK_REQUIRED gate
+    # health only — investigation stack remains fail-soft (ISSUE-245 / #820).
     playbook_required = settings.app_env.strip().lower() == "production" or (
-        settings.playbook_release_require_active
+        settings.playbook_release_require_active or settings.playbook_required
     )
     llm_required = bool(settings.llm_required)
     celery_task_mode = str(celery_health.get("task_mode", "background"))

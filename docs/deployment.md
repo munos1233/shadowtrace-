@@ -20,10 +20,10 @@
 # 1. 启动核心服务（postgres, redis, mock-xdr, backend, frontend）
 make up
 
-# 2. 数据库迁移 + 摄入演示数据 + 自动触发研判
+# 2. 数据库迁移 + playbook release 激活 + 摄入演示数据 + 自动触发研判
 make bootstrap
 
-# 3. （可选）冒烟验证
+# 3. （可选）冒烟验证（含 playbook_resources 门禁）
 make smoke-bootstrap
 
 # 4. 打开浏览器访问前端看板
@@ -31,6 +31,35 @@ make smoke-bootstrap
 ```
 
 启动后在前端 **事件看板** 可见 3 个演示事件；`make bootstrap` 会自动对 `new` 状态事件 POST `/investigate`，也可在前端手动再次触发。
+
+### 演示门禁：Playbook 必须 ready（ISSUE-245）
+
+演示 / 评测前必须确认 playbook release 已激活，否则 Response/Playbook 绑定会在调查栈里 **fail-soft 降级**（仅 warning），易被误判为「完整 playbook 能力」：
+
+```bash
+curl -s localhost:8000/api/v1/health | jq .playbook_resources
+# 期望：
+# {
+#   "status": "ready",
+#   "active_release_id": "krel-...",
+#   ...
+# }
+```
+
+| 检查项 | 期望 |
+|--------|------|
+| `playbook_resources.status` | `ready` |
+| `playbook_resources.active_release_id` | 非空 |
+| Compose backend | `SEED_PLAYBOOK_RELEASE=true`（默认；entrypoint 在 healthy 前 seed） |
+| `make up-demo` | 另设 `PLAYBOOK_REQUIRED=true` → 非 ready 时 `/health` 返回 **503** |
+| 调查路径 | **不**因缺 playbook 拒绝调查（生产可无 playbook；fail-soft 保留） |
+
+非 ready 时：`make bootstrap` / `make smoke-bootstrap` / `make smoke-demo` 会失败；可手动补种：
+
+```bash
+docker compose -f infra/docker-compose.yml exec backend \
+  bash -c 'cd /app/backend && python -m scripts.load_playbook_release'
+```
 
 ### Mock 全栈 Demo（ISSUE-141）
 
@@ -65,9 +94,9 @@ make smoke-demo        # exit 0 并打印 URL/端口表
 | `make up` | 启动核心服务（--build 构建镜像） |
 | `make up WORKER=1` | 启动核心服务 + Celery investigation worker（需同时设 `TASK_MODE=celery`） |
 | `make up SCHEDULER=1` | 启动核心服务 + Mock XDR 摄取调度器（Beat + ingestion worker，见下文） |
-| `make bootstrap` | 迁移 + mock-xdr 种子 + SourceAdapter 摄取 + 自动触发研判 |
-| `make bootstrap LOAD_KB=true` | 同上 + 加载知识库（约 30-60 秒） |
-| `make smoke-bootstrap` | bootstrap 后冒烟：health + ≥3 事件 + 前端反代 |
+| `make bootstrap` | 迁移 + **playbook release 激活** + mock-xdr 种子 + 摄取 + 自动触发研判 |
+| `make bootstrap LOAD_KB=true` | 同上 + 加载 attack/case 知识库（约 30-60 秒） |
+| `make smoke-bootstrap` | bootstrap 后冒烟：health + **playbook_resources=ready** + ≥3 事件 + 前端反代 |
 | `make up-demo` | **Mock 全栈 demo**（core + worker + scheduler + observability，ISSUE-141） |
 | `make bootstrap-demo` | 同 `make bootstrap`（demo guard + 迁移/种子） |
 | `make smoke-demo` | demo 全栈冒烟：bootstrap + worker + scheduler + OTEL/Prometheus/Grafana |

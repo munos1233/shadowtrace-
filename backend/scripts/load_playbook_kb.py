@@ -4,6 +4,12 @@ Usage::
 
     cd backend && python -m scripts.load_playbook_kb
 
+.. warning::
+
+   This legacy path upserts unpinned chunks and does **not** create an active
+   PlaybookRelease. Demo/Compose readiness requires
+   ``python -m scripts.load_playbook_release`` (ISSUE-245 / #820).
+
 The script validates every step's tool_name and action_level against the
 baseline ToolMeta catalog.  Invalid steps cause the script to exit with a
 hard error before any data is written.  Repeated runs are idempotent.

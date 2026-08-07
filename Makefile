@@ -25,8 +25,10 @@ COMPOSE := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	-f "$(COMPOSE_FILE)"
 
 # Demo profile (ISSUE-141): core + worker + scheduler + observability; in-network OTEL.
+# ISSUE-245: demo gate PLAYBOOK_REQUIRED=true → health 503 unless playbook release ready.
 DEMO_OTEL_ENABLED ?= true
 DEMO_OTEL_ENDPOINT ?= http://otel-collector:4318
+DEMO_PLAYBOOK_REQUIRED ?= true
 COMPOSE_DEMO := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
 	BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
@@ -36,6 +38,8 @@ COMPOSE_DEMO := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	GRAFANA_PORT="$(GRAFANA_PORT)" \
 	OTEL_ENABLED="$(DEMO_OTEL_ENABLED)" \
 	OTEL_EXPORTER_OTLP_ENDPOINT="$(DEMO_OTEL_ENDPOINT)" \
+	PLAYBOOK_REQUIRED="$(DEMO_PLAYBOOK_REQUIRED)" \
+	SEED_PLAYBOOK_RELEASE=true \
 	TASK_MODE=celery \
 	docker compose --project-name "$(COMPOSE_PROJECT_NAME)" \
 	-f "$(COMPOSE_FILE)" -f "$(OBS_COMPOSE_FILE)" \
@@ -81,7 +85,8 @@ down-v:
 # One-command bootstrap: migrate + seed demo scenarios (ISSUE-088)
 #
 # Requires core services already healthy (make up first).
-# Set LOAD_KB=true to also load knowledge bases (~30-60 s extra).
+# Always ensures playbook release is active (ISSUE-245).
+# Set LOAD_KB=true to also load attack/case knowledge bases (~30-60 s extra).
 # ---------------------------------------------------------------------------
 bootstrap:
 	@LOAD_KB="$(LOAD_KB)" bash "$(CURDIR)/scripts/bootstrap.sh"
@@ -142,11 +147,11 @@ migrate:
 migrate-down:
 	cd backend && $(PYTHON) -m alembic downgrade base
 
-# --- ISSUE-042 / ISSUE-043 / ISSUE-044 knowledge base loaders -------------- #
+# --- ISSUE-042 / ISSUE-043 / ISSUE-044 / ISSUE-245 knowledge base loaders --- #
 load-kb:
 	cd backend && $(PYTHON) -m scripts.load_attack_kb
 	cd backend && $(PYTHON) -m scripts.load_case_kb
-	cd backend && $(PYTHON) -m scripts.load_playbook_kb
+	cd backend && $(PYTHON) -m scripts.load_playbook_release
 
 test:
 	cd backend && $(PYTHON) -m pytest tests/test_infra/test_health.py -v

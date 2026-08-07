@@ -29,6 +29,25 @@ assert data.get('source_adapter', {}).get('mode') == 'mock_xdr', data
 print('  ok: simulation_enabled=true source_mode=mock_xdr')
 "
 
+# ISSUE-245 / #820 — demo gate: playbook release must be active (not silent degrade).
+echo "[smoke] playbook_resources ready ..."
+curl -s "${BACKEND_HEALTH}" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+pb = data.get('playbook_resources') or {}
+status = pb.get('status')
+release_id = pb.get('active_release_id') or ''
+print(f'  playbook_resources={json.dumps(pb, ensure_ascii=False)}')
+if status != 'ready':
+    raise SystemExit(
+        f'playbook_resources.status={status!r} (expected ready). '
+        'Run make bootstrap / ensure SEED_PLAYBOOK_RELEASE=true on backend.'
+    )
+if not release_id:
+    raise SystemExit('playbook_resources.active_release_id is empty')
+print(f'  ok: status=ready active_release_id={release_id}')
+"
+
 echo "[smoke] mock-xdr health ..."
 curl -sf "${MOCK_XDR_HEALTH}" >/dev/null
 echo "  ok"

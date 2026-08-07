@@ -139,6 +139,15 @@ class Settings(BaseSettings):
         alias="PLAYBOOK_RELEASE_REQUIRE_ACTIVE",
         description="When true, playbook_kb retrieval requires an active playbook release",
     )
+    playbook_required: bool = Field(
+        default=False,
+        alias="PLAYBOOK_REQUIRED",
+        description=(
+            "Demo/ops health gate: when true, /health returns 503 if "
+            "playbook_resources.status != ready. Does not refuse investigations "
+            "(investigation stack stays fail-soft)."
+        ),
+    )
     knowledge_release_require_active: bool = Field(
         default=False,
         alias="KNOWLEDGE_RELEASE_REQUIRE_ACTIVE",
