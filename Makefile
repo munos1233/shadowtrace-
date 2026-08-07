@@ -59,6 +59,8 @@ CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
 .PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
+# Compose migration owner is `backend` (entrypoint alembic). worker/scheduler
+# profiles set SKIP_DB_MIGRATE=true and wait on backend healthy (ISSUE-238).
 up:
 	$(COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
 
@@ -92,6 +94,7 @@ smoke-bootstrap:
 # ---------------------------------------------------------------------------
 # Mock demo full stack (ISSUE-141 / #647): core + worker + scheduler + OTEL
 # Default ``make up`` / ``make bootstrap`` unchanged.
+# Alembic still runs only in `backend`; demo workers skip migrate (ISSUE-238).
 # ---------------------------------------------------------------------------
 up-demo:
 	@bash "$(CURDIR)/scripts/demo_mock_guard.sh"

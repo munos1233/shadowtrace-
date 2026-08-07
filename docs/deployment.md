@@ -32,6 +32,8 @@ make smoke-bootstrap
 
 启动后在前端 **事件看板** 可见 3 个演示事件；`make bootstrap` 会自动对 `new` 状态事件 POST `/investigate`，也可在前端手动再次触发。
 
+**数据库迁移责任方（ISSUE-238）：** Compose 启动时只有 `backend` 容器通过 `docker-entrypoint.sh` 执行 `alembic upgrade head`。`mock-xdr` / `worker` / `scheduler-beat` / `scheduler-worker` 均设置 `SKIP_DB_MIGRATE=true`，并 `depends_on: backend (healthy)`，避免并行 profile（`make up WORKER=1` / `make up-demo`）竞态创建 `alembic_version`。主机侧仍可用 `make migrate` / `make bootstrap` 显式迁移。
+
 ### Mock 全栈 Demo（ISSUE-141）
 
 一键启动 **core + investigation worker + ingestion scheduler + observability**（Mock-only，容器内 OTEL 走 `http://otel-collector:4318`）：
