@@ -728,13 +728,12 @@ class DispositionSyncService:
                     )
                     return
                 command = DispositionCommand.model_validate(outbox.command_payload)
-                # ISSUE-235 (SUS-301): TOCTOU 纵深防御 — deliver relies on the
-                # enqueue-time approved_action_ids snapshot and does not
-                # re-derive it; an approval revoked between enqueue and
-                # delivery would still go out.  Re-check entity-class commands
-                # right before delivery: the action must still be in the
-                # effective approved set (APPROVED/EXECUTING/SUCCESS, not
-                # superseded).  Fail-closed → DEAD_LETTER, never delivered.
+                # ISSUE-235 (SUS-301): TOCTOU defense-in-depth — deliver does
+                # not re-derive approved_action_ids (enqueue snapshot only), so
+                # revoke/supersede between enqueue and delivery would otherwise
+                # still go out.  Re-check entity-class commands right before
+                # delivery: action must still be APPROVED/EXECUTING/SUCCESS/
+                # PARTIAL_SUCCESS and not superseded.  Fail-closed → DEAD_LETTER.
                 if command.intent_kind in {
                     DispositionIntentKind.ENTITY_ACTION_SUBMIT,
                     DispositionIntentKind.EXECUTION_RESULT_RECORD,
