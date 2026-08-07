@@ -15,6 +15,7 @@ from app.models.enums import (
     EventStatus,
     ExecutionSubstate,
     NextRecommendedAction,
+    ReportQuality,
     ResponsePhaseState,
 )
 from app.services.agent_trace_service import AgentTraceService
@@ -31,6 +32,13 @@ _ANALYSIS_STATUSES = frozenset(
 )
 
 _AUTO_RESPONSE_FULL_LOOP_AUDIT = "auto_response:policy_match"
+_ANALYSIS_ONLY_DEFERRED_SUFFIX = (
+    "本事件已完成仅分析，无法从 REPORTING 补发处置方案。"
+    "对新事件请在发起调查前选择「分析并生成处置方案」。"
+)
+_ANALYSIS_ONLY_MODE_HINT = (
+    "（当前部署 ORCHESTRATION_MODE=analysis_only，完整处置链路不可用。）"
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +85,46 @@ def _report_generated_from_snapshot(snapshot: dict[str, Any] | None) -> bool:
     return bool(snapshot.get("report_generated"))
 
 
+def _report_quality_from_snapshot(snapshot: dict[str, Any] | None) -> ReportQuality | None:
+    """Best-effort quality for REPORTING UX copy (ISSUE-250)."""
+    if not isinstance(snapshot, dict):
+        return None
+    raw: Any = None
+    report = snapshot.get("report")
+    if isinstance(report, dict):
+        raw = report.get("report_quality")
+    elif report is not None and hasattr(report, "report_quality"):
+        raw = getattr(report, "report_quality", None)
+    if raw is None:
+        raw = snapshot.get("report_quality")
+    if raw is None:
+        return None
+    if isinstance(raw, ReportQuality):
+        return raw
+    try:
+        return ReportQuality(str(raw).lower())
+    except ValueError:
+        return None
+
+
+def _reporting_ready_phase_message(
+    *,
+    analysis_only_complete: bool,
+    loop_available: bool,
+    report_quality: ReportQuality | None,
+) -> str:
+    """Operator copy when a readable report already exists (GET /report 200)."""
+    if report_quality is ReportQuality.DEGRADED_TEMPLATE:
+        message = "分析完成（模板报告）"
+    else:
+        message = "可查看报告"
+    if analysis_only_complete:
+        message = f"{message}。{_ANALYSIS_ONLY_DEFERRED_SUFFIX}"
+        if not loop_available:
+            message += _ANALYSIS_ONLY_MODE_HINT
+    return message
+
+
 def derive_investigation_guidance(
     *,
     status: EventStatus,
@@ -87,6 +135,7 @@ def derive_investigation_guidance(
     """Derive operator-facing phase hints from authoritative event + context."""
     analysis_only_complete = _analysis_only_complete_from_snapshot(context_snapshot)
     report_generated = _report_generated_from_snapshot(context_snapshot)
+    report_quality = _report_quality_from_snapshot(context_snapshot)
     execution_substate = _execution_substate_from_snapshot(context_snapshot)
     loop_available = full_loop_available(orchestration_mode)
 
@@ -111,13 +160,9 @@ def derive_investigation_guidance(
     if status is EventStatus.REPORTING and not report_generated:
         # ISSUE-204: no report bytes yet — guide POST /report, never suggest CLOSE.
         if analysis_only_complete:
-            message = (
-                "分析完成·报告未生成。"
-                "本事件已完成仅分析，无法从 REPORTING 补发处置方案。"
-                "对新事件请在发起调查前选择「分析并生成处置方案」。"
-            )
+            message = f"分析完成·报告未生成。{_ANALYSIS_ONLY_DEFERRED_SUFFIX}"
             if not loop_available:
-                message += "（当前部署 ORCHESTRATION_MODE=analysis_only，完整处置链路不可用。）"
+                message += _ANALYSIS_ONLY_MODE_HINT
         else:
             message = "分析完成·报告未生成"
         return InvestigationGuidance(
@@ -129,23 +174,32 @@ def derive_investigation_guidance(
             phase_message=message,
         )
 
-    if status is EventStatus.REPORTING and analysis_only_complete:
-        next_action = (
-            NextRecommendedAction.CLOSE
-            if disposition_policy is DispositionPolicy.NOT_REQUIRED
-            else NextRecommendedAction.NONE
+    if status is EventStatus.REPORTING:
+        # ISSUE-250: readable report present — never claim「报告未生成」.
+        message = _reporting_ready_phase_message(
+            analysis_only_complete=analysis_only_complete,
+            loop_available=loop_available,
+            report_quality=report_quality,
         )
-        message = (
-            "本事件已完成仅分析，无法从 REPORTING 补发处置方案。"
-            "对新事件请在发起调查前选择「分析并生成处置方案」。"
-        )
-        if not loop_available:
-            message += "（当前部署 ORCHESTRATION_MODE=analysis_only，完整处置链路不可用。）"
+        if analysis_only_complete:
+            next_action = (
+                NextRecommendedAction.CLOSE
+                if disposition_policy is DispositionPolicy.NOT_REQUIRED
+                else NextRecommendedAction.NONE
+            )
+            return InvestigationGuidance(
+                analysis_only_complete=True,
+                execution_substate=execution_substate,
+                response_phase_state=ResponsePhaseState.ANALYSIS_COMPLETE_DEFERRED,
+                next_recommended_action=next_action,
+                full_loop_available=loop_available,
+                phase_message=message,
+            )
         return InvestigationGuidance(
-            analysis_only_complete=True,
+            analysis_only_complete=analysis_only_complete,
             execution_substate=execution_substate,
-            response_phase_state=ResponsePhaseState.ANALYSIS_COMPLETE_DEFERRED,
-            next_recommended_action=next_action,
+            response_phase_state=ResponsePhaseState.NOT_STARTED,
+            next_recommended_action=NextRecommendedAction.NONE,
             full_loop_available=loop_available,
             phase_message=message,
         )

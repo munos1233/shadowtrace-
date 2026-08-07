@@ -673,11 +673,19 @@ class EventService:
     # ------------------------------------------------------------------ #
 
     async def get_event(self, event_id: str) -> SecurityEvent | None:
+        persisted_report_quality: str | None = None
         async with self._session_factory() as session:
             row = await session.get(orm.SecurityEvent, event_id)
             if row is None:
                 return None
             event = _security_event_from_row(row)
+            # ISSUE-250: DB report row is authoritative for GET /report readability.
+            persisted_report_quality = await session.scalar(
+                select(orm.Report.report_quality)
+                .where(orm.Report.event_id == event_id)
+                .order_by(orm.Report.updated_at.desc())
+                .limit(1)
+            )
 
         if not event.event_context_snapshot:
             try:
@@ -694,20 +702,47 @@ class EventService:
                     event_id,
                     exc_info=True,
                 )
-        else:
-            try:
-                aoc = await self._store.get(event_id, "analysis_only_complete")
-                if aoc is not None:
-                    snapshot = dict(event.event_context_snapshot)
-                    if snapshot.get("analysis_only_complete") != bool(aoc):
-                        snapshot["analysis_only_complete"] = bool(aoc)
-                        event = event.model_copy(update={"event_context_snapshot": snapshot})
-            except Exception:
-                logger.debug(
-                    "overlay analysis_only_complete failed event_id=%s",
-                    event_id,
-                    exc_info=True,
-                )
+
+        snapshot = dict(event.event_context_snapshot or {})
+        changed = False
+
+        try:
+            aoc = await self._store.get(event_id, "analysis_only_complete")
+            if aoc is not None and snapshot.get("analysis_only_complete") != bool(aoc):
+                snapshot["analysis_only_complete"] = bool(aoc)
+                changed = True
+        except Exception:
+            logger.debug(
+                "overlay analysis_only_complete failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+
+        try:
+            report_generated = await self._store.get(event_id, "report_generated")
+            if report_generated is not None and snapshot.get("report_generated") != bool(
+                report_generated
+            ):
+                snapshot["report_generated"] = bool(report_generated)
+                changed = True
+        except Exception:
+            logger.debug(
+                "overlay report_generated failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+
+        if persisted_report_quality is not None:
+            # Readable report exists even when Redis/snapshot flags lag behind.
+            if snapshot.get("report_generated") is not True:
+                snapshot["report_generated"] = True
+                changed = True
+            if snapshot.get("report_quality") != persisted_report_quality:
+                snapshot["report_quality"] = persisted_report_quality
+                changed = True
+
+        if changed:
+            event = event.model_copy(update={"event_context_snapshot": snapshot})
         return event
 
     async def get_evidence_query_scope(self, event_id: str) -> EvidenceQueryScope:

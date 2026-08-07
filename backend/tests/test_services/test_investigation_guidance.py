@@ -77,6 +77,61 @@ def test_reporting_analysis_only_deferred_no_start_response_cta() -> None:
     assert guidance.phase_message is not None
     assert "无法从 REPORTING" in guidance.phase_message
     assert "新事件" in guidance.phase_message
+    assert "报告未生成" in guidance.phase_message
+
+
+def test_reporting_with_report_generated_shows_viewable_not_missing() -> None:
+    """ISSUE-250: report_generated=true must never claim 报告未生成."""
+    guidance = derive_investigation_guidance(
+        status=EventStatus.REPORTING,
+        disposition_policy=DispositionPolicy.NOT_REQUIRED,
+        context_snapshot={
+            "analysis_only_complete": True,
+            "report_generated": True,
+            "report_quality": "complete",
+        },
+        orchestration_mode="graph",
+    )
+    assert guidance.phase_message is not None
+    assert "可查看报告" in guidance.phase_message
+    assert "报告未生成" not in guidance.phase_message
+    assert guidance.next_recommended_action is NextRecommendedAction.CLOSE
+
+
+def test_reporting_with_template_report_uses_template_copy() -> None:
+    """ISSUE-250: degraded_template reports use 分析完成（模板报告）."""
+    guidance = derive_investigation_guidance(
+        status=EventStatus.REPORTING,
+        disposition_policy=DispositionPolicy.REQUIRED,
+        context_snapshot={
+            "analysis_only_complete": True,
+            "report_generated": True,
+            "report_quality": "degraded_template",
+        },
+        orchestration_mode="graph",
+    )
+    assert guidance.phase_message is not None
+    assert "分析完成（模板报告）" in guidance.phase_message
+    assert "报告未生成" not in guidance.phase_message
+    assert "无法从 REPORTING" in guidance.phase_message
+
+
+def test_reporting_with_report_object_shows_viewable() -> None:
+    """ISSUE-250: snapshot.report presence alone is enough to suppress 未生成."""
+    guidance = derive_investigation_guidance(
+        status=EventStatus.REPORTING,
+        disposition_policy=DispositionPolicy.REQUIRED,
+        context_snapshot={
+            "report_generated": False,
+            "report": {
+                "report_id": "rpt-seed",
+                "report_quality": "complete",
+            },
+        },
+        orchestration_mode="graph",
+    )
+    assert guidance.phase_message == "可查看报告"
+    assert "报告未生成" not in guidance.phase_message
 
 
 def test_reporting_not_required_suggests_close() -> None:
@@ -90,6 +145,9 @@ def test_reporting_not_required_suggests_close() -> None:
         orchestration_mode="graph",
     )
     assert guidance.next_recommended_action is NextRecommendedAction.CLOSE
+    assert guidance.phase_message is not None
+    assert "可查看报告" in guidance.phase_message
+    assert "报告未生成" not in guidance.phase_message
 
 
 def test_waiting_approval_suggests_approve() -> None:
