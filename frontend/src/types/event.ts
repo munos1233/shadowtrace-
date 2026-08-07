@@ -331,6 +331,9 @@ export interface EvidenceQuerySummaryItem {
   execution_time_ms: number;
   records_count: number;
   gap_reason?: string | null;
+  /** ISSUE-249: tool_ok | tool_ok_empty | tool_failed | source_skipped */
+  tool_outcome?: string | null;
+  provider_status?: string | null;
 }
 
 export interface EvidenceTriageContext {

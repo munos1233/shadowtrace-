@@ -21,11 +21,18 @@ const COLLECTION_STATUS_LABEL: Record<CollectionStatus, string> = {
 const GAP_REASON_LABEL: Record<string, string> = {
   invalid_entity: "实体校验失败",
   source_skipped: "缺少所需实体，已跳过",
-  no_records: "查询成功但无可用记录",
+  no_records: "工具成功但无可用记录",
   triage_degraded: "分诊降级且无 Source 实体",
   tool_failed: "工具调用失败",
   missing_scope: "缺少证据查询范围",
   global_timeout: "全局采集超时",
+};
+
+const TOOL_OUTCOME_LABEL: Record<string, string> = {
+  tool_ok: "工具成功且有记录",
+  tool_ok_empty: "工具成功但无可用记录",
+  tool_failed: "工具调用失败",
+  source_skipped: "缺少所需实体，已跳过",
 };
 
 function conflictReason(evidenceId: string, conflicts: EvidenceConflict[]): string | null {
@@ -37,6 +44,18 @@ function conflictReason(evidenceId: string, conflicts: EvidenceConflict[]): stri
 
 function gapReasonLabel(reason: string): string {
   return GAP_REASON_LABEL[reason] ?? reason;
+}
+
+function toolOutcomeLabel(outcome: string): string {
+  return TOOL_OUTCOME_LABEL[outcome] ?? outcome;
+}
+
+function isEmptyToolOutcome(item: EvidenceQuerySummaryItem): boolean {
+  return (
+    item.tool_outcome === "tool_ok_empty" ||
+    item.status === "tool_ok_empty" ||
+    item.gap_reason === "no_records"
+  );
 }
 
 function buildEmptyExplanation(
@@ -62,6 +81,28 @@ function buildEmptyExplanation(
   const reasons = [...new Set(gaps.map((gap) => gapReasonLabel(gap.reason)))];
   const chain = [...triageHints, ...reasons].filter(Boolean);
   return `证据为空：${chain.join("；")}。请查看下方分诊上下文、缺口明细与采集摘要。`;
+}
+
+function collectionStatusDescription(
+  collectionStatus: CollectionStatus,
+  emptyResultSources: string[],
+  querySummary: EvidenceQuerySummaryItem[],
+): string | null {
+  if (collectionStatus !== "failed") {
+    return null;
+  }
+  const emptyTools = querySummary.filter(isEmptyToolOutcome).map((item) => item.tool_name);
+  if (emptyResultSources.length > 0 || emptyTools.length > 0) {
+    const parts = [
+      "采集层判定为失败（0 路有效源，ISSUE-101 阈值未改）",
+      "工具层存在成功但无可用记录（tool_ok_empty），并非工具调用故障",
+    ];
+    if (emptyTools.length > 0) {
+      parts.push(`空结果工具：${emptyTools.join(", ")}`);
+    }
+    return parts.join("。") + "。";
+  }
+  return "采集层判定为失败（0 路有效源）。请结合缺口原因区分工具失败与实体跳过。";
 }
 
 function formatRejectionSummary(summary: Record<string, unknown>): string | null {
@@ -108,6 +149,9 @@ export default function EvidenceList({
     ? formatRejectionSummary(triageContext.entity_rejection_summary)
     : null;
   const emptyExplanation = buildEmptyExplanation(gaps, collectionStatus, triageContext);
+  const failedCollectionHint = collectionStatus
+    ? collectionStatusDescription(collectionStatus, emptyResultSources, querySummary)
+    : null;
 
   const gapColumns: ColumnsType<EvidenceGap> = [
     { title: "缺失源", dataIndex: "missing_source", width: 140 },
@@ -116,7 +160,9 @@ export default function EvidenceList({
       dataIndex: "reason",
       width: 180,
       render: (value: string) => (
-        <Tag color={value === "no_records" ? "orange" : "default"}>{gapReasonLabel(value)}</Tag>
+        <Tag color={value === "no_records" ? "orange" : value === "tool_failed" ? "red" : "default"}>
+          {gapReasonLabel(value)}
+        </Tag>
       ),
     },
     {
@@ -138,7 +184,27 @@ export default function EvidenceList({
   const summaryColumns: ColumnsType<EvidenceQuerySummaryItem> = [
     { title: "tool", dataIndex: "tool_name", width: 170 },
     { title: "source", dataIndex: "source", width: 130 },
-    { title: "status", dataIndex: "status", width: 160 },
+    {
+      title: "tool_outcome",
+      dataIndex: "tool_outcome",
+      width: 170,
+      render: (value: string | null | undefined, record) => {
+        const outcome = value || (record.status === "tool_ok_empty" ? "tool_ok_empty" : null);
+        if (!outcome) {
+          return <Tag>{record.status || "—"}</Tag>;
+        }
+        const color =
+          outcome === "tool_ok_empty"
+            ? "orange"
+            : outcome === "tool_failed"
+              ? "red"
+              : outcome === "tool_ok"
+                ? "green"
+                : "default";
+        return <Tag color={color}>{toolOutcomeLabel(outcome)}</Tag>;
+      },
+    },
+    { title: "status", dataIndex: "status", width: 140 },
     { title: "records", dataIndex: "records_count", width: 90 },
     {
       title: "gap",
@@ -235,18 +301,25 @@ export default function EvidenceList({
           showIcon
           message={`采集状态：${COLLECTION_STATUS_LABEL[collectionStatus] ?? collectionStatus}`}
           description={
-            <Descriptions size="small" column={3}>
-              <Descriptions.Item label="有效源">
-                {successSources.length > 0 ? successSources.join(", ") : "无"}
-              </Descriptions.Item>
-              <Descriptions.Item label="失败/跳过源">
-                {failedSources.length > 0 ? failedSources.join(", ") : "无"}
-              </Descriptions.Item>
-              <Descriptions.Item label="空结果源">
-                {emptyResultSources.length > 0 ? emptyResultSources.join(", ") : "无"}
-              </Descriptions.Item>
-              <Descriptions.Item label="缺口数">{gaps.length}</Descriptions.Item>
-            </Descriptions>
+            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              {failedCollectionHint ? (
+                <Typography.Text data-testid="evidence-collection-failed-hint">
+                  {failedCollectionHint}
+                </Typography.Text>
+              ) : null}
+              <Descriptions size="small" column={3}>
+                <Descriptions.Item label="有效源">
+                  {successSources.length > 0 ? successSources.join(", ") : "无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="失败/跳过源">
+                  {failedSources.length > 0 ? failedSources.join(", ") : "无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="空结果源">
+                  {emptyResultSources.length > 0 ? emptyResultSources.join(", ") : "无"}
+                </Descriptions.Item>
+                <Descriptions.Item label="缺口数">{gaps.length}</Descriptions.Item>
+              </Descriptions>
+            </Space>
           }
           data-testid="evidence-collection-status"
         />

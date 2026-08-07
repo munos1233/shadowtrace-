@@ -110,6 +110,10 @@ function NonAgentTraceDetail({ entry }: { entry: DecisionTraceEntry }) {
     case "tool_call":
       push("工具", "tool_name");
       push("状态", "status");
+      push("工具结果语义", "tool_outcome");
+      push("提供者状态", "provider_status");
+      push("记录数", "records_count");
+      push("缺口原因", "gap_reason");
       push("耗时 (ms)", "duration_ms");
       push("结果摘要", "result_summary", "summary", "message");
       break;
