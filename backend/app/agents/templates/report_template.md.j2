@@ -2,6 +2,19 @@
 
 {{ summary }}
 
+{% if generated_by == "template" and decision_brief %}
+> **模板降级结构化摘要**（`generated_by=template`，诚实 degraded；非 complete LLM 报告）
+>
+> - **decision_brief**: {{ decision_brief }}
+> - **evidence_summary**: {{ evidence_summary }}
+{% if evidence_limited_reason %}
+> - **evidence_limited_reason**: {{ evidence_limited_reason }}
+{% endif %}
+{% if actions_status_summary %}
+> - **actions_status_summary**: {{ actions_status_summary }}
+{% endif %}
+
+{% endif %}
 {% for section in sections %}
 ## {{ section.title }}
 

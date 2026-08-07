@@ -455,9 +455,12 @@ def _sections(**kwargs: Any) -> dict[str, Any]:
 
 def test_sections_default_to_not_executed_wording() -> None:
     by_key = _sections()
-    assert by_key["executed_actions"].content == NOT_EXECUTED_ACTIONS
+    executed = by_key["executed_actions"].content
+    assert NOT_EXECUTED_ACTIONS in executed
+    assert executed.endswith(NOT_EXECUTED_ACTIONS)
+    assert "actions_status_summary:" in executed
     assert by_key["verification_results"].content == NOT_EXECUTED_VERIFICATION
-    assert PLACEHOLDER_NO_ACTIONS not in by_key["executed_actions"].content
+    assert PLACEHOLDER_NO_ACTIONS not in executed
     assert PLACEHOLDER_NO_VERIFICATION not in by_key["verification_results"].content
 
 
@@ -483,7 +486,10 @@ def test_unavailable_status_marks_sections_degraded() -> None:
         response_phase_status=ReportPhaseStatus.UNAVAILABLE,
         verification_phase_status=ReportPhaseStatus.UNAVAILABLE,
     )
-    assert by_key["executed_actions"].content == UNAVAILABLE_ACTIONS
+    executed = by_key["executed_actions"].content
+    assert UNAVAILABLE_ACTIONS in executed
+    assert executed.endswith(UNAVAILABLE_ACTIONS)
+    assert "actions_status_summary:" in executed
     assert by_key["verification_results"].content == UNAVAILABLE_VERIFICATION
     assert by_key["executed_actions"].data.get("degraded") is True
     assert by_key["verification_results"].data.get("degraded") is True
@@ -495,7 +501,10 @@ def test_incomplete_status_uses_incomplete_placeholder() -> None:
             response_phase_status=status,
             verification_phase_status=status,
         )
-        assert by_key["executed_actions"].content == INCOMPLETE_ACTIONS_PLACEHOLDER
+        executed = by_key["executed_actions"].content
+        assert INCOMPLETE_ACTIONS_PLACEHOLDER in executed
+        assert executed.endswith(INCOMPLETE_ACTIONS_PLACEHOLDER)
+        assert "actions_status_summary:" in executed
         assert by_key["verification_results"].content == INCOMPLETE_VERIFICATION_PLACEHOLDER
 
 

@@ -45,6 +45,12 @@ INVESTIGATION_LIMITATION_HEADER = (
 )
 SOURCE_SUMMARY_LABEL = "来源摘要（非证据）"
 
+# ISSUE-246: structured template-enrichment labels (prose briefs, not raw CoT).
+DECISION_BRIEF_LABEL = "decision_brief"
+EVIDENCE_SUMMARY_LABEL = "evidence_summary"
+EVIDENCE_LIMITED_REASON_LABEL = "evidence_limited_reason"
+ACTIONS_STATUS_SUMMARY_LABEL = "actions_status_summary"
+
 SECTION_SPECS: tuple[tuple[str, str], ...] = (
     ("overview", "事件概述"),
     ("severity_level", "严重级别"),
@@ -127,6 +133,108 @@ def _use_low_risk_no_evidence_placeholder(
     )
 
 
+def _action_status_counts(response_actions: list[Action]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in response_actions:
+        key = action.status.value
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def build_decision_brief(
+    *,
+    triage_result: TriageResult | None,
+    risk_assessment: RiskAssessment,
+    final_verdict: FinalVerdict,
+) -> str:
+    """Bounded decision brief for template enrichment (no CoT / prompt text)."""
+    event_type = triage_result.event_type.value if triage_result else "unknown"
+    need_investigation = (
+        triage_result.need_investigation if triage_result is not None else None
+    )
+    parts = [
+        f"事件类型 {event_type}",
+        f"严重级别 {risk_assessment.severity.value}",
+        f"风险分 {risk_assessment.risk_score}",
+        f"终态判定 {final_verdict.value}",
+    ]
+    if need_investigation is not None:
+        parts.append(f"需深入调查={'是' if need_investigation else '否'}")
+    brief = "；".join(parts) + "。"
+    decision_summary = ""
+    if triage_result is not None:
+        decision_summary = (triage_result.decision_summary or "").strip()
+    if decision_summary:
+        # Prefer auditable decision_summary; never fall back to deprecated reasoning/CoT.
+        brief = f"{brief} 分诊结论：{_truncate_field(decision_summary, max_chars=320)}"
+    return brief
+
+
+def build_evidence_summary(evidence_output: EvidenceOutput) -> str:
+    """Prose evidence-count summary for degraded template readability."""
+    evidence_count = len(evidence_output.evidence_list)
+    gap_count = len(evidence_output.gaps)
+    conflict_count = len(evidence_output.conflicts)
+    success = ", ".join(evidence_output.success_sources) or "无"
+    failed = ", ".join(evidence_output.failed_sources) or "无"
+    return (
+        f"共采集 {evidence_count} 条证据"
+        f"（collection_status={evidence_output.collection_status.value}）；"
+        f"成功源 {success}；失败源 {failed}；"
+        f"缺口 {gap_count}；冲突 {conflict_count}。"
+    )
+
+
+def build_evidence_limited_reason(
+    *,
+    risk_assessment: RiskAssessment,
+    evidence_output: EvidenceOutput,
+) -> str | None:
+    """Explain key risk retention when evidence is limited (structured, no CoT)."""
+    if not risk_assessment.evidence_limited:
+        return None
+    reasons: list[str] = [
+        "证据受限（evidence_limited=true），威胁信号保留但置信度受采集完整性约束"
+    ]
+    status = evidence_output.collection_status.value
+    reasons.append(f"采集状态={status}")
+    if evidence_output.failed_sources:
+        reasons.append("失败源=" + ",".join(evidence_output.failed_sources))
+    if evidence_output.gaps:
+        gap_bits = [
+            f"{gap.missing_source.value}:{gap.reason}" for gap in evidence_output.gaps[:5]
+        ]
+        reasons.append("缺口=" + ";".join(gap_bits))
+    if not evidence_output.evidence_list:
+        reasons.append("证据列表为空")
+    if risk_assessment.severity_floor_applied:
+        reasons.append("已应用 severity_floor")
+    if risk_assessment.high_source_evidence_limited:
+        reasons.append("高来源风险在证据受限下仍保留")
+    if risk_assessment.source_risk_baseline is not None:
+        reasons.append(f"source_baseline={risk_assessment.source_risk_baseline}")
+    if risk_assessment.confidence_cap_version:
+        reasons.append(f"confidence_cap={risk_assessment.confidence_cap_version}")
+    return "；".join(reasons) + "。"
+
+
+def build_actions_status_summary(
+    *,
+    response_actions: list[Action],
+    response_phase_status: ReportPhaseStatus,
+) -> str:
+    """Compact RESPONSE action status summary for template enrichment."""
+    phase = response_phase_status.value
+    if not response_actions:
+        return f"处置阶段状态={phase}；RESPONSE 动作 0 个。"
+    counts = _action_status_counts(response_actions)
+    count_text = ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+    return (
+        f"处置阶段状态={phase}；RESPONSE 动作共 {len(response_actions)} 个"
+        f"（{count_text}）。"
+    )
+
+
 class ReportSectionBuilder:
     """Build the locked 15-section skeleton from EventContext facts."""
 
@@ -158,6 +266,20 @@ class ReportSectionBuilder:
             triage_result, evidence_output
         )
         response_actions = self._response_actions(response_plan)
+        decision_brief = build_decision_brief(
+            triage_result=triage_result,
+            risk_assessment=risk_assessment,
+            final_verdict=final_verdict,
+        )
+        evidence_summary = build_evidence_summary(evidence_output)
+        evidence_limited_reason = build_evidence_limited_reason(
+            risk_assessment=risk_assessment,
+            evidence_output=evidence_output,
+        )
+        actions_status_summary = build_actions_status_summary(
+            response_actions=response_actions,
+            response_phase_status=response_phase_status,
+        )
 
         overview = self._overview(
             event_id=event_id,
@@ -172,8 +294,13 @@ class ReportSectionBuilder:
             source_snapshot=source_snapshot,
             triage_degraded=triage_degraded,
             detection_context_snapshot=detection_context_snapshot,
+            decision_brief=decision_brief,
+            evidence_summary=evidence_summary,
+            evidence_limited_reason=evidence_limited_reason,
+            actions_status_summary=actions_status_summary,
         )
         severity_level = (
+            f"{DECISION_BRIEF_LABEL}: {decision_brief}\n"
             f"severity={risk_assessment.severity.value}\n"
             f"risk_score={risk_assessment.risk_score}\n"
             f"confidence={risk_assessment.confidence:.4f}\n"
@@ -186,11 +313,15 @@ class ReportSectionBuilder:
             f"source_scale_unnormalized={risk_assessment.source_scale_unnormalized}\n"
             f"final_verdict={final_verdict.value}"
         )
-        risk_scoring = self._risk_scoring(risk_assessment)
+        risk_scoring = self._risk_scoring(
+            risk_assessment,
+            evidence_limited_reason=evidence_limited_reason,
+        )
         evidence_chain = self._evidence_chain(
             evidence_output,
             risk_assessment=risk_assessment,
             source_snapshot=source_snapshot,
+            evidence_summary=evidence_summary,
         )
         storyline = self._attack_storyline(
             evidence_output,
@@ -202,7 +333,11 @@ class ReportSectionBuilder:
             rag_output,
             detection_context_snapshot=detection_context_snapshot,
         )
-        executed = self._executed_actions(response_actions, response_phase_status)
+        executed = self._executed_actions(
+            response_actions,
+            response_phase_status,
+            actions_status_summary=actions_status_summary,
+        )
         verification = self._verification_results(verification_result, verification_phase_status)
         recommendations = self._recommendations(
             risk_assessment=risk_assessment,
@@ -240,6 +375,12 @@ class ReportSectionBuilder:
             "appendix_index": appendix,
         }
         data_by_key: dict[str, dict[str, Any]] = {
+            "overview": {
+                DECISION_BRIEF_LABEL: decision_brief,
+                EVIDENCE_SUMMARY_LABEL: evidence_summary,
+                EVIDENCE_LIMITED_REASON_LABEL: evidence_limited_reason,
+                ACTIONS_STATUS_SUMMARY_LABEL: actions_status_summary,
+            },
             "risk_scoring": {
                 "risk_score": risk_assessment.risk_score,
                 "factors": [
@@ -251,10 +392,17 @@ class ReportSectionBuilder:
                     }
                     for f in risk_assessment.risk_factors
                 ],
+                **(
+                    {EVIDENCE_LIMITED_REASON_LABEL: evidence_limited_reason}
+                    if evidence_limited_reason
+                    else {}
+                ),
             },
             "executed_actions": {
                 "response_action_count": len(response_actions),
                 "action_ids": [a.action_id for a in response_actions],
+                ACTIONS_STATUS_SUMMARY_LABEL: actions_status_summary,
+                "action_status_counts": _action_status_counts(response_actions),
                 **(
                     {"degraded": True}
                     if response_phase_status is ReportPhaseStatus.UNAVAILABLE
@@ -308,12 +456,33 @@ class ReportSectionBuilder:
         risk_assessment: RiskAssessment,
         final_verdict: FinalVerdict,
         triage_result: TriageResult | None,
+        evidence_output: EvidenceOutput | None = None,
+        response_actions: list[Action] | None = None,
+        response_phase_status: ReportPhaseStatus = ReportPhaseStatus.NOT_EXECUTED,
     ) -> str:
-        event_type = triage_result.event_type.value if triage_result else "unknown"
-        return (
-            f"event_type={event_type}; severity={risk_assessment.severity.value}; "
-            f"risk_score={risk_assessment.risk_score}; verdict={final_verdict.value}"
+        """Structured report summary for template path (ISSUE-246 enrichment)."""
+        decision_brief = build_decision_brief(
+            triage_result=triage_result,
+            risk_assessment=risk_assessment,
+            final_verdict=final_verdict,
         )
+        paragraphs = [f"{DECISION_BRIEF_LABEL}: {decision_brief}"]
+        if evidence_output is not None:
+            paragraphs.append(
+                f"{EVIDENCE_SUMMARY_LABEL}: {build_evidence_summary(evidence_output)}"
+            )
+            limited_reason = build_evidence_limited_reason(
+                risk_assessment=risk_assessment,
+                evidence_output=evidence_output,
+            )
+            if limited_reason:
+                paragraphs.append(f"{EVIDENCE_LIMITED_REASON_LABEL}: {limited_reason}")
+        actions_summary = build_actions_status_summary(
+            response_actions=response_actions or [],
+            response_phase_status=response_phase_status,
+        )
+        paragraphs.append(f"{ACTIONS_STATUS_SUMMARY_LABEL}: {actions_summary}")
+        return "\n".join(paragraphs)
 
     def _entity_lines(
         self,
@@ -400,19 +569,57 @@ class ReportSectionBuilder:
         source_snapshot: dict[str, Any] | None = None,
         triage_degraded: dict[str, Any] | None = None,
         detection_context_snapshot: DetectionContextSnapshot | None = None,
+        decision_brief: str | None = None,
+        evidence_summary: str | None = None,
+        evidence_limited_reason: str | None = None,
+        actions_status_summary: str | None = None,
     ) -> str:
         event_type = triage_result.event_type.value if triage_result else "unknown"
-        reasoning = (triage_result.reasoning if triage_result else "") or ""
+        # Prefer auditable decision_summary; keep deprecated reasoning only as
+        # a last-resort display field (never as enrichment CoT).
+        decision_summary = (
+            (triage_result.decision_summary if triage_result else "") or ""
+        ).strip()
+        reasoning = ""
+        if not decision_summary and triage_result is not None:
+            reasoning = (triage_result.reasoning or "").strip()
+        brief = decision_brief or build_decision_brief(
+            triage_result=triage_result,
+            risk_assessment=risk_assessment,
+            final_verdict=final_verdict,
+        )
+        ev_summary = evidence_summary or build_evidence_summary(evidence_output)
+        limited_reason = (
+            evidence_limited_reason
+            if evidence_limited_reason is not None
+            else build_evidence_limited_reason(
+                risk_assessment=risk_assessment,
+                evidence_output=evidence_output,
+            )
+        )
+        actions_summary = actions_status_summary
+        # Structured briefs lead the overview so degraded_template is not
+        # merely a raw key=value dump (ISSUE-246).
         lines = [
-            f"event_id: {event_id}",
-            f"event_type: {event_type}",
-            f"severity: {risk_assessment.severity.value}",
-            f"risk_score: {risk_assessment.risk_score}",
-            f"final_verdict: {final_verdict.value}",
-            f"evidence_count: {len(evidence_output.evidence_list)}",
-            f"collection_status: {evidence_output.collection_status.value}",
-            f"evidence_limited: {risk_assessment.evidence_limited}",
+            f"{DECISION_BRIEF_LABEL}: {brief}",
+            f"{EVIDENCE_SUMMARY_LABEL}: {ev_summary}",
         ]
+        if limited_reason:
+            lines.append(f"{EVIDENCE_LIMITED_REASON_LABEL}: {limited_reason}")
+        if actions_summary:
+            lines.append(f"{ACTIONS_STATUS_SUMMARY_LABEL}: {actions_summary}")
+        lines.extend(
+            [
+                f"event_id: {event_id}",
+                f"event_type: {event_type}",
+                f"severity: {risk_assessment.severity.value}",
+                f"risk_score: {risk_assessment.risk_score}",
+                f"final_verdict: {final_verdict.value}",
+                f"evidence_count: {len(evidence_output.evidence_list)}",
+                f"collection_status: {evidence_output.collection_status.value}",
+                f"evidence_limited: {risk_assessment.evidence_limited}",
+            ]
+        )
         if detection_context_snapshot is not None:
             lines.extend(
                 [
@@ -457,7 +664,9 @@ class ReportSectionBuilder:
                 f"{replan_count} 轮重规划仍未能通过验证，已标记 escalated=true，"
                 "需安全运营人员接管后续调查与处置。"
             )
-        if reasoning:
+        if decision_summary:
+            lines.append(f"decision_summary: {decision_summary}")
+        elif reasoning:
             lines.append(f"triage_reasoning: {reasoning}")
         if triage_result is not None and should_flag_triage_risk_inconsistency(
             triage=triage_result,
@@ -527,7 +736,12 @@ class ReportSectionBuilder:
             lines.append(f"fp_max_score: {score}")
         return lines
 
-    def _risk_scoring(self, risk_assessment: RiskAssessment) -> str:
+    def _risk_scoring(
+        self,
+        risk_assessment: RiskAssessment,
+        *,
+        evidence_limited_reason: str | None = None,
+    ) -> str:
         llm_adm = (
             risk_assessment.llm_admissibility.value
             if risk_assessment.llm_admissibility is not None
@@ -546,6 +760,8 @@ class ReportSectionBuilder:
             f"confidence_cap_version={risk_assessment.confidence_cap_version}",
             "six_dimension_breakdown:",
         ]
+        if evidence_limited_reason:
+            lines.insert(0, f"{EVIDENCE_LIMITED_REASON_LABEL}: {evidence_limited_reason}")
         if risk_assessment.evidence_limited:
             baseline = risk_assessment.source_risk_baseline
             if baseline is not None and baseline != risk_assessment.risk_score:
@@ -586,9 +802,14 @@ class ReportSectionBuilder:
         *,
         risk_assessment: RiskAssessment,
         source_snapshot: dict[str, Any] | None = None,
+        evidence_summary: str | None = None,
     ) -> str:
+        summary_line = (
+            f"{EVIDENCE_SUMMARY_LABEL}: "
+            f"{evidence_summary or build_evidence_summary(evidence_output)}"
+        )
         if not evidence_output.evidence_list:
-            lines: list[str] = [INVESTIGATION_LIMITATION_HEADER]
+            lines: list[str] = [summary_line, INVESTIGATION_LIMITATION_HEADER]
             source_lines = _source_summary_lines(source_snapshot)
             if source_lines:
                 lines.append(f"{SOURCE_SUMMARY_LABEL}:")
@@ -603,7 +824,7 @@ class ReportSectionBuilder:
             ):
                 lines.append(PLACEHOLDER_LOW_RISK_NO_EVIDENCE)
             return "\n".join(lines)
-        lines = []
+        lines = [summary_line]
         # Stable sort: missing timestamps first, then chronological.
         ordered = sorted(
             evidence_output.evidence_list,
@@ -716,9 +937,16 @@ class ReportSectionBuilder:
         self,
         response_actions: list[Action],
         response_phase_status: ReportPhaseStatus = ReportPhaseStatus.NOT_EXECUTED,
+        *,
+        actions_status_summary: str | None = None,
     ) -> str:
+        status_summary = actions_status_summary or build_actions_status_summary(
+            response_actions=response_actions,
+            response_phase_status=response_phase_status,
+        )
+        summary_line = f"{ACTIONS_STATUS_SUMMARY_LABEL}: {status_summary}"
         if response_actions:
-            lines: list[str] = []
+            lines: list[str] = [summary_line]
             for action in response_actions:
                 wb = (
                     action.writeback_status.value if action.writeback_status is not None else "null"
@@ -734,13 +962,13 @@ class ReportSectionBuilder:
         # the response phase ran at all. Never reuse 「暂无处置动作」, which
         # would masquerade as an executed-but-empty result.
         if response_phase_status is ReportPhaseStatus.UNAVAILABLE:
-            return UNAVAILABLE_ACTIONS
+            return f"{summary_line}\n{UNAVAILABLE_ACTIONS}"
         if response_phase_status in (
             ReportPhaseStatus.EXECUTED,
             ReportPhaseStatus.INCOMPLETE,
         ):
-            return INCOMPLETE_ACTIONS_PLACEHOLDER
-        return NOT_EXECUTED_ACTIONS
+            return f"{summary_line}\n{INCOMPLETE_ACTIONS_PLACEHOLDER}"
+        return f"{summary_line}\n{NOT_EXECUTED_ACTIONS}"
 
     def _verification_results(
         self,

@@ -1,4 +1,8 @@
-"""ISSUE-212 — report_quality assessment + gate semantics."""
+"""ISSUE-212 — report_quality assessment + gate semantics.
+
+ISSUE-246 — degraded_template enrichment keeps honest quality grades while
+injecting structured summary paragraphs (not raw key=value-only dumps).
+"""
 
 from __future__ import annotations
 
@@ -6,17 +10,38 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.agents.report_agent import GENERATED_BY_TEMPLATE, ReportAgent
 from app.agents.report_section_builder import (
+    ACTIONS_STATUS_SUMMARY_LABEL,
+    DECISION_BRIEF_LABEL,
+    EVIDENCE_LIMITED_REASON_LABEL,
+    EVIDENCE_SUMMARY_LABEL,
     INCOMPLETE_ACTIONS_PLACEHOLDER,
     NOT_EXECUTED_ACTIONS,
     NOT_EXECUTED_VERIFICATION,
     PLACEHOLDER_NO_ACTIONS,
     PLACEHOLDER_NO_VERIFICATION,
     SECTION_KEYS,
+    ReportSectionBuilder,
 )
-from app.models.agent_io import ReportPhaseStatus
+from app.models.agent_io import (
+    CollectionStatus,
+    EvidenceOutput,
+    ReportAgentInput,
+    ReportPhaseStatus,
+    RiskAssessment,
+    ScoringMode,
+    TriageResult,
+)
 from app.models.context import EventContext
-from app.models.enums import FinalVerdict, ReportQuality, Severity
+from app.models.enums import (
+    EventType,
+    EvidenceSource,
+    FinalVerdict,
+    ReportQuality,
+    Severity,
+)
+from app.models.evidence import EvidenceGap
 from app.models.report import InvestigationReport, ReportSection
 from app.services.report_quality import (
     ReportPhaseFlags,
@@ -395,3 +420,198 @@ async def test_upsert_report_allows_agent_downgrade_from_complete() -> None:
     assert existing_row.report_quality == "degraded_template"
     assert existing_row.generated_by == "template"
     assert existing_row.version == 2
+
+
+def _enriched_template_fixture() -> tuple[
+    InvestigationReport,
+    dict[str, ReportSection],
+]:
+    """Build a template-path report with ISSUE-246 structured enrichment."""
+    event_id = "evt-246-enrich"
+    triage = TriageResult(
+        event_type=EventType.DATA_EXFILTRATION,
+        severity=Severity.HIGH,
+        need_investigation=True,
+        decision_summary="可疑外传行为，需保留高风险并补充流量证据",
+    )
+    evidence = EvidenceOutput(
+        evidence_list=[],
+        overall_confidence=0.2,
+        collection_status=CollectionStatus.FAILED,
+        failed_sources=["network_flow", "dns"],
+        gaps=[
+            EvidenceGap(
+                event_id=event_id,
+                missing_source=EvidenceSource.NETWORK_FLOW,
+                reason="provider_timeout",
+            )
+        ],
+    )
+    risk = RiskAssessment(
+        risk_score=72,
+        severity=Severity.HIGH,
+        confidence=0.35,
+        risk_factors=[],
+        possible_false_positive=False,
+        scoring_mode=ScoringMode.RULE_ONLY,
+        evidence_limited=True,
+        severity_floor_applied=True,
+        source_risk_baseline=76,
+        high_source_evidence_limited=True,
+        confidence_cap_version="issue102_v1",
+    )
+    sections = ReportSectionBuilder().build(
+        event_id=event_id,
+        evidence_output=evidence,
+        risk_assessment=risk,
+        triage_result=triage,
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        response_phase_status=ReportPhaseStatus.NOT_EXECUTED,
+        verification_phase_status=ReportPhaseStatus.NOT_EXECUTED,
+    )
+    summary = ReportSectionBuilder().default_summary(
+        risk_assessment=risk,
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        triage_result=triage,
+        evidence_output=evidence,
+        response_phase_status=ReportPhaseStatus.NOT_EXECUTED,
+    )
+    report = InvestigationReport(
+        report_id="rpt-evt-246-enrich",
+        event_id=event_id,
+        title="ISSUE-246 enrichment",
+        summary=summary,
+        sections=sections,
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        risk_score=risk.risk_score,
+        severity=risk.severity,
+        generated_by=GENERATED_BY_TEMPLATE,
+        generated_at=datetime.now(UTC),
+    )
+    return report, {section.key: section for section in sections}
+
+
+def test_degraded_template_includes_structured_summary_paragraphs() -> None:
+    """ISSUE-246: template enrichment is prose/structured, not key=value-only."""
+    report, by_key = _enriched_template_fixture()
+    overview = by_key["overview"].content
+    summary = report.summary
+
+    assert f"{DECISION_BRIEF_LABEL}:" in overview
+    assert "可疑外传行为" in overview
+    assert f"{EVIDENCE_SUMMARY_LABEL}:" in overview
+    assert "共采集 0 条证据" in overview
+    assert f"{EVIDENCE_LIMITED_REASON_LABEL}:" in overview
+    assert "provider_timeout" in overview
+    assert f"{ACTIONS_STATUS_SUMMARY_LABEL}:" in overview
+    assert "RESPONSE 动作 0 个" in overview
+
+    # Report-level summary must also carry the structured briefs.
+    assert f"{DECISION_BRIEF_LABEL}:" in summary
+    assert f"{EVIDENCE_SUMMARY_LABEL}:" in summary
+    assert f"{EVIDENCE_LIMITED_REASON_LABEL}:" in summary
+    assert f"{ACTIONS_STATUS_SUMMARY_LABEL}:" in summary
+
+    # Structured paragraphs are more than raw key=value dumps.
+    assert "；" in overview or "。" in overview
+    assert "event_type=" not in summary.splitlines()[0]
+
+    # Machine-readable enrichment also lands in section.data.
+    overview_data = by_key["overview"].data
+    assert overview_data.get(DECISION_BRIEF_LABEL)
+    assert overview_data.get(EVIDENCE_SUMMARY_LABEL)
+    assert overview_data.get(EVIDENCE_LIMITED_REASON_LABEL)
+    assert overview_data.get(ACTIONS_STATUS_SUMMARY_LABEL)
+
+
+def test_enriched_template_still_marks_degraded_not_complete() -> None:
+    """ISSUE-246 + ISSUE-212: richer template content must not fake complete."""
+    report, _ = _enriched_template_fixture()
+    quality = assess_report_quality(
+        report,
+        ReportPhaseFlags(
+            response_phase_status=ReportPhaseStatus.NOT_EXECUTED,
+            verification_phase_status=ReportPhaseStatus.NOT_EXECUTED,
+        ),
+    )
+    assert quality is ReportQuality.DEGRADED_TEMPLATE
+    stamped = with_assessed_quality(report)
+    assert stamped.report_quality is ReportQuality.DEGRADED_TEMPLATE
+    assert stamped.degraded is True
+    assert is_degraded_quality(stamped.report_quality) is True
+
+
+@pytest.mark.asyncio
+async def test_report_agent_template_fallback_keeps_enrichment_and_degraded() -> None:
+    """End-to-end template fallback: enrichment present, quality stays degraded."""
+
+    class _FailingLLM:
+        async def chat(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("llm unavailable for ISSUE-246")
+
+    class _WM:
+        def __init__(self) -> None:
+            self.values: dict[tuple[str, str], object] = {}
+
+        async def read(self, event_id: str, key: str) -> object:
+            return self.values.get((event_id, key))
+
+        async def write(self, event_id: str, key: str, value: object) -> None:
+            self.values[(event_id, key)] = value
+
+        async def append_scratchpad(self, event_id: str, note: str) -> None:
+            return None
+
+    event_id = "evt-246-agent"
+    wm = _WM()
+    await wm.write(
+        event_id,
+        "triage_result",
+        TriageResult(
+            event_type=EventType.DATA_EXFILTRATION,
+            severity=Severity.HIGH,
+            need_investigation=True,
+            decision_summary="模板降级仍需可读决策摘要",
+        ).model_dump(mode="json"),
+    )
+    agent = ReportAgent(llm_client=_FailingLLM(), working_memory=wm, event_service=None)
+    report = await agent.execute(
+        ReportAgentInput(
+            event_id=event_id,
+            evidence_output=EvidenceOutput(
+                evidence_list=[],
+                overall_confidence=0.1,
+                collection_status=CollectionStatus.FAILED,
+                failed_sources=["endpoint"],
+                gaps=[
+                    EvidenceGap(
+                        event_id=event_id,
+                        missing_source=EvidenceSource.ENDPOINT,
+                        reason="tool_error",
+                    )
+                ],
+            ),
+            risk_assessment=RiskAssessment(
+                risk_score=70,
+                severity=Severity.HIGH,
+                confidence=0.3,
+                risk_factors=[],
+                scoring_mode=ScoringMode.RULE_ONLY,
+                evidence_limited=True,
+                severity_floor_applied=True,
+            ),
+            persist_report=False,
+        )
+    )
+    assert report.generated_by == GENERATED_BY_TEMPLATE
+    assert report.report_quality is ReportQuality.DEGRADED_TEMPLATE
+    assert report.degraded is True
+    blob = "\n".join([report.summary, *(s.content for s in report.sections)])
+    assert "模板降级仍需可读决策摘要" in blob
+    assert f"{DECISION_BRIEF_LABEL}:" in blob
+    assert f"{EVIDENCE_SUMMARY_LABEL}:" in blob
+    assert f"{EVIDENCE_LIMITED_REASON_LABEL}:" in blob
+    assert f"{ACTIONS_STATUS_SUMMARY_LABEL}:" in blob
+    assert agent.last_report_markdown is not None
+    assert "模板降级结构化摘要" in agent.last_report_markdown
+    assert "decision_brief" in agent.last_report_markdown

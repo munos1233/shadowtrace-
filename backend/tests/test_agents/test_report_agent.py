@@ -438,6 +438,11 @@ async def test_llm_failure_falls_back_to_template(
     assert "zhangsan" in blob
     assert "PC-FIN-023" in blob
     assert "203.0.113.88" in blob
+    # ISSUE-246: degraded template must carry structured summary paragraphs.
+    assert "decision_brief:" in blob
+    assert "evidence_summary:" in blob
+    assert "actions_status_summary:" in blob
+    assert "decision_brief:" in report.summary
     # ISSUE-205: phases that never ran must say 「本调查未执行…」, never the
     # silent 「暂无…」 placeholders.
     assert NOT_EXECUTED_ACTIONS in blob
@@ -470,7 +475,10 @@ async def test_missing_actions_and_verification_use_placeholders(
     by_key = {s.key: s.content for s in report.sections}
     # ISSUE-205: absent plan/verify default to NOT_EXECUTED (fail-closed), not
     # the silent 「暂无…」 placeholders.
-    assert by_key["executed_actions"] == NOT_EXECUTED_ACTIONS
+    # ISSUE-246: template path prefixes a structured actions_status_summary.
+    assert NOT_EXECUTED_ACTIONS in by_key["executed_actions"]
+    assert by_key["executed_actions"].endswith(NOT_EXECUTED_ACTIONS)
+    assert "actions_status_summary:" in by_key["executed_actions"]
     assert by_key["verification_results"] == NOT_EXECUTED_VERIFICATION
     assert PLACEHOLDER_NO_ACTIONS not in by_key["executed_actions"]
     assert PLACEHOLDER_NO_VERIFICATION not in by_key["verification_results"]

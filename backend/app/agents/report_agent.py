@@ -22,6 +22,10 @@ from app.agents.base import BaseAgent
 from app.agents.prompts.report_prompt import build_report_messages
 from app.agents.report_llm_failure import llm_failure_metadata
 from app.agents.report_section_builder import (
+    ACTIONS_STATUS_SUMMARY_LABEL,
+    DECISION_BRIEF_LABEL,
+    EVIDENCE_LIMITED_REASON_LABEL,
+    EVIDENCE_SUMMARY_LABEL,
     INVESTIGATION_LIMITATION_HEADER,
     SECTION_KEYS,
     SECTION_SPECS,
@@ -55,6 +59,11 @@ LLM_TIMEOUT_SECONDS = 30.0
 
 # Template lines that LLM merge must preserve (ISSUE-104 investigation limits).
 _OVERVIEW_MERGE_PREFIXES = (
+    f"{DECISION_BRIEF_LABEL}:",
+    f"{EVIDENCE_SUMMARY_LABEL}:",
+    f"{EVIDENCE_LIMITED_REASON_LABEL}:",
+    f"{ACTIONS_STATUS_SUMMARY_LABEL}:",
+    "decision_summary:",
     "fp_",
     "human_escalation:",
     "triage_degraded:",
@@ -76,6 +85,8 @@ _OVERVIEW_MERGE_CONTAINS = (
     "evidence_limited:",
 )
 _EVIDENCE_LIMITED_MERGE_PREFIXES = (
+    f"{EVIDENCE_SUMMARY_LABEL}:",
+    f"{EVIDENCE_LIMITED_REASON_LABEL}:",
     "调查限制",
     SOURCE_SUMMARY_LABEL,
     "evidence_gaps:",
@@ -87,6 +98,7 @@ _EVIDENCE_LIMITED_MERGE_PREFIXES = (
     "- severity=",
     "- normalized.",
 )
+_ACTIONS_MERGE_PREFIXES = (f"{ACTIONS_STATUS_SUMMARY_LABEL}:",)
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 
@@ -206,10 +218,18 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             detection_context_snapshot=detection_context_snapshot,
         )
         title = self.section_builder.default_title(triage, input.event_id)
+        response_actions = [
+            action
+            for action in (input.response_plan.actions if input.response_plan is not None else [])
+            if action.action_category is ActionCategory.RESPONSE
+        ]
         summary = self.section_builder.default_summary(
             risk_assessment=input.risk_assessment,
             final_verdict=final_verdict,
             triage_result=triage,
+            evidence_output=input.evidence_output,
+            response_actions=response_actions,
+            response_phase_status=input.response_phase_status,
         )
         generated_by = GENERATED_BY_TEMPLATE
         llm_fallback: dict[str, Any] | None = None
@@ -250,6 +270,7 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             title=title,
             summary=summary,
             sections=draft_sections,
+            generated_by=generated_by,
         )
         content_sha256 = hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
         self.last_content_sha256 = content_sha256
@@ -258,6 +279,7 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             title=title,
             summary=summary,
             sections=sections,
+            generated_by=generated_by,
         )
 
         now = datetime.now(UTC)
@@ -421,6 +443,14 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
                 )
                 if missing:
                     content = "\n".join([content, *missing])
+            elif section.key == "executed_actions" and section.key in overrides:
+                missing = self._missing_required_lines(
+                    section.content,
+                    content,
+                    prefixes=_ACTIONS_MERGE_PREFIXES,
+                )
+                if missing:
+                    content = "\n".join([content, *missing])
             elif section.key == "recommendations" and section.key in overrides:
                 missing = self._missing_required_lines(
                     section.content,
@@ -474,12 +504,23 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         title: str,
         summary: str,
         sections: list[ReportSection],
+        generated_by: str = GENERATED_BY_TEMPLATE,
     ) -> str:
         template = self._jinja.get_template("report_template.md.j2")
+        overview_data: dict[str, Any] = {}
+        for section in sections:
+            if section.key == "overview" and isinstance(section.data, dict):
+                overview_data = section.data
+                break
         return (
             template.render(
                 title=title,
                 summary=summary,
+                generated_by=generated_by,
+                decision_brief=overview_data.get(DECISION_BRIEF_LABEL),
+                evidence_summary=overview_data.get(EVIDENCE_SUMMARY_LABEL),
+                evidence_limited_reason=overview_data.get(EVIDENCE_LIMITED_REASON_LABEL),
+                actions_status_summary=overview_data.get(ACTIONS_STATUS_SUMMARY_LABEL),
                 sections=[
                     {
                         "key": s.key,
