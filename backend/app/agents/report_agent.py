@@ -699,12 +699,17 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             )
 
     async def _persist_report(self, report: InvestigationReport) -> None:
+        # ISSUE-242: persist_report=True is a hard contract — soft-skipping here
+        # would let callers advance to REPORTING with no DB row (GET /report 404).
         if self.event_service is None:
-            return
+            raise RuntimeError(
+                "ReportAgent.persist_report=True requires event_service.upsert_report"
+            )
         upsert = getattr(self.event_service, "upsert_report", None)
         if upsert is None:
-            logger.debug("event_service lacks upsert_report; skip DB report sync")
-            return
+            raise RuntimeError(
+                "event_service lacks upsert_report; cannot persist investigation report"
+            )
         try:
             persisted = await upsert(report)
             if isinstance(persisted, InvestigationReport):

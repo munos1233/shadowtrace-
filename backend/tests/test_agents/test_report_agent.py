@@ -636,6 +636,22 @@ async def test_report_persist_failure_propagates(wm: _FakeWorkingMemory) -> None
 
 
 @pytest.mark.asyncio
+async def test_report_persist_requires_event_service(wm: _FakeWorkingMemory) -> None:
+    """ISSUE-242: persist_report=True must not soft-skip when event_service is missing."""
+    event_id = f"evt-report-no-svc-{uuid4().hex[:8]}"
+    await wm.write(event_id, "triage_result", _main_triage().model_dump(mode="json"))
+    agent = ReportAgent(llm_client=None, working_memory=wm, event_service=None)
+    with pytest.raises(RuntimeError, match="requires event_service.upsert_report"):
+        await agent.execute(
+            ReportAgentInput(
+                event_id=event_id,
+                evidence_output=_main_evidence(event_id),
+                risk_assessment=_high_risk(),
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_llm_incomplete_sections_falls_back_to_template(
     wm: _FakeWorkingMemory,
     event_service: _FakeEventService,

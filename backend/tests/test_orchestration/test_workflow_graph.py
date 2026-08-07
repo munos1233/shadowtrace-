@@ -2234,3 +2234,38 @@ async def test_execute_stub_fails_closed_without_action_execution() -> None:
         reason is not None and "execute_stub_miswired" in reason
         for (_, _, reason) in machine.transitions
     )
+
+
+class _FailingReportAgent:
+    async def execute(self, input: ReportAgentInput) -> Any:
+        raise RuntimeError("report boom")
+
+
+@pytest.mark.asyncio
+async def test_report_node_failure_marks_observability_not_silent_reporting() -> None:
+    """ISSUE-242: report failure sets report_generated=false + degraded flag, not REPORTING."""
+    event_id = "evt-242-report-fail"
+    machine = FakeStateMachine()
+    services = _services(machine)
+    store = services["context_store"]
+    agents = _agents()
+    agents["report_agent"] = _FailingReportAgent()
+
+    with pytest.raises(RuntimeError, match="report boom"):
+        await build_investigation_graph(agents, services).ainvoke(
+            _base_state(
+                event_id=event_id,
+                disposition_policy=DispositionPolicy.REQUIRED.value,
+                defer_response_execution=True,
+            ),
+            {"configurable": {"thread_id": event_id}},
+        )
+
+    assert store.data.get((event_id, "report_generated")) is False
+    degraded = services["degraded_flags"]
+    assert any(
+        eid == event_id and flag_name == "report_generation_failed"
+        for (eid, flag_name, _, _) in degraded.calls
+    )
+    assert machine.status is EventStatus.FAILED
+    assert EventStatus.REPORTING not in {target for (_, target, _) in machine.transitions}

@@ -44,6 +44,8 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "event_type_orm_rewrite_failed",
         # ISSUE-200 triage vs risk scoring inconsistency
         "triage_risk_inconsistency",
+        # ISSUE-242 report persistence contract / generation failure observability
+        "report_generation_failed",
     }
 )
 
@@ -69,6 +71,8 @@ DEGRADED_FLAG_TRUSTED_CALLERS: frozenset[str] = frozenset(
         "TriageAgent",
         # ISSUE-200 — triage vs risk scoring inconsistency audit
         "RiskAgent",
+        # ISSUE-242 — report persistence failure observability
+        "ReportAgent",
     }
 )
 

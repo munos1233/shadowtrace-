@@ -9,7 +9,7 @@ import pytest
 from app.api.v1.deps import reset_deps
 from app.core.config import get_settings
 from app.core.errors import InvalidStateTransitionError
-from app.models.enums import DispositionPolicy, EventStatus
+from app.models.enums import DispositionPolicy, EventStatus, Severity
 from app.models.workflow import TransitionContext, validate_closed_gate
 from app.services.investigation_guidance import derive_investigation_guidance
 
@@ -164,3 +164,156 @@ async def test_analysis_only_short_circuit_skips_report_when_generate_report_fal
     # First transition should be to REPORTING (not CLOSED).
     first_call = state_machine.transition.await_args_list[0]
     assert first_call.args[1] is EventStatus.REPORTING
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-242 — generate_report=true must persist before REPORTING
+# --------------------------------------------------------------------------- #
+
+
+def test_analysis_only_run_orders_report_before_reporting_transition() -> None:
+    """Lock the _run source contract: generate+mark precedes REPORTING."""
+    import inspect
+
+    from app.services.analysis_only_pipeline import AnalysisOnlyPipeline
+
+    src = inspect.getsource(AnalysisOnlyPipeline._run)
+    gen_idx = src.index("_generate_and_mark_report")
+    reporting_idx = src.index("EventStatus.REPORTING")
+    assert gen_idx < reporting_idx
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_generate_report_true_persists_before_reporting() -> None:
+    """ISSUE-242: report mark completes before REPORTING transition is issued."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.models.agent_io import CollectionStatus, EvidenceOutput, RiskAssessment, ScoringMode
+    from app.models.report import InvestigationReport
+    from app.services.analysis_only_pipeline import AnalysisOnlyPipeline
+
+    call_order: list[str] = []
+    event_id = "evt-242-order"
+    report = InvestigationReport(
+        report_id="rpt-242-order",
+        event_id=event_id,
+        title="ordered report",
+        sections=[],
+    )
+
+    store = AsyncMock()
+
+    async def _set(_event_id: str, key: str, value: object) -> None:
+        call_order.append(f"set:{key}={value!r}")
+
+    store.set = AsyncMock(side_effect=_set)
+
+    state_machine = AsyncMock()
+
+    async def _transition(
+        _event_id: str,
+        target: EventStatus,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        call_order.append(f"transition:{target.value}")
+
+    state_machine.transition = AsyncMock(side_effect=_transition)
+
+    report_agent = MagicMock()
+
+    async def _execute(_input: object) -> InvestigationReport:
+        call_order.append("report_execute")
+        return report
+
+    report_agent.execute = AsyncMock(side_effect=_execute)
+
+    pipeline = AnalysisOnlyPipeline(
+        triage_agent=MagicMock(),
+        evidence_agent=MagicMock(),
+        rag_agent=MagicMock(),
+        risk_agent=MagicMock(),
+        report_agent=report_agent,
+        state_machine=state_machine,
+        context_store=store,
+    )
+    evidence = EvidenceOutput(
+        evidence_list=[],
+        conflicts=[],
+        gaps=[],
+        success_sources=[],
+        failed_sources=[],
+        overall_confidence=0.8,
+        collection_status=CollectionStatus.COMPLETED,
+    )
+    risk = RiskAssessment(
+        risk_score=85,
+        severity=Severity.HIGH,
+        confidence=0.9,
+        risk_factors=[],
+        scoring_mode=ScoringMode.RULE_ONLY,
+    )
+
+    # Mirror the generate_report=true completion contract in _run:
+    # generate+mark first, then transition to REPORTING.
+    generated = await pipeline._generate_and_mark_report(event_id, evidence, risk)
+    await pipeline._transition(
+        event_id,
+        EventStatus.REPORTING,
+        reason="analysis_pipeline:report_generate",
+    )
+
+    assert generated is report
+    assert call_order == [
+        "report_execute",
+        "set:report_generated=True",
+        "transition:reporting",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_report_failure_marks_observability() -> None:
+    """ISSUE-242: deliberate report failure sets report_generated=false + degraded flag."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.models.agent_io import CollectionStatus, EvidenceOutput, RiskAssessment, ScoringMode
+    from app.services.analysis_only_pipeline import AnalysisOnlyPipeline
+
+    store = AsyncMock()
+    degraded = AsyncMock()
+    report_agent = MagicMock()
+    report_agent.execute = AsyncMock(side_effect=RuntimeError("boom-report"))
+
+    pipeline = AnalysisOnlyPipeline(
+        triage_agent=MagicMock(),
+        evidence_agent=MagicMock(),
+        rag_agent=MagicMock(),
+        risk_agent=MagicMock(),
+        report_agent=report_agent,
+        context_store=store,
+        degraded_flags=degraded,
+    )
+    evidence = EvidenceOutput(
+        evidence_list=[],
+        conflicts=[],
+        gaps=[],
+        success_sources=[],
+        failed_sources=[],
+        overall_confidence=0.0,
+        collection_status=CollectionStatus.COMPLETED,
+    )
+    risk = RiskAssessment(
+        risk_score=10,
+        severity=Severity.LOW,
+        confidence=0.5,
+        risk_factors=[],
+        scoring_mode=ScoringMode.RULE_ONLY,
+    )
+    with pytest.raises(RuntimeError, match="boom-report"):
+        await pipeline._generate_and_mark_report("evt-242-fail", evidence, risk)
+
+    store.set.assert_awaited_with("evt-242-fail", "report_generated", False)
+    degraded.set_flag.assert_awaited()
+    flag_kwargs = degraded.set_flag.await_args
+    assert flag_kwargs.args[1] == "report_generation_failed"
+    assert flag_kwargs.kwargs["writer"] == "AnalysisOnlyPipeline"

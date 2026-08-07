@@ -448,6 +448,18 @@ class AnalysisOnlyPipeline:
             )
         final_verdict = await _read_persisted_final_verdict(self._event_service, event_id)
 
+        # ISSUE-242: generate/persist report *before* REPORTING so GET /report
+        # cannot race a status=reporting window with no DB row.
+        report: InvestigationReport | None = None
+        if generate_report:
+            report = await self._generate_and_mark_report(
+                event_id,
+                evidence_output,
+                risk_assessment,
+            )
+        else:
+            await self._persist_report_skipped(event_id)
+
         await self._transition(
             event_id,
             EventStatus.REPORTING,
@@ -457,11 +469,6 @@ class AnalysisOnlyPipeline:
                 else "analysis_pipeline:analysis_complete_no_report"
             ),
         )
-        report: InvestigationReport | None = None
-        if generate_report:
-            report = await self._run_report(event_id, evidence_output, risk_assessment)
-        else:
-            await self._persist_report_skipped(event_id)
 
         if not generate_report:
             await self._persist_analysis_only_complete(event_id)
@@ -686,6 +693,59 @@ class AnalysisOnlyPipeline:
             raise TypeError("ReportAgent must return InvestigationReport or None")
         return report
 
+    async def _generate_and_mark_report(
+        self,
+        event_id: str,
+        evidence_output: EvidenceOutput,
+        risk_assessment: RiskAssessment,
+    ) -> InvestigationReport:
+        """Run ReportAgent and persist success/failure observability (ISSUE-242)."""
+        try:
+            report = await self._run_report(event_id, evidence_output, risk_assessment)
+            if report is None:
+                raise ShadowTraceError(
+                    "ReportAgent returned no report while generate_report=true",
+                    error_code="report_generation_failed",
+                    details={"event_id": event_id},
+                )
+            await self._persist_report_generated(event_id, True)
+            return report
+        except Exception as exc:
+            await self._mark_report_generation_failed(event_id, exc)
+            raise
+
+    async def _persist_report_generated(self, event_id: str, generated: bool) -> None:
+        if self._context_store is None:
+            return
+        try:
+            await self._context_store.set(event_id, "report_generated", generated)
+        except Exception:
+            logger.warning(
+                "Failed to persist report_generated=%s for event=%s",
+                generated,
+                event_id,
+                exc_info=True,
+            )
+
+    async def _mark_report_generation_failed(self, event_id: str, exc: Exception) -> None:
+        """Make generate_report=true failures observable (never silent REPORTING)."""
+        await self._persist_report_generated(event_id, False)
+        if self._degraded_flags is None:
+            return
+        try:
+            await self._degraded_flags.set_flag(
+                event_id,
+                "report_generation_failed",
+                type(exc).__name__,
+                writer=_PIPELINE_OPERATOR,
+            )
+        except Exception:
+            logger.warning(
+                "AnalysisOnlyPipeline: failed to record report_generation_failed event=%s",
+                event_id,
+                exc_info=True,
+            )
+
     async def _run_fp_adjudication(
         self,
         event_id: str,
@@ -722,16 +782,7 @@ class AnalysisOnlyPipeline:
         return None
 
     async def _persist_report_skipped(self, event_id: str) -> None:
-        if self._context_store is None:
-            return
-        try:
-            await self._context_store.set(event_id, "report_generated", False)
-        except Exception:
-            logger.warning(
-                "Failed to persist report_generated=false for event=%s",
-                event_id,
-                exc_info=True,
-            )
+        await self._persist_report_generated(event_id, False)
 
     async def _evaluate_quality_scores(self, event_id: str) -> None:
         """Run OutputQualityEvaluator at pipeline completion (ISSUE-233)."""
@@ -938,7 +989,11 @@ class AnalysisOnlyPipeline:
                 short_circuit=True,
             )
 
-        report = await self._run_report(event_id, placeholder_evidence, placeholder_risk)
+        report = await self._generate_and_mark_report(
+            event_id,
+            placeholder_evidence,
+            placeholder_risk,
+        )
 
         ctx = TransitionContext(
             need_investigation=False,

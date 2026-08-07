@@ -1707,6 +1707,9 @@ def build_investigation_graph(
             )
 
         # Transition to the appropriate status based on verification outcome.
+        # ISSUE-242: overall success stays in VERIFYING; report_node owns the
+        # VERIFYING→REPORTING transition *after* ReportAgent upserts so
+        # status=reporting never races a missing GET /report row.
         if verification_result.need_action_replan:
             # Don't transition here — replan_node handles REPLANNING transition.
             pass
@@ -1725,15 +1728,6 @@ def build_investigation_graph(
                 event_status=EventStatus.VERIFYING,
             )
             update["execution_substate"] = ExecutionSubstate.MANUAL_RESOLUTION.value
-        else:
-            # Overall success — advance to REPORTING.
-            status = await _transition_status(
-                services,
-                state,
-                EventStatus.REPORTING,
-                reason="investigation:verify_success",
-            )
-            update.update(status)
 
         return _patch_state(_trace(NODE_VERIFY), update)
 
@@ -1752,17 +1746,24 @@ def build_investigation_graph(
         )
 
     async def report_node(state: InvestigationState) -> InvestigationState:
+        store = services.get("context_store")
+        event_id = state["event_id"]
+
+        async def _persist_report_generated_flag(generated: bool) -> None:
+            if store is None:
+                return
+            try:
+                await store.set(event_id, "report_generated", generated)
+            except Exception:
+                logger.warning(
+                    "failed to persist report_generated=%s event=%s",
+                    generated,
+                    event_id,
+                    exc_info=True,
+                )
+
         if not state.get("generate_report", True):
-            store = services.get("context_store")
-            if store is not None:
-                try:
-                    await store.set(state["event_id"], "report_generated", False)
-                except Exception:
-                    logger.warning(
-                        "failed to persist report_generated=false event=%s",
-                        state["event_id"],
-                        exc_info=True,
-                    )
+            await _persist_report_generated_flag(False)
             current = EventStatus(state.get("event_status", EventStatus.VERIFYING.value))
             if current is not EventStatus.REPORTING:
                 status = await _transition_status(
@@ -1782,25 +1783,47 @@ def build_investigation_graph(
         # (state → context_store); the prior hand-written verify-only injection
         # is retired so no parallel construction path remains.
         report_input = await build_report_agent_input(
-            state["event_id"],
+            event_id,
             evidence_output=EvidenceOutput.model_validate(state["evidence_output"]),
             risk_assessment=RiskAssessment.model_validate(state["risk_assessment"]),
             escalated=bool(state.get("escalated", False)),
             replan_count=int(state.get("replan_count", 0)),
             state=state,
-            context_store=services.get("context_store"),
+            context_store=store,
             session_factory=services.get("session_factory"),
         )
-        report = await report_agent.execute(report_input)
-        # ISSUE-062 B2: When the writeback recovery path routes to report_node,
-        # the DB status may still be VERIFYING (verify_node stayed in VERIFYING
-        # for writeback recovery; writeback_recovery_node does not transition).
-        # Without the transition here, close_node would attempt VERIFYING→CLOSED
-        # which is an illegal state transition.
-        #
-        # The transition is guarded against the state dict (not the DB) to keep
-        # this call cheap — when verify_node already persisted REPORTING the
-        # state dict also carries "reporting" and we skip the redundant DB write.
+        try:
+            report = await report_agent.execute(report_input)
+            if report is None:
+                raise ValidationError(
+                    "ReportAgent returned no report while generate_report=true",
+                    error_code="report_generation_failed",
+                    details={"event_id": event_id},
+                )
+        except Exception as exc:
+            # ISSUE-242: never leave REPORTING with a silent missing row —
+            # persist explicit failure markers before _wrap_node marks FAILED.
+            await _persist_report_generated_flag(False)
+            try:
+                await _persist_degraded_flag(
+                    state,
+                    "report_generation_failed",
+                    event_id=event_id,
+                    degraded_flags=degraded_flags,
+                )
+            except Exception:
+                logger.warning(
+                    "failed to persist report_generation_failed flag event=%s",
+                    event_id,
+                    exc_info=True,
+                )
+            raise
+
+        await _persist_report_generated_flag(True)
+        # ISSUE-062 B2 / ISSUE-242: report_node owns VERIFYING→REPORTING after
+        # upsert. Without this transition, close_node would attempt
+        # VERIFYING→CLOSED which is illegal. When already at REPORTING (e.g.
+        # resume), skip the redundant DB write.
         current = EventStatus(state.get("event_status", EventStatus.VERIFYING.value))
         if current is not EventStatus.REPORTING:
             status = await _transition_status(
@@ -1814,7 +1837,7 @@ def build_investigation_graph(
         return _patch_state(
             _trace(NODE_REPORT),
             status,
-            {"report_generated": report is not None},
+            {"report_generated": True},
         )
 
     async def halt_node(state: InvestigationState) -> InvestigationState:

@@ -1515,8 +1515,13 @@ async def test_investigate_high_risk_http_polls_to_reporting(
     detail = await _poll_event_status(client, event_id, "reporting")
     assert detail["event"]["status"] == "reporting"
 
+    # ISSUE-242: generate_report=true completion must have persisted report bytes
+    # by the time durable REPORTING is visible — GET must not 404.
     report_resp = client.get(f"/api/v1/events/{event_id}/report", headers=_hdr())
-    assert report_resp.status_code == 200
+    assert report_resp.status_code == 200, report_resp.text
+    report = report_resp.json()["report"]
+    assert report["event_id"] == event_id
+    assert report.get("sections"), "persisted report must include sections"
 
 
 @pytest.mark.asyncio
