@@ -35,6 +35,7 @@ from app.models.agent_io import (
     ScoringMode,
     TriageResult,
 )
+from app.models.evidence import Evidence
 from app.models.entities import (
     AccountEntity,
     DomainEntity,
@@ -50,6 +51,7 @@ from app.models.enums import (
     CapabilityState,
     DispositionPolicy,
     EventType,
+    EvidenceSource,
     ExecutionOwner,
     FinalVerdict,
     Severity,
@@ -265,7 +267,12 @@ def _entities() -> EntitySet:
     )
 
 
-def _risk(severity: Severity = Severity.HIGH, *, score: int = 85) -> RiskAssessment:
+def _risk(
+    severity: Severity = Severity.HIGH,
+    *,
+    score: int = 85,
+    evidence_limited: bool = False,
+) -> RiskAssessment:
     return RiskAssessment(
         risk_score=score,
         severity=severity,
@@ -280,6 +287,18 @@ def _risk(severity: Severity = Severity.HIGH, *, score: int = 85) -> RiskAssessm
             )
         ],
         scoring_mode=ScoringMode.LLM_AND_RULE,
+        evidence_limited=evidence_limited,
+    )
+
+
+def _sample_evidence(event_id: str = "evt-20260723-test") -> Evidence:
+    return Evidence(
+        evidence_id="ev-usable-1",
+        event_id=event_id,
+        source=EvidenceSource.ENDPOINT,
+        evidence_type="process",
+        description="suspicious process tree",
+        confidence=0.91,
     )
 
 
@@ -610,6 +629,103 @@ async def test_containment_quality_gate_aligns_block_ip_with_grounded_entity() -
     assert grounded_ip in block_targets
     assert plan.generated_by is ResponsePlanGeneratedBy.TEMPLATE
     assert "containment_quality_gate" in plan.strategy_summary
+
+
+@pytest.mark.asyncio
+async def test_evidence_failed_high_severity_blocks_l2_plus_actions() -> None:
+    """ISSUE-248: collection failed + high risk must not plan L2/L3 containment."""
+    event_id = f"evt-{uuid4().hex[:8]}"
+    wm = _FakeWorkingMemory()
+    _seed_wm(wm, event_id, triage=_triage())
+    agent = ResponseAgent(
+        llm_client=MockLLMClient(audit_recorder=InMemoryLLMCallAuditRecorder()),
+        working_memory=wm,
+        event_service=_FakeEventService(final_verdict=FinalVerdict.NONE),
+        capability_manifest=build_mock_capability_manifest(),
+        scenario_id="insider_data_exfiltration",
+    )
+    plan = await agent.execute(
+        ResponseAgentInput(
+            event_id=event_id,
+            risk_assessment=_risk(Severity.HIGH, score=90, evidence_limited=True),
+            evidence_output=EvidenceOutput(
+                evidence_list=[],
+                collection_status=CollectionStatus.FAILED,
+                overall_confidence=0.0,
+            ),
+        )
+    )
+    high_impact = [
+        action
+        for action in plan.actions
+        if action.tool_name != TERMINAL_DISPOSITION_TOOL
+        and action.action_level not in {ActionLevel.L0, ActionLevel.L1}
+    ]
+    assert high_impact == []
+    assert "evidence_sufficiency_gate" in plan.strategy_summary
+    assert "containment_quality_gate" not in plan.strategy_summary
+    # Deferred disposition writeback remains (approval/execution gates unchanged).
+    assert any(a.tool_name == TERMINAL_DISPOSITION_TOOL for a in plan.actions)
+
+
+@pytest.mark.asyncio
+async def test_zero_evidence_limited_high_blocks_l2_plus_even_from_rules() -> None:
+    """ISSUE-248: zero-evidence evidence_limited strips L2+ from rule fallback too."""
+    event_id = f"evt-{uuid4().hex[:8]}"
+    wm = _FakeWorkingMemory()
+    _seed_wm(wm, event_id, triage=_triage())
+    agent = ResponseAgent(
+        llm_client=_FailingLLM(),
+        working_memory=wm,
+        event_service=_FakeEventService(final_verdict=FinalVerdict.NONE),
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    plan = await agent.execute(
+        ResponseAgentInput(
+            event_id=event_id,
+            risk_assessment=_risk(Severity.HIGH, score=88, evidence_limited=True),
+            evidence_output=EvidenceOutput(
+                evidence_list=[],
+                collection_status=CollectionStatus.DEGRADED,
+                overall_confidence=0.05,
+            ),
+        )
+    )
+    response_levels = {
+        action.action_level
+        for action in plan.actions
+        if action.tool_name != TERMINAL_DISPOSITION_TOOL
+    }
+    assert response_levels <= {ActionLevel.L0, ActionLevel.L1}
+    assert "zero_evidence_limited" in plan.strategy_summary
+
+
+@pytest.mark.asyncio
+async def test_sufficient_evidence_confirmed_threat_still_allows_l2_plus() -> None:
+    """ISSUE-248: usable evidence + confirmed_threat must still plan high-impact actions."""
+    event_id = f"evt-{uuid4().hex[:8]}"
+    wm = _FakeWorkingMemory()
+    _seed_wm(wm, event_id, triage=_triage())
+    agent = ResponseAgent(
+        llm_client=_UngroundedOnlyLLM(),
+        working_memory=wm,
+        event_service=_FakeEventService(final_verdict=FinalVerdict.CONFIRMED_THREAT),
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    plan = await agent.execute(
+        ResponseAgentInput(
+            event_id=event_id,
+            risk_assessment=_risk(Severity.HIGH, score=90, evidence_limited=False),
+            evidence_output=EvidenceOutput(
+                evidence_list=[_sample_evidence(event_id)],
+                collection_status=CollectionStatus.COMPLETED,
+                overall_confidence=0.92,
+            ),
+        )
+    )
+    tool_names = {action.tool_name for action in plan.actions}
+    assert "block_ip" in tool_names or "disable_account" in tool_names or "isolate_host" in tool_names
+    assert "evidence_sufficiency_gate" not in plan.strategy_summary
 
 
 @pytest.mark.asyncio

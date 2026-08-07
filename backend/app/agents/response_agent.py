@@ -19,6 +19,8 @@ from app.agents.rules.default_response_rules import ResponseRuleAction, get_rule
 from app.agents.rules.response_plan_quality_gate import (
     CONTAINMENT_TOOLS,
     apply_containment_quality_gate,
+    apply_evidence_sufficiency_gate,
+    evidence_blocks_high_impact_actions,
     requires_threat_aligned_containment,
 )
 from app.core.errors import LLMError
@@ -728,28 +730,58 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             )
 
         candidates = policy_filter.filter_candidates(candidates)
-        rule_actions = get_rule_actions(event_type, severity)
-        if requires_threat_aligned_containment(
-            severity=severity,
+        # ISSUE-248: evidence sufficiency has priority over containment alignment.
+        # collection_failed / zero-evidence evidence_limited must not encourage
+        # or retain L2+ actions even when risk_score/severity floors are high.
+        evidence_high_impact_blocked = evidence_blocks_high_impact_actions(
+            evidence_output=input.evidence_output,
             risk_assessment=input.risk_assessment,
-            final_verdict=ctx.get("final_verdict"),
-            entities=entities,
-            disposition_only=disposition_only,
-        ) and not any(item.tool_name in CONTAINMENT_TOOLS for item in rule_actions):
+        )
+        rule_actions = get_rule_actions(event_type, severity)
+        if (
+            not evidence_high_impact_blocked
+            and requires_threat_aligned_containment(
+                severity=severity,
+                risk_assessment=input.risk_assessment,
+                final_verdict=ctx.get("final_verdict"),
+                entities=entities,
+                disposition_only=disposition_only,
+                evidence_output=input.evidence_output,
+            )
+            and not any(item.tool_name in CONTAINMENT_TOOLS for item in rule_actions)
+        ):
             rule_actions = get_rule_actions(event_type, Severity.HIGH)
         rule_fallback_pool = policy_filter.filter_candidates(
             expand_rule_candidates(rule_actions, entities),
         )
-        candidates, generated_by, strategy = apply_containment_quality_gate(
+        if not evidence_high_impact_blocked:
+            candidates, generated_by, strategy = apply_containment_quality_gate(
+                candidates=candidates,
+                rule_fallback_candidates=rule_fallback_pool,
+                generated_by=generated_by,
+                strategy=strategy,
+                severity=severity,
+                risk_assessment=input.risk_assessment,
+                final_verdict=ctx.get("final_verdict"),
+                entities=entities,
+                disposition_only=disposition_only,
+                evidence_output=input.evidence_output,
+            )
+        tool_index = baseline_tool_index()
+
+        def _resolve_tool_level(tool_name: str) -> ActionLevel:
+            meta = tool_index.get(tool_name)
+            return meta.action_level if meta is not None else ActionLevel.L0
+
+        candidates, generated_by, strategy = apply_evidence_sufficiency_gate(
             candidates=candidates,
-            rule_fallback_candidates=rule_fallback_pool,
             generated_by=generated_by,
             strategy=strategy,
-            severity=severity,
+            evidence_output=input.evidence_output,
             risk_assessment=input.risk_assessment,
-            final_verdict=ctx.get("final_verdict"),
-            entities=entities,
             disposition_only=disposition_only,
+            resolve_tool_level=_resolve_tool_level,
+            fallback_safe_candidates=rule_fallback_pool,
         )
         candidates = sort_candidates(candidates)
         candidates = _cap_low_severity_candidates(
@@ -968,6 +1000,21 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             for name in self.capability_manifest.allowed_operations
             if not name.startswith(_QUERY_TOOL_PREFIX) and name != VIRTUAL_DISPOSITION_TOOL
         )
+        # ISSUE-248: soft prompt constraint — hide L2+ tools when evidence is
+        # insufficient. Hard gate in apply_evidence_sufficiency_gate still enforces.
+        if evidence_blocks_high_impact_actions(
+            evidence_output=input.evidence_output,
+            risk_assessment=input.risk_assessment,
+        ):
+            tool_index = baseline_tool_index()
+            capped: list[str] = []
+            for name in available:
+                meta = tool_index.get(name)
+                level = meta.action_level if meta is not None else ActionLevel.L0
+                level_rank = int(level.value[1]) if level.value.startswith("l") else 99
+                if level_rank <= 1:
+                    capped.append(name)
+            available = capped
         messages = build_response_plan_messages(
             triage_result=triage,
             risk_assessment=input.risk_assessment,
