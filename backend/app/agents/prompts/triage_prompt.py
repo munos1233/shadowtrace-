@@ -28,14 +28,20 @@ def _slug_entity_id(prefix: str, value: str) -> str:
 
 _ENTITY_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "accounts": frozenset(
-        {"entity_id", "entity_type", "username", "domain", "display_name", "source_refs", "attributes"}
+        {
+            "entity_id",
+            "entity_type",
+            "username",
+            "domain",
+            "display_name",
+            "source_refs",
+            "attributes",
+        }
     ),
     "hosts": frozenset(
         {"entity_id", "entity_type", "hostname", "ip", "os", "source_refs", "attributes"}
     ),
-    "ips": frozenset(
-        {"entity_id", "entity_type", "address", "scope", "source_refs", "attributes"}
-    ),
+    "ips": frozenset({"entity_id", "entity_type", "address", "scope", "source_refs", "attributes"}),
     "domains": frozenset({"entity_id", "entity_type", "fqdn", "source_refs", "attributes"}),
     "processes": frozenset(
         {
@@ -97,9 +103,11 @@ def _coerce_entity_list(
     return out
 
 
-def coerce_entities_payload(entities: Any) -> dict[str, Any]:
+def coerce_entities_payload(entities: Any) -> Any:
     """Normalize LLM entity payload: keep known fields, fill missing entity_id."""
 
+    if isinstance(entities, EntitySet):
+        return entities
     if not isinstance(entities, dict):
         return {
             "accounts": [],

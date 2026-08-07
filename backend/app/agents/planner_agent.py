@@ -30,13 +30,13 @@ from app.agents.prompts.planner_prompt import (
     build_plan_generate_messages,
     build_plan_revise_messages,
 )
-from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 from app.agents.rules.default_plans import (
     MIN_PLAN_STEPS,
     get_default_plan,
     get_revised_default_plan,
 )
 from app.core.llm.base import LLMMessage
+from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
 from app.models.agent_io import (
     AGENT_INPUT_BY_NAME as _AGENT_INPUT_BY_NAME,
 )

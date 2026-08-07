@@ -34,35 +34,34 @@ from app.core.llm.prompt_quality import (  # noqa: E402
 )
 
 
+def _load_jsonl(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise SystemExit(f"JSONL line {line_no} must be an object")
+        rows.append(payload)
+    return rows
+
+
 def _load_rows(path: Path | None) -> list[dict[str, Any]]:
     raw = sys.stdin.read() if path is None else path.read_text(encoding="utf-8")
     text = raw.strip()
     if not text:
         return []
     if path is not None and path.suffix.lower() == ".jsonl":
-        rows: list[dict[str, Any]] = []
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            line = line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                raise SystemExit(f"JSONL line {line_no} must be an object")
-            rows.append(payload)
-        return rows
-    # stdin JSONL heuristic: multiple non-empty lines, first is object
-    if path is None and "\n" in text and text.lstrip().startswith("{"):
-        rows = []
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            line = line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                raise SystemExit(f"stdin JSONL line {line_no} must be an object")
-            rows.append(payload)
-        return rows
-    payload = json.loads(text)
+        return _load_jsonl(text)
+    # Multi-line object stream → JSONL (stdin or extension-less dumps).
+    if "\n" in text and text.lstrip().startswith("{"):
+        return _load_jsonl(text)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        # Last resort for extension-less JSONL files.
+        return _load_jsonl(text)
     if isinstance(payload, list):
         rows = []
         for idx, item in enumerate(payload):

@@ -91,6 +91,8 @@ def test_compute_prompt_key_invalid_rates_demo_gate() -> None:
 
 
 def test_triage_wire_model_fills_missing_entity_id_and_ignores_extras() -> None:
+    from app.models.entities import AccountEntity, EntitySet, HostEntity
+
     parsed = TriageLLMResponse.model_validate(
         {
             "event_type": "not_a_real_type",
@@ -112,6 +114,19 @@ def test_triage_wire_model_fills_missing_entity_id_and_ignores_extras() -> None:
     assert "JSON" in TRIAGE_SYSTEM_PROMPT.upper() or "json" in TRIAGE_SYSTEM_PROMPT
     messages = build_triage_messages("Account svc-backup failed login")
     assert "JSON only" in messages[1].content
+
+    # Constructed EntitySet instances must not be wiped by wire coercion.
+    existing = EntitySet(
+        accounts=[AccountEntity(entity_id="acct-1", username="alice")],
+        hosts=[HostEntity(entity_id="host-1", hostname="pc-1")],
+    )
+    preserved = TriageLLMResponse(
+        event_type=EventType.ACCOUNT_ANOMALY,
+        entities=existing,
+        decision_summary="keep",
+    )
+    assert preserved.entities.accounts[0].username == "alice"
+    assert preserved.entities.hosts[0].hostname == "pc-1"
 
 
 def test_plan_wire_model_ignores_server_owned_fields() -> None:
