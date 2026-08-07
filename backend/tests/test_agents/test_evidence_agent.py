@@ -648,7 +648,8 @@ async def test_missing_event_service_marks_missing_scope_gaps(
     assert len(output.failed_sources) == len(EVIDENCE_QUERY_ORDER)
 
 
-def test_resolve_tool_outcome_distinguishes_empty_failed_and_skipped() -> None:
+@pytest.mark.asyncio(loop_scope="function")
+async def test_resolve_tool_outcome_distinguishes_empty_failed_and_skipped() -> None:
     """ISSUE-249: tool_ok_empty / tool_failed / source_skipped are mutually exclusive."""
     assert (
         resolve_tool_outcome(success=True, failed=False, gap_reason=None) == "tool_ok"
