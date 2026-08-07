@@ -99,16 +99,6 @@ class LLMInvalidJSONError(LLMError):
     ) -> None:
         self.invalid_content = invalid_content
         self.validation_error = validation_error
-<<<<<<< HEAD
-        self.error_class = error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
-        super().__init__(
-            message,
-            details={
-                "validation_error": validation_error,
-                "error_class": self.error_class,
-            },
-        )
-=======
         self.finish_reason = finish_reason
         self.error_class = error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
         details: dict[str, Any] = {
@@ -118,7 +108,6 @@ class LLMInvalidJSONError(LLMError):
         if finish_reason:
             details["finish_reason"] = finish_reason
         super().__init__(message, details=details)
->>>>>>> 1feb761 (fix(ISSUE-239): bounded empty/truncated JSON recovery for real LLM clients)
 
 
 class LLMProviderError(LLMError):
