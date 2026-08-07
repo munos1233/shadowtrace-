@@ -140,6 +140,20 @@ def test_production_accepts_react_with_tool_call_grant() -> None:
     assert settings.production_fail_closed_violations() == []
 
 
+def test_production_rejects_decision_rationale_short_text() -> None:
+    """ISSUE-243: production may only use off|structured for decision rationale mode."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        Settings(**_base_kwargs(DECISION_RATIONALE_MODE="short_text"))
+    violations = exc_info.value.details["violations"]
+    assert any("decision_rationale_mode=short_text" in v for v in violations)
+
+
+def test_production_accepts_structured_decision_rationale_mode() -> None:
+    settings = Settings(**_base_kwargs(DECISION_RATIONALE_MODE="structured"))
+    assert settings.decision_rationale_mode == "structured"
+    assert settings.production_fail_closed_violations() == []
+
+
 def test_development_allows_trusted_proxy_with_empty_allowlist() -> None:
     settings = Settings(
         APP_ENV="development",

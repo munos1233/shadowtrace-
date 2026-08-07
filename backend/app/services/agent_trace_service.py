@@ -45,15 +45,6 @@ _COT_KEYS = frozenset(
     }
 )
 _NOT_RETAINED = "[NOT_RETAINED]"
-_LEGACY_NARRATIVE_KEYS = frozenset(
-    {
-        "summary",
-        "narrative_summary",
-        "strategy_summary",
-        "analysis",
-        "explanation",
-    }
-)
 DecisionRationaleMode = Literal["off", "structured", "short_text"]
 _VALID_RATIONALE_MODES = frozenset({"off", "structured", "short_text"})
 
@@ -314,7 +305,9 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
         )
         if note_bits:
             joined = "; ".join(note_bits)
-            return _truncate_text(f"{base}; {joined}" if base else joined, _MAX_DECISION_SUMMARY_CHARS)
+            return _truncate_text(
+                f"{base}; {joined}" if base else joined, _MAX_DECISION_SUMMARY_CHARS
+            )
         return base
 
     if name == "risk_agent":
@@ -324,9 +317,7 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
                 if data.get("risk_score") is not None
                 else "",
                 f"severity={data.get('severity')}" if data.get("severity") is not None else "",
-                f"mode={data.get('scoring_mode')}"
-                if data.get("scoring_mode") is not None
-                else "",
+                f"mode={data.get('scoring_mode')}" if data.get("scoring_mode") is not None else "",
             ]
         )
 
@@ -421,9 +412,7 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
             f"overall_status={data.get('overall_status')}"
             if data.get("overall_status") is not None
             else "",
-            f"reason_code={data.get('reason_code')}"
-            if data.get("reason_code") is not None
-            else "",
+            f"reason_code={data.get('reason_code')}" if data.get("reason_code") is not None else "",
             f"selected_action={data.get('selected_action')}"
             if data.get("selected_action") is not None
             else "",
@@ -638,7 +627,9 @@ class TraceProjection:
             field_value = data.get(key)
             if isinstance(field_value, list) and field_value:
                 entity_audit[key] = field_value[:20]
-            elif key == "entity_rejection_summary" and isinstance(field_value, dict) and field_value:
+            elif (
+                key == "entity_rejection_summary" and isinstance(field_value, dict) and field_value
+            ):
                 entity_audit[key] = field_value
         degradation_reasons = data.get("degradation_reasons")
         if isinstance(degradation_reasons, list) and degradation_reasons:
