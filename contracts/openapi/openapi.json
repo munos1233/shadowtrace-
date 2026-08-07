@@ -8289,10 +8289,11 @@
         "enum": [
           "evidence_grounded",
           "legacy_evidence_grounded",
-          "claim_refs_unavailable"
+          "claim_refs_unavailable",
+          "ungrounded"
         ],
         "title": "StorylineGroundingStatus",
-        "description": "How storyline claims are grounded to evidence (ISSUE-116 Phase B)."
+        "description": "How storyline claims are grounded to evidence (ISSUE-116 Phase B / ISSUE-244)."
       },
       "StorylinePhase": {
         "properties": {

@@ -230,11 +230,13 @@ class StorylineClaimRef(BaseModel):
 
 
 class StorylineGroundingStatus(StrEnum):
-    """How storyline claims are grounded to evidence (ISSUE-116 Phase B)."""
+    """How storyline claims are grounded to evidence (ISSUE-116 Phase B / ISSUE-244)."""
 
     EVIDENCE_GROUNDED = "evidence_grounded"
     LEGACY_EVIDENCE_GROUNDED = "legacy_evidence_grounded"
     CLAIM_REFS_UNAVAILABLE = "claim_refs_unavailable"
+    # Empty phases / no bindable evidence_ids — must not claim evidence_grounded.
+    UNGROUNDED = "ungrounded"
 
 
 class StorylinePhase(BaseModel):

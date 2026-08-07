@@ -377,7 +377,8 @@ export interface StorylinePhase {
 export type StorylineGroundingStatus =
   | "evidence_grounded"
   | "legacy_evidence_grounded"
-  | "claim_refs_unavailable";
+  | "claim_refs_unavailable"
+  | "ungrounded";
 
 export interface StorylineClaimRef {
   claim_id: string;

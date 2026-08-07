@@ -367,7 +367,9 @@ async def test_rule_path_evidence_scarce_single_phase() -> None:
 
 
 async def test_rule_path_empty_evidence() -> None:
-    """No evidence → empty storyline with rule fallback."""
+    """No evidence → empty storyline with rule fallback (ISSUE-244: not grounded)."""
+    from app.models.agent_io import StorylineGroundingStatus
+
     ctx = _make_event_context(evidence_list=[])
     svc = StorylineService(working_memory=_FakeWorkingMemory())
     storyline = await svc.generate(ctx)
@@ -375,6 +377,9 @@ async def test_rule_path_empty_evidence() -> None:
     assert storyline.generated_by == StorylineGeneratedBy.RULE
     assert storyline.phases == []
     assert len(storyline.narrative_summary) > 0
+    assert storyline.grounding_status is StorylineGroundingStatus.UNGROUNDED
+    assert storyline.grounding_status is not StorylineGroundingStatus.EVIDENCE_GROUNDED
+    assert storyline.claim_refs == []
 
 
 async def test_rule_path_wm_write() -> None:

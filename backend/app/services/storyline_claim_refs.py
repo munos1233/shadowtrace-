@@ -1,4 +1,4 @@
-"""Storyline claim ref builder (ISSUE-116 Phase B / #621)."""
+"""Storyline claim ref builder (ISSUE-116 Phase B / #621, ISSUE-244)."""
 
 from __future__ import annotations
 
@@ -29,19 +29,45 @@ def build_storyline_claim_refs(storyline: AttackStoryline) -> list[StorylineClai
     return refs
 
 
+def resolve_storyline_grounding_status(
+    storyline: AttackStoryline,
+    *,
+    claim_refs: list[StorylineClaimRef] | None = None,
+) -> StorylineGroundingStatus:
+    """Evidence-grounded only when phases exist and at least one claim binds evidence.
+
+    Thin / empty storylines (``phases=[]`` or timeline entries without
+    ``evidence_id``) must not advertise ``evidence_grounded`` (ISSUE-244).
+    """
+    refs = claim_refs if claim_refs is not None else build_storyline_claim_refs(storyline)
+    if storyline.phases and refs:
+        return StorylineGroundingStatus.EVIDENCE_GROUNDED
+    return StorylineGroundingStatus.UNGROUNDED
+
+
 def attach_storyline_claim_refs(
     storyline: AttackStoryline,
     *,
     grounding_status: StorylineGroundingStatus,
 ) -> AttackStoryline:
     claim_refs = build_storyline_claim_refs(storyline)
+    status = grounding_status
+    # Defence-in-depth: never allow evidence_grounded without bindable claims.
+    if status is StorylineGroundingStatus.EVIDENCE_GROUNDED and (
+        not storyline.phases or not claim_refs
+    ):
+        status = StorylineGroundingStatus.UNGROUNDED
     return storyline.model_copy(
         update={
             "schema_version": "2.0",
             "claim_refs": claim_refs,
-            "grounding_status": grounding_status,
+            "grounding_status": status,
         }
     )
 
 
-__all__ = ["attach_storyline_claim_refs", "build_storyline_claim_refs"]
+__all__ = [
+    "attach_storyline_claim_refs",
+    "build_storyline_claim_refs",
+    "resolve_storyline_grounding_status",
+]

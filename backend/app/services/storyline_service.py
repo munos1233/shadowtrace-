@@ -28,7 +28,10 @@ from app.models.agent_io import (
 )
 from app.models.enums import Severity
 from app.models.ids import new_storyline_id
-from app.services.storyline_claim_refs import attach_storyline_claim_refs
+from app.services.storyline_claim_refs import (
+    attach_storyline_claim_refs,
+    resolve_storyline_grounding_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -386,11 +389,16 @@ class StorylineService:
 
     @staticmethod
     def _finalize_storyline(storyline: AttackStoryline) -> AttackStoryline:
-        """Attach evidence-bound claim refs; preserve storyline on failure."""
+        """Attach evidence-bound claim refs; preserve storyline on failure.
+
+        ISSUE-244: empty phases / no bindable evidence must not be labeled
+        ``evidence_grounded``. Status is resolved from phases + claim refs.
+        """
         try:
+            grounding_status = resolve_storyline_grounding_status(storyline)
             return attach_storyline_claim_refs(
                 storyline,
-                grounding_status=StorylineGroundingStatus.EVIDENCE_GROUNDED,
+                grounding_status=grounding_status,
             )
         except Exception:
             logger.warning(

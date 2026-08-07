@@ -62,6 +62,7 @@ def test_attack_storyline_schema_exports_grounding_status_enum() -> None:
     assert StorylineGroundingStatus.EVIDENCE_GROUNDED.value in enum_values
     assert StorylineGroundingStatus.LEGACY_EVIDENCE_GROUNDED.value in enum_values
     assert StorylineGroundingStatus.CLAIM_REFS_UNAVAILABLE.value in enum_values
+    assert StorylineGroundingStatus.UNGROUNDED.value in enum_values
 
 
 @pytest.mark.parametrize(
