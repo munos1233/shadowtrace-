@@ -351,6 +351,9 @@ class EvidenceQuerySummaryItem(BaseModel):
     execution_time_ms: int = 0
     records_count: int = 0
     gap_reason: str | None = None
+    # ISSUE-249: tool-layer outcome orthogonal to collection_status thresholds.
+    tool_outcome: str | None = None
+    provider_status: str | None = None
 
 
 class EvidenceTriageContextResponse(BaseModel):

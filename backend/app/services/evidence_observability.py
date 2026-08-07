@@ -44,6 +44,8 @@ def build_query_summary_items(
         item = timing_by_tool[tool_name]
         if not isinstance(item, dict):
             continue
+        tool_outcome = item.get("tool_outcome")
+        provider_status = item.get("provider_status")
         summary.append(
             {
                 "tool_name": str(item.get("tool_name") or tool_name),
@@ -53,6 +55,10 @@ def build_query_summary_items(
                 "records_count": int(item.get("records_count") or 0),
                 "gap_reason": (
                     str(item["gap_reason"]) if item.get("gap_reason") is not None else None
+                ),
+                "tool_outcome": str(tool_outcome) if tool_outcome is not None else None,
+                "provider_status": (
+                    str(provider_status) if provider_status is not None else None
                 ),
             }
         )

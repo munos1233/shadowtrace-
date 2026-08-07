@@ -5959,6 +5959,28 @@
               }
             ],
             "title": "Gap Reason"
+          },
+          "tool_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Outcome"
+          },
+          "provider_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Status"
           }
         },
         "additionalProperties": false,

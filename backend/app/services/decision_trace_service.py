@@ -279,19 +279,39 @@ def _normalize_tool_calls(
             "retry_count": row.retry_count,
         }
         timing = enrich.get(row.tool_name)
+        tool_outcome = None
         if isinstance(timing, dict):
             if "records_count" in timing:
                 detail["records_count"] = timing["records_count"]
             gap_reason = timing.get("gap_reason")
             if gap_reason is not None:
                 detail["gap_reason"] = gap_reason
+            tool_outcome = timing.get("tool_outcome")
+            if tool_outcome is not None:
+                detail["tool_outcome"] = tool_outcome
+            provider_status = timing.get("provider_status")
+            if provider_status is not None:
+                detail["provider_status"] = provider_status
+        # ISSUE-249: title must separate provider status from empty-result semantics.
+        if tool_outcome == "tool_ok_empty":
+            title = (
+                f"{row.tool_name} 工具调用完成：status={row.status} "
+                f"tool_outcome=tool_ok_empty（工具成功但无可用记录）"
+            )
+        elif tool_outcome is not None:
+            title = (
+                f"{row.tool_name} 工具调用完成：status={row.status} "
+                f"tool_outcome={tool_outcome}"
+            )
+        else:
+            title = f"{row.tool_name} 工具调用完成：status={row.status}"
         entries.append(
             DecisionTraceEntry(
                 entry_id=_new_entry_id(),
                 entry_type=DecisionTraceEntryType.TOOL_CALL,
                 timestamp=ts,
                 actor=row.tool_name,
-                title=f"{row.tool_name} 工具调用完成：status={row.status}",
+                title=title,
                 detail=_maybe_inferred_detail(detail, inferred),
                 ref_id=row.call_id,
             )

@@ -92,6 +92,40 @@ _COLLECTION_STATUS_COMPLETED = 5
 _COLLECTION_STATUS_PARTIAL_DONE = 3
 _COLLECTION_STATUS_DEGRADED = 1
 
+# Tool-layer observability outcomes (ISSUE-249). Orthogonal to collection_status:
+# HTTP/tool SUCCESS with zero parsed rows is tool_ok_empty, not a success_source.
+TOOL_OUTCOME_OK = "tool_ok"
+TOOL_OUTCOME_OK_EMPTY = "tool_ok_empty"
+TOOL_OUTCOME_FAILED = "tool_failed"
+TOOL_OUTCOME_SKIPPED = "source_skipped"
+
+_SKIP_GAP_REASONS = frozenset({"source_skipped", "invalid_entity", "triage_degraded"})
+_FAILED_GAP_REASONS = frozenset({"tool_failed", "global_timeout", "missing_scope"})
+
+
+def resolve_tool_outcome(
+    *,
+    success: bool,
+    failed: bool,
+    gap_reason: str | None,
+) -> str:
+    """Map a query outcome to tool-layer semantics (ISSUE-249).
+
+    Distinguishes provider-success empty results from hard failures and skips.
+    Never promotes empty/tool HTTP success into collection success_sources.
+    """
+    if success:
+        return TOOL_OUTCOME_OK
+    if gap_reason == "no_records":
+        return TOOL_OUTCOME_OK_EMPTY
+    if gap_reason in _SKIP_GAP_REASONS:
+        return TOOL_OUTCOME_SKIPPED
+    if gap_reason in _FAILED_GAP_REASONS or failed:
+        return TOOL_OUTCOME_FAILED
+    if gap_reason:
+        return TOOL_OUTCOME_FAILED
+    return TOOL_OUTCOME_FAILED
+
 
 def _entity_provenance(entity: Any) -> str:
     return "source" if getattr(entity, "source_refs", None) else "llm"
@@ -1092,18 +1126,32 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
         source: EvidenceSource = outcome["source"]
         source_value = source.value
         timing_ms = int(outcome.get("timing_ms") or 0)
-        status_text = str(outcome.get("status_text") or "")
+        provider_status = str(outcome.get("status_text") or "")
         parsed: list[Evidence] = list(outcome.get("parsed") or [])
         gap = outcome.get("gap")
         gap_reason = gap.reason if gap is not None else None
         records_count = len(parsed)
         dedupe_key = outcome.get("dedupe_key")
+        tool_outcome = resolve_tool_outcome(
+            success=bool(outcome.get("success")),
+            failed=bool(outcome.get("failed")),
+            gap_reason=gap_reason,
+        )
+        # Surface tool_ok_empty in status so traces/UI cannot misread provider
+        # SUCCESS + zero records as a healthy collection contribution.
+        status_text = (
+            TOOL_OUTCOME_OK_EMPTY
+            if tool_outcome == TOOL_OUTCOME_OK_EMPTY
+            else provider_status
+        )
 
         self.last_query_timings.append(
             {
                 "tool_name": tool_name,
                 "source": source_value,
                 "status": status_text,
+                "provider_status": provider_status,
+                "tool_outcome": tool_outcome,
                 "execution_time_ms": timing_ms,
                 "records_count": records_count,
                 "gap_reason": gap_reason,

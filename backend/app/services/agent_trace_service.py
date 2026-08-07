@@ -327,6 +327,18 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
     if name == "evidence_agent":
         query_timings = data.get("query_timings") or []
         query_count = len(query_timings) if isinstance(query_timings, list) else 0
+        empty_ok_count = 0
+        if isinstance(query_timings, list):
+            empty_ok_count = sum(
+                1
+                for row in query_timings
+                if isinstance(row, Mapping)
+                and (
+                    row.get("tool_outcome") == "tool_ok_empty"
+                    or row.get("gap_reason") == "no_records"
+                    or row.get("status") == "tool_ok_empty"
+                )
+            )
         query_plan = data.get("query_plan") if isinstance(data.get("query_plan"), Mapping) else {}
         degraded = query_plan.get("degraded_reasons") if isinstance(query_plan, Mapping) else None
         if isinstance(degraded, list) and degraded:
@@ -340,6 +352,7 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
                 if data.get("collection_status") is not None
                 else "",
                 f"queries={query_count}",
+                f"tool_ok_empty={empty_ok_count}" if empty_ok_count else "",
             ]
         )
 

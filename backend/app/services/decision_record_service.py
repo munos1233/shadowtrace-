@@ -352,13 +352,25 @@ def _enrich_agent_output(
                     "decision_summary",
                     ",".join(str(item) for item in degraded)[:512],
                 )
-        enriched.setdefault(
-            "decision_summary",
-            (
-                f"collection_status={output_data.get('collection_status')} "
-                f"queries={len(query_timings) if isinstance(query_timings, list) else 0}"
-            )[:512],
+        empty_ok_count = 0
+        if isinstance(query_timings, list):
+            empty_ok_count = sum(
+                1
+                for row in query_timings
+                if isinstance(row, dict)
+                and (
+                    row.get("tool_outcome") == "tool_ok_empty"
+                    or row.get("gap_reason") == "no_records"
+                    or row.get("status") == "tool_ok_empty"
+                )
+            )
+        summary = (
+            f"collection_status={output_data.get('collection_status')} "
+            f"queries={len(query_timings) if isinstance(query_timings, list) else 0}"
         )
+        if empty_ok_count:
+            summary = f"{summary} tool_ok_empty={empty_ok_count}"
+        enriched.setdefault("decision_summary", summary[:512])
         enriched.setdefault("selected_action", f"evidence:{output_data.get('collection_status')}")
     elif agent_name == "verify_agent":
         overall_status = output_data.get("overall_status")
