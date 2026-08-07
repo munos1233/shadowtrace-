@@ -1800,7 +1800,7 @@ def build_investigation_graph(
                     error_code="report_generation_failed",
                     details={"event_id": event_id},
                 )
-        except Exception as exc:
+        except Exception:
             # ISSUE-242: never leave REPORTING with a silent missing row —
             # persist explicit failure markers before _wrap_node marks FAILED.
             await _persist_report_generated_flag(False)
