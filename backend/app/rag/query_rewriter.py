@@ -1,4 +1,4 @@
-"""QueryRewriter: LLM-driven query rewriting for RAG retrieval (ISSUE-045)."""
+"""QueryRewriter: LLM-driven query rewriting for RAG retrieval (ISSUE-045 / ISSUE-239)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ from app.core.llm.base import BaseLLMClient, LLMMessage
 from app.rag.context import RetrievalContext
 
 logger = logging.getLogger(__name__)
+
+# Thinking/compatible models often spend completion budget before content; 256 was too tight.
+_QUERY_REWRITE_MAX_TOKENS = 768
 
 
 class QueryRewriteError(Exception):
@@ -46,21 +49,27 @@ class QueryRewriter:
                     LLMMessage(
                         role="system",
                         content=(
-                            "You are a search query rewriter. Generate up to 2 alternative "
-                            "search queries that express the same information need using "
-                            "different keywords, terminology, or perspectives."
+                            "You are a search query rewriter for hybrid retrieval. "
+                            "Return a single JSON object only (no markdown fences) with shape "
+                            '{"rewrites":["...", "..."]}. '
+                            "Generate up to 2 alternative search queries that express the same "
+                            "information need using different keywords, terminology, or "
+                            "perspectives. Use an empty list when no useful rewrite exists."
                         ),
                     ),
                     LLMMessage(
                         role="user",
-                        content=f"Rewrite this query for hybrid search: {query}",
+                        content=(
+                            "Rewrite this query for hybrid search and respond with JSON only:\n"
+                            f"{query}"
+                        ),
                     ),
                 ],
                 event_id=context.event_id,
                 agent_name=self._agent_name,
                 prompt_key="query_rewrite",
                 temperature=0.3,
-                max_tokens=256,
+                max_tokens=_QUERY_REWRITE_MAX_TOKENS,
                 json_mode=True,
                 response_model=QueryRewriteOutput,
                 timeout=15.0,
