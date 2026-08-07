@@ -62,7 +62,7 @@ CI_BUILD_PROJECT_PREFIX ?= $(COMPOSE_PROJECT_NAME)-ci-build
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
+.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest eval-full-loop test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
 	$(COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
@@ -90,10 +90,40 @@ down-v:
 # Set LOAD_KB=true to also load attack/case knowledge bases (~30-60 s extra).
 # ---------------------------------------------------------------------------
 bootstrap:
-	@LOAD_KB="$(LOAD_KB)" bash "$(CURDIR)/scripts/bootstrap.sh"
+	@LOAD_KB="$(LOAD_KB)" \
+	BOOTSTRAP_GENERATE_REPORT="$(BOOTSTRAP_GENERATE_REPORT)" \
+	BOOTSTRAP_INCLUDE_RESPONSE="$(BOOTSTRAP_INCLUDE_RESPONSE)" \
+	bash "$(CURDIR)/scripts/bootstrap.sh"
 
 smoke-bootstrap:
 	@bash "$(CURDIR)/scripts/smoke_bootstrap.sh"
+
+# ---------------------------------------------------------------------------
+# ISSUE-256 gold-path dynamic eval (mock-xdr seed → full_loop → scripted approve)
+#
+# Prerequisites: healthy stack with investigation execution
+#   (make up-demo, or make up WORKER=1). Prefer one scenario for predictable
+#   timing — worker celery -c 2 queues when 3 investigations run in parallel.
+# Does NOT change production APPROVAL_TIMEOUT_MINUTES (default 30).
+# ---------------------------------------------------------------------------
+EVAL_SCENARIO ?= insider_data_exfiltration
+EVAL_MAX_EVENTS ?= 1
+EVAL_DECISION ?= approve
+BOOTSTRAP_AUTH_TOKEN ?= bootstrap-token
+BOOTSTRAP_GENERATE_REPORT ?= false
+BOOTSTRAP_INCLUDE_RESPONSE ?= false
+eval-full-loop:
+	@echo "[eval-full-loop] gold fixture=seed_mock_xdr_and_ingest scenario=$(EVAL_SCENARIO)"
+	@echo "[eval-full-loop] scripted $(EVAL_DECISION) — never finish via APPROVAL_TIMEOUT"
+	COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
+	BACKEND_PORT="$(BACKEND_PORT)" \
+	python3 "$(CURDIR)/scripts/dynamic_eval_full_loop.py" \
+		--seed-via-compose \
+		--scenario "$(EVAL_SCENARIO)" \
+		--base-url "http://127.0.0.1:$(BACKEND_PORT)" \
+		--token "$(BOOTSTRAP_AUTH_TOKEN)" \
+		--max-events "$(EVAL_MAX_EVENTS)" \
+		--decision "$(EVAL_DECISION)"
 
 # ---------------------------------------------------------------------------
 # Mock demo full stack (ISSUE-141 / #647): core + worker + scheduler + OTEL

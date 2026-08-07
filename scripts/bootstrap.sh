@@ -5,6 +5,8 @@
 # Usage:
 #   make bootstrap               # migrate + seed 3 demo scenarios + playbook release
 #   LOAD_KB=true make bootstrap  # also load attack/case knowledge bases (P1, slower)
+#   BOOTSTRAP_GENERATE_REPORT=true make bootstrap          # ISSUE-256 demo report profile
+#   BOOTSTRAP_INCLUDE_RESPONSE=true make bootstrap         # full_loop (needs scripted approve)
 #
 # Prerequisites:
 #   - Docker Compose core services must be healthy (make up).
@@ -61,6 +63,14 @@ FRONTEND_URL="http://127.0.0.1:${FRONTEND_PORT}"
 
 # Auth token — must match DEV_AUTH_TOKENS in docker-compose.yml.
 AUTH_TOKEN="${BOOTSTRAP_AUTH_TOKEN:-bootstrap-token}"
+
+# ISSUE-256 demo/eval profile knobs (defaults preserve ISSUE-088 behaviour).
+# - BOOTSTRAP_GENERATE_REPORT=true  → investigate with generate_report=true
+# - BOOTSTRAP_INCLUDE_RESPONSE=true → include_response_execution=true (needs
+#   scripted approve via scripts/dynamic_eval_approve.py — do NOT wait for
+#   production APPROVAL_TIMEOUT_MINUTES=30).
+BOOTSTRAP_GENERATE_REPORT="${BOOTSTRAP_GENERATE_REPORT:-false}"
+BOOTSTRAP_INCLUDE_RESPONSE="${BOOTSTRAP_INCLUDE_RESPONSE:-false}"
 
 # Demo scenario IDs (ISSUE-088 — 3 demo scenarios).
 DEMO_SCENARIOS=(
@@ -160,7 +170,16 @@ fi
 # 4. Trigger investigation on all "new" events via the backend API
 # --------------------------------------------------------------------------
 echo "[bootstrap] triggering investigation on demo events ..."
-python3 - "${BACKEND_PORT}" "${AUTH_TOKEN}" << 'PYTHON_SCRIPT'
+echo "[bootstrap] profile: generate_report=${BOOTSTRAP_GENERATE_REPORT} include_response_execution=${BOOTSTRAP_INCLUDE_RESPONSE}"
+if [ "${BOOTSTRAP_INCLUDE_RESPONSE}" = "true" ]; then
+  echo "[bootstrap] NOTE: full_loop will pause on waiting_approval — use"
+  echo "[bootstrap]   python3 scripts/dynamic_eval_approve.py --event-id <id>"
+  echo "[bootstrap]   or: make eval-full-loop"
+  echo "[bootstrap] Do NOT wait for APPROVAL_TIMEOUT_MINUTES (prod default 30)."
+fi
+# Worker concurrency honesty (R2-017): compose worker uses celery -c 2.
+echo "[bootstrap] NOTE: with worker -c 2, triggering 3 investigations queues (~minutes)."
+python3 - "${BACKEND_PORT}" "${AUTH_TOKEN}" "${BOOTSTRAP_GENERATE_REPORT}" "${BOOTSTRAP_INCLUDE_RESPONSE}" << 'PYTHON_SCRIPT'
 import http.client
 import json
 import sys
@@ -168,6 +187,8 @@ import time
 
 backend_port = sys.argv[1]
 auth_token = sys.argv[2]
+generate_report = sys.argv[3].strip().lower() in {"1", "true", "yes", "on"}
+include_response = sys.argv[4].strip().lower() in {"1", "true", "yes", "on"}
 
 def api_call(method: str, path: str, body: dict | None = None, max_retries: int = 3):
     last_exc = None
@@ -220,10 +241,17 @@ for item in items:
     resp, _inv_data = api_call(
         "POST",
         f"/api/v1/events/{event_id}/investigate",
-        {"generate_report": False},
+        {
+            "generate_report": generate_report,
+            "include_response_execution": include_response,
+        },
     )
     if resp.status in (200, 202):
-        print(f"  triggered investigation for {event_id} (type={item.get('event_type')})")
+        print(
+            f"  triggered investigation for {event_id} "
+            f"(type={item.get('event_type')} generate_report={generate_report} "
+            f"include_response_execution={include_response})"
+        )
         triggered += 1
     else:
         print(f"  [skip] {event_id}: HTTP {resp.status}")
@@ -295,6 +323,10 @@ echo -e "  Mock XDR:  ${YELLOW}${MOCK_XDR_HEALTH}${NC}"
 echo ""
 echo -e "  演示门禁:  curl -s ${BACKEND_HEALTH} | jq .playbook_resources"
 echo -e "  冒烟验证:  bash scripts/smoke_bootstrap.sh"
+echo -e "  金标全闭环: make eval-full-loop   # ISSUE-256（seed_mock_xdr + 脚本审批）"
 echo -e "  查看日志:  ${COMPOSE_CMD} logs -f backend"
 echo -e "  make down  停止并移除容器（数据卷保留）"
+echo ""
+echo -e "  剖面开关: BOOTSTRAP_GENERATE_REPORT=true make bootstrap"
+echo -e "           BOOTSTRAP_INCLUDE_RESPONSE=true make bootstrap  # 需脚本审批，勿空等 30min"
 echo ""
