@@ -197,13 +197,15 @@ function makeTraceEntries(): DecisionTraceEntry[] {
       entryType === "agent_execution"
         ? {
             structured_conclusion: "存在横向移动风险",
+            brief: "存在横向移动风险",
             evidence_refs: ["ev-1"],
             rules_applied: ["R-17"],
             model_name: "risk-model",
             model_version: "v2",
             confidence: 0.91,
             warnings: ["需要人工复核"],
-            chain_of_thought: "must-not-render-hidden-reasoning",
+            thought: "[NOT_RETAINED]",
+            chain_of_thought: "[NOT_RETAINED]",
           }
         : entryType === "writeback"
           ? {
@@ -258,10 +260,35 @@ describe("DecisionTraceTimeline", () => {
     expect(
       screen.queryByText("must-not-render-hidden-reasoning"),
     ).not.toBeInTheDocument();
+    expect(screen.getByText("原始思维链未保留（ISSUE-131）")).toBeInTheDocument();
+    expect(screen.queryByText("[NOT_RETAINED]")).not.toBeInTheDocument();
 
     const first = screen.getByTestId("trace-entry-writeback");
     const last = screen.getByTestId("trace-entry-agent_execution");
     expect(first.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders summary_unavailable when structured brief is missing", () => {
+    renderWithProviders(
+      <DecisionTraceTimeline
+        entries={[
+          {
+            entry_id: "entry-empty",
+            entry_type: "agent_execution",
+            timestamp: "2026-07-28T01:00:00Z",
+            actor: "memory_agent",
+            title: "memory_agent 完成执行：summary_unavailable=empty_output",
+            detail: {
+              summary_unavailable: "empty_output",
+              thought: "[NOT_RETAINED]",
+            },
+            ref_id: "trc-1",
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("summary_unavailable=empty_output")).toBeInTheDocument();
+    expect(screen.getByText("原始思维链未保留（ISSUE-131）")).toBeInTheDocument();
   });
 
   it("filters entry types and opens linked tool detail", async () => {
