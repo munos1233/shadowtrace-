@@ -18,6 +18,28 @@ from app.core.llm.base import (
 from app.core.llm.url_utils import normalize_llm_base_url
 
 
+def _normalize_message_content(content: Any) -> str:
+    """Normalize provider content to a string; null/parts become empty or joined text."""
+
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                elif item.get("type") == "text" and isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+        return "".join(parts)
+    raise TypeError("message content must be a string, null, or content parts")
+
+
 class OpenAICompatibleLLMClient(BaseLLMClient):
     """Client for APIs implementing the public OpenAI chat-completions shape."""
 
@@ -103,14 +125,17 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
 
         try:
             body = response.json()
-            content = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            message = choice["message"]
+            content = _normalize_message_content(message.get("content"))
+            finish_reason = choice.get("finish_reason")
+            if finish_reason is not None and not isinstance(finish_reason, str):
+                finish_reason = str(finish_reason)
             usage = body.get("usage") or {}
             prompt_tokens = int(usage.get("prompt_tokens") or 0)
             completion_tokens = int(usage.get("completion_tokens") or 0)
             total_tokens = int(usage.get("total_tokens") or 0)
             response_model_name = str(body.get("model") or model_name)
-            if not isinstance(content, str):
-                raise TypeError("message content must be a string")
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMProviderError(
                 "LLM provider returned a malformed response",
@@ -124,6 +149,7 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens or prompt_tokens + completion_tokens,
+            finish_reason=finish_reason,
         )
 
     async def probe_chat(self, *, model_name: str | None = None) -> ProviderResponse:

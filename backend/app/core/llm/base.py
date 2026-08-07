@@ -95,9 +95,11 @@ class LLMInvalidJSONError(LLMError):
         invalid_content: str,
         validation_error: str,
         error_class: str = "invalid_json",
+        finish_reason: str | None = None,
     ) -> None:
         self.invalid_content = invalid_content
         self.validation_error = validation_error
+<<<<<<< HEAD
         self.error_class = error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
         super().__init__(
             message,
@@ -106,6 +108,17 @@ class LLMInvalidJSONError(LLMError):
                 "error_class": self.error_class,
             },
         )
+=======
+        self.finish_reason = finish_reason
+        self.error_class = error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
+        details: dict[str, Any] = {
+            "validation_error": validation_error,
+            "error_class": self.error_class,
+        }
+        if finish_reason:
+            details["finish_reason"] = finish_reason
+        super().__init__(message, details=details)
+>>>>>>> 1feb761 (fix(ISSUE-239): bounded empty/truncated JSON recovery for real LLM clients)
 
 
 class LLMProviderError(LLMError):
@@ -208,6 +221,7 @@ class ProviderResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    finish_reason: str | None = None
 
 
 class LLMCallAudit(BaseModel):
@@ -292,6 +306,24 @@ _CJK_RE = re.compile(
     r"\u4e00-\u9fff\uf900-\ufaff]"
 )
 
+_JSON_MODE_HINT = (
+    "Respond with a single valid JSON object only. "
+    "Do not wrap the object in markdown fences or add commentary."
+)
+
+_EMPTY_CONTENT_RETRY_HINT = LLMMessage(
+    role="user",
+    content=(
+        "Previous response had empty content. Return one JSON object only that "
+        "matches the required schema. No markdown fences and no commentary."
+    ),
+)
+
+# Bounded recovery for empty/truncated structured outputs (ISSUE-239).
+_STRUCTURED_OUTPUT_MAX_TOKEN_CAP = 8192
+_EMPTY_CONTENT_RETRIES = 1
+_LENGTH_TRUNCATION_RETRIES = 1
+
 
 def estimate_tokens(text: str) -> int:
     """Deterministic heuristic token estimate (ISSUE-031).
@@ -314,6 +346,32 @@ def estimate_tokens(text: str) -> int:
 
 def _fallback_level(model_index: int) -> int:
     return 0 if model_index == 0 else 1
+
+
+def bump_max_tokens(max_tokens: int, *, cap: int = _STRUCTURED_OUTPUT_MAX_TOKEN_CAP) -> int:
+    """Increase generation budget once for empty/truncated structured output."""
+
+    safe = max(1, int(max_tokens))
+    bumped = max(safe * 2, safe + 512)
+    return min(bumped, cap)
+
+
+def ensure_json_mode_messages(messages: Sequence[LLMMessage]) -> list[LLMMessage]:
+    """Ensure json_object requests also instruct the model to emit JSON.
+
+    OpenAI-compatible providers (including Ark) often require the word ``JSON``
+    in the prompt when ``response_format=json_object``; otherwise content may be
+    empty despite a successful HTTP response.
+    """
+
+    copied = [message.model_copy(deep=True) for message in messages]
+    if any("json" in message.content.lower() for message in copied):
+        return copied
+    system = next((message for message in copied if message.role == "system"), None)
+    if system is not None:
+        system.content = f"{system.content.rstrip()}\n\n{_JSON_MODE_HINT}"
+        return copied
+    return [LLMMessage(role="system", content=_JSON_MODE_HINT), *copied]
 
 
 def _plain_truncate(messages: Sequence[LLMMessage], max_chars: int) -> list[LLMMessage]:
@@ -399,8 +457,9 @@ class BaseLLMClient(ABC):
         del scenario_id  # Used by MockLLMClient; never inferred from prompt content.
         chat_started = time.perf_counter()
         self._validate_context(event_id, agent_name, prompt_key, messages)
-        prepared = self._fit_messages(messages)
         require_json = json_mode or response_model is not None
+        prepared_source = ensure_json_mode_messages(messages) if require_json else list(messages)
+        prepared = self._fit_messages(prepared_source)
         last_error: LLMError | None = None
 
         with traced_operation(
@@ -412,7 +471,7 @@ class BaseLLMClient(ABC):
             for model_index, model_name in enumerate((self.primary_model, *self.fallback_models)):
                 level = _fallback_level(model_index)
                 try:
-                    raw, parsed = await self._attempt(
+                    raw, parsed = await self._complete_structured(
                         prepared,
                         model_name=model_name,
                         event_id=event_id,
@@ -421,29 +480,10 @@ class BaseLLMClient(ABC):
                         fallback_level=level,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        json_mode=require_json,
+                        require_json=require_json,
                         response_model=response_model,
                         timeout=timeout,
                     )
-                except LLMInvalidJSONError as exc:
-                    last_error = exc
-                    try:
-                        repaired, parsed = await self._repair_json(
-                            prepared,
-                            invalid_content=exc.invalid_content,
-                            validation_error=exc.validation_error,
-                            model_name=model_name,
-                            event_id=event_id,
-                            agent_name=agent_name,
-                            prompt_key=prompt_key,
-                            fallback_level=level,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            response_model=response_model,
-                        )
-                        raw = repaired
-                    except LLMError:
-                        raise
                 except LLMAuditError:
                     raise
                 except LLMError as exc:
@@ -496,6 +536,74 @@ class BaseLLMClient(ABC):
         # Conservative 2 chars/token estimate: safe for CJK (~1–2) and English (~4).
         # Over-provision via message_budgeter when precise token counts are needed.
         return _plain_truncate(messages, self.max_input_tokens * 2)
+
+    async def _complete_structured(
+        self,
+        messages: list[LLMMessage],
+        *,
+        model_name: str,
+        event_id: str,
+        agent_name: str,
+        prompt_key: str,
+        fallback_level: int,
+        temperature: float,
+        max_tokens: int,
+        require_json: bool,
+        response_model: type[BaseModel] | None,
+        timeout: float | None = None,
+    ) -> tuple[ProviderResponse, BaseModel | None]:
+        """One model lane: empty/truncation bump (bounded), then one JSON repair.
+
+        Empty content is *not* sent through the JSON repair path (repairing an
+        empty body wastes a call). Invalid JSON still gets exactly one repair.
+        """
+
+        attempt_messages = messages
+        attempt_max_tokens = max_tokens
+        empty_retries = _EMPTY_CONTENT_RETRIES if require_json else 0
+        truncation_retries = _LENGTH_TRUNCATION_RETRIES if require_json else 0
+
+        while True:
+            try:
+                return await self._attempt(
+                    attempt_messages,
+                    model_name=model_name,
+                    event_id=event_id,
+                    agent_name=agent_name,
+                    prompt_key=prompt_key,
+                    fallback_level=fallback_level,
+                    temperature=temperature,
+                    max_tokens=attempt_max_tokens,
+                    json_mode=require_json,
+                    response_model=response_model,
+                    timeout=timeout,
+                )
+            except LLMInvalidJSONError as exc:
+                if exc.error_class == "empty_content":
+                    if empty_retries <= 0:
+                        raise
+                    empty_retries -= 1
+                    attempt_max_tokens = bump_max_tokens(attempt_max_tokens)
+                    attempt_messages = self._fit_messages([*messages, _EMPTY_CONTENT_RETRY_HINT])
+                    continue
+                if truncation_retries > 0 and (exc.finish_reason or "").lower() == "length":
+                    truncation_retries -= 1
+                    attempt_max_tokens = bump_max_tokens(attempt_max_tokens)
+                    continue
+                return await self._repair_json(
+                    messages,
+                    invalid_content=exc.invalid_content,
+                    validation_error=exc.validation_error,
+                    model_name=model_name,
+                    event_id=event_id,
+                    agent_name=agent_name,
+                    prompt_key=prompt_key,
+                    fallback_level=fallback_level,
+                    temperature=temperature,
+                    max_tokens=attempt_max_tokens,
+                    response_model=response_model,
+                    timeout=timeout,
+                )
 
     async def _attempt(
         self,
@@ -550,7 +658,15 @@ class BaseLLMClient(ABC):
             assert raw is not None
             try:
                 await self._charge_budget(raw, event_id=event_id, agent_name=agent_name)
-                parsed = self._parse(raw.content, response_model) if json_mode else None
+                parsed = (
+                    self._parse(
+                        raw.content,
+                        response_model,
+                        finish_reason=raw.finish_reason,
+                    )
+                    if json_mode
+                    else None
+                )
                 status = "success"
             except ShadowTraceError as exc:
                 status = exc.error_code
@@ -599,6 +715,7 @@ class BaseLLMClient(ABC):
         temperature: float,
         max_tokens: int,
         response_model: type[BaseModel] | None,
+        timeout: float | None = None,
     ) -> tuple[ProviderResponse, BaseModel | None]:
         schema = (
             response_model.model_json_schema() if response_model is not None else {"type": "object"}
@@ -628,16 +745,23 @@ class BaseLLMClient(ABC):
             max_tokens=max_tokens,
             json_mode=True,
             response_model=response_model,
+            timeout=timeout,
         )
 
     @staticmethod
-    def _parse(content: str, response_model: type[BaseModel] | None) -> BaseModel | None:
+    def _parse(
+        content: str,
+        response_model: type[BaseModel] | None,
+        *,
+        finish_reason: str | None = None,
+    ) -> BaseModel | None:
         if not content or not content.strip():
             raise LLMInvalidJSONError(
                 "LLM returned empty structured output",
                 invalid_content=content or "",
                 validation_error="empty completion content",
                 error_class="empty_content",
+                finish_reason=finish_reason,
             )
         try:
             payload = json.loads(content)
@@ -666,6 +790,7 @@ class BaseLLMClient(ABC):
                 invalid_content=content,
                 validation_error=validation_error,
                 error_class=error_class,
+                finish_reason=finish_reason,
             ) from exc
 
     async def _check_convergence(
@@ -775,8 +900,10 @@ __all__ = [
     "MessageBudgeterHook",
     "ProviderResponse",
     "SQLAlchemyLLMCallAuditRecorder",
+    "bump_max_tokens",
     "classify_llm_call_failure",
     "default_golden_root",
+    "ensure_json_mode_messages",
     "estimate_tokens",
     "sanitize_llm_error_detail",
 ]
