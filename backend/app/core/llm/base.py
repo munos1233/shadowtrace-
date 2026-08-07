@@ -98,9 +98,7 @@ class LLMInvalidJSONError(LLMError):
     ) -> None:
         self.invalid_content = invalid_content
         self.validation_error = validation_error
-        self.error_class = (
-            error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
-        )
+        self.error_class = error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
         super().__init__(
             message,
             details={
@@ -151,9 +149,7 @@ def classify_llm_call_failure(
 
     if isinstance(error, LLMInvalidJSONError):
         error_class = (
-            error.error_class
-            if error.error_class in LLM_CALL_ERROR_CLASSES
-            else "invalid_json"
+            error.error_class if error.error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
         )
         detail = error.validation_error or error.message
     elif isinstance(error, LLMTimeoutError) or status == "llm_timeout":
