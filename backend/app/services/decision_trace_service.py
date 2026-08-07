@@ -298,6 +298,8 @@ def _normalize_llm_calls(rows: list[orm.LLMCallLog]) -> list[DecisionTraceEntry]
                     "total_tokens": row.total_tokens,
                     "latency_ms": row.latency_ms,
                     "status": row.status,
+                    "error_class": row.error_class,
+                    "error_detail": row.error_detail,
                 },
                 ref_id=str(row.id),
             )

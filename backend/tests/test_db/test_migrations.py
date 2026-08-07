@@ -267,6 +267,8 @@ async def test_llm_call_log_supports_prompt_status_and_failure_audit(
         latency_ms=25,
         fallback_level=0,
         status="llm_timeout",
+        error_class="timeout",
+        error_detail="LLM request timed out",
     )
     session.add(row)
     await session.flush()
@@ -275,6 +277,8 @@ async def test_llm_call_log_supports_prompt_status_and_failure_audit(
     assert stored is not None
     assert stored.prompt_key == "risk_score"
     assert stored.status == "llm_timeout"
+    assert stored.error_class == "timeout"
+    assert stored.error_detail == "LLM request timed out"
     await session.rollback()
 
 

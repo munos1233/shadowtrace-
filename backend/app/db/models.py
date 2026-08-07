@@ -688,6 +688,9 @@ class LLMCallLog(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fallback_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
+    # ISSUE-240: bounded failure taxonomy for durable audit (null on success).
+    error_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(_TS, server_default=func.now(), nullable=False)
 
 

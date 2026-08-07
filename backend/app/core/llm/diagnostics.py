@@ -14,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import LLMError
 from app.core.llm.base import (
     LLMAuthError,
+    LLMInvalidJSONError,
     LLMProviderError,
     LLMRateLimitedError,
     LLMTimeoutError,
@@ -58,8 +59,10 @@ def classify_llm_error(
     error_code: str | None = None,
     exc: Exception | None = None,
 ) -> tuple[str, str | None]:
-    """Map provider failures to stable error classes for #607 consumption."""
+    """Map provider failures to stable error classes for #607 / ISSUE-240."""
     if exc is not None:
+        if isinstance(exc, LLMInvalidJSONError):
+            return exc.error_class, exc.error_code
         if isinstance(exc, LLMAuthError):
             return "auth", exc.error_code
         if isinstance(exc, LLMRateLimitedError):
@@ -69,6 +72,17 @@ def classify_llm_error(
         if isinstance(exc, LLMProviderError):
             return "provider", exc.error_code
         if isinstance(exc, LLMError):
+            code = (exc.error_code or "").strip().lower()
+            if code == "llm_invalid_json":
+                return "invalid_json", exc.error_code
+            if code == "llm_timeout":
+                return "timeout", exc.error_code
+            if code == "llm_auth_error":
+                return "auth", exc.error_code
+            if code == "llm_rate_limited":
+                return "rate_limit", exc.error_code
+            if code == "llm_config_error":
+                return "config", exc.error_code
             return "provider", exc.error_code
         return "provider", getattr(exc, "error_code", None)
 
@@ -81,6 +95,10 @@ def classify_llm_error(
         return "timeout", error_code
     if code in {"llm_config_error"}:
         return "config", error_code
+    if code in {"llm_invalid_json"}:
+        return "invalid_json", error_code
+    if code in {"empty_content", "invalid_json", "schema_validation"}:
+        return code, error_code
     if code:
         return "provider", error_code
     return "provider", None
@@ -127,7 +145,12 @@ async def _aggregate_llm_call_log(
     last_status = last_row.status if last_row is not None else None
     last_error_class = None
     if last_row is not None and last_row.status != "success":
-        last_error_class, _ = classify_llm_error(error_code=last_row.status)
+        # Prefer durable per-row taxonomy (ISSUE-240); fall back for legacy rows.
+        persisted = getattr(last_row, "error_class", None)
+        if isinstance(persisted, str) and persisted.strip():
+            last_error_class = persisted.strip()
+        else:
+            last_error_class, _ = classify_llm_error(error_code=last_row.status)
     return LLMCallLogAggregate(
         window_minutes=window_minutes,
         total_calls=total_calls,

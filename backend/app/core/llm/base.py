@@ -18,10 +18,29 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import LLMError, ShadowTraceError
+from app.core.sanitization import redact_sensitive_text
 from app.core.telemetry import traced_operation
 from app.db import models as orm
 
 logger = logging.getLogger(__name__)
+
+# Bounded durable failure classes for llm_call_log.error_class (ISSUE-240).
+LLM_CALL_ERROR_CLASSES: frozenset[str] = frozenset(
+    {
+        "empty_content",
+        "invalid_json",
+        "schema_validation",
+        "timeout",
+        "auth",
+        "rate_limit",
+        "provider",
+        "config",
+        "audit",
+        "budget",
+        "unknown",
+    }
+)
+_LLM_ERROR_DETAIL_MAX_LEN = 256
 
 
 def _is_async_callable(fn: object) -> bool:
@@ -69,12 +88,25 @@ class LLMInvalidJSONError(LLMError):
     default_error_code = "llm_invalid_json"
     default_retryable = False
 
-    def __init__(self, message: str, *, invalid_content: str, validation_error: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        invalid_content: str,
+        validation_error: str,
+        error_class: str = "invalid_json",
+    ) -> None:
         self.invalid_content = invalid_content
         self.validation_error = validation_error
+        self.error_class = (
+            error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
+        )
         super().__init__(
             message,
-            details={"validation_error": validation_error},
+            details={
+                "validation_error": validation_error,
+                "error_class": self.error_class,
+            },
         )
 
 
@@ -85,6 +117,90 @@ class LLMProviderError(LLMError):
 class LLMAuditError(LLMError):
     default_error_code = "llm_audit_error"
     default_retryable = False
+
+
+def sanitize_llm_error_detail(value: str | None) -> str | None:
+    """Redact secrets and truncate detail for durable audit (never full bodies)."""
+
+    if value is None:
+        return None
+    cleaned = redact_sensitive_text(str(value)).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > _LLM_ERROR_DETAIL_MAX_LEN:
+        return cleaned[: _LLM_ERROR_DETAIL_MAX_LEN - 1] + "…"
+    return cleaned
+
+
+def classify_llm_call_failure(
+    *,
+    status: str,
+    error: BaseException | None = None,
+) -> tuple[str | None, str | None]:
+    """Map one audit attempt to ``(error_class, error_detail)``.
+
+    Success rows keep both null. Detail never includes prompt text, API keys,
+    or full completion bodies — only short redacted validation/provider hints.
+    """
+
+    if status == "success":
+        return None, None
+
+    error_class: str | None = None
+    detail: str | None = None
+
+    if isinstance(error, LLMInvalidJSONError):
+        error_class = (
+            error.error_class
+            if error.error_class in LLM_CALL_ERROR_CLASSES
+            else "invalid_json"
+        )
+        detail = error.validation_error or error.message
+    elif isinstance(error, LLMTimeoutError) or status == "llm_timeout":
+        error_class = "timeout"
+        detail = getattr(error, "message", None) or status
+    elif isinstance(error, LLMAuthError) or status == "llm_auth_error":
+        error_class = "auth"
+        detail = getattr(error, "message", None) or status
+    elif isinstance(error, LLMRateLimitedError) or status == "llm_rate_limited":
+        error_class = "rate_limit"
+        detail = getattr(error, "message", None) or status
+    elif status == "llm_config_error":
+        error_class = "config"
+        detail = getattr(error, "message", None) or status
+    elif status == "llm_audit_error" or isinstance(error, LLMAuditError):
+        error_class = "audit"
+        detail = getattr(error, "message", None) or status
+    elif status == "budget_exceeded" or (
+        error is not None and getattr(error, "error_code", None) == "budget_exceeded"
+    ):
+        error_class = "budget"
+        detail = getattr(error, "message", None) or status
+    elif isinstance(error, LLMProviderError) or status in {
+        "llm_provider_error",
+        "error",
+    }:
+        error_class = "provider"
+        detail = getattr(error, "message", None) or status
+    elif isinstance(error, LLMError):
+        code = (error.error_code or status or "").strip().lower()
+        if code == "llm_invalid_json":
+            error_class = "invalid_json"
+        elif code == "llm_timeout":
+            error_class = "timeout"
+        else:
+            error_class = "provider"
+        detail = getattr(error, "message", None) or code or status
+    elif status == "llm_invalid_json":
+        error_class = "invalid_json"
+        detail = status
+    else:
+        error_class = "unknown"
+        detail = getattr(error, "message", None) or status
+
+    if error_class not in LLM_CALL_ERROR_CLASSES:
+        error_class = "unknown"
+    return error_class, sanitize_llm_error_detail(detail)
 
 
 @dataclass(frozen=True)
@@ -111,6 +227,8 @@ class LLMCallAudit(BaseModel):
     latency_ms: int | None = None
     fallback_level: int = 0
     status: str
+    error_class: str | None = None
+    error_detail: str | None = None
 
 
 @runtime_checkable
@@ -447,6 +565,7 @@ class BaseLLMClient(ABC):
                 error.__cause__ = exc
 
         latency_ms = max(0, round((time.perf_counter() - started) * 1000))
+        error_class, error_detail = classify_llm_call_failure(status=status, error=error)
         await self._record_audit(
             LLMCallAudit(
                 event_id=event_id,
@@ -461,6 +580,8 @@ class BaseLLMClient(ABC):
                 latency_ms=latency_ms,
                 fallback_level=fallback_level,
                 status=status,
+                error_class=error_class,
+                error_detail=error_detail,
             )
         )
         if error is not None:
@@ -515,21 +636,40 @@ class BaseLLMClient(ABC):
 
     @staticmethod
     def _parse(content: str, response_model: type[BaseModel] | None) -> BaseModel | None:
+        if not content or not content.strip():
+            raise LLMInvalidJSONError(
+                "LLM returned empty structured output",
+                invalid_content=content or "",
+                validation_error="empty completion content",
+                error_class="empty_content",
+            )
         try:
             payload = json.loads(content)
             if not isinstance(payload, dict):
                 raise ValueError("top-level JSON must be an object")
             return response_model.model_validate(payload) if response_model is not None else None
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            validation_error = (
-                json.dumps(exc.errors(include_input=False, include_url=False), ensure_ascii=False)
-                if isinstance(exc, ValidationError)
-                else str(exc)
-            )
+            if isinstance(exc, ValidationError):
+                error_class = "schema_validation"
+                validation_error = json.dumps(
+                    exc.errors(include_input=False, include_url=False),
+                    ensure_ascii=False,
+                )
+            elif isinstance(exc, json.JSONDecodeError):
+                error_class = "invalid_json"
+                # Keep detail short and free of the offending body.
+                validation_error = (
+                    f"JSONDecodeError: {exc.msg} (line {exc.lineno} column {exc.colno})"
+                )
+            else:
+                # Non-object top-level JSON is a structural/schema mismatch.
+                error_class = "schema_validation"
+                validation_error = str(exc)
             raise LLMInvalidJSONError(
                 "LLM returned invalid structured output",
                 invalid_content=content,
                 validation_error=validation_error,
+                error_class=error_class,
             ) from exc
 
     async def _check_convergence(
@@ -627,6 +767,7 @@ __all__ = [
     "InMemoryLLMCallAuditRecorder",
     "LLMAuditError",
     "LLMAuthError",
+    "LLM_CALL_ERROR_CLASSES",
     "LLMCallAudit",
     "LLMCallAuditRecorder",
     "LLMInvalidJSONError",
@@ -638,6 +779,8 @@ __all__ = [
     "MessageBudgeterHook",
     "ProviderResponse",
     "SQLAlchemyLLMCallAuditRecorder",
+    "classify_llm_call_failure",
     "default_golden_root",
     "estimate_tokens",
+    "sanitize_llm_error_detail",
 ]

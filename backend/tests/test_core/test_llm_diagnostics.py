@@ -260,6 +260,8 @@ async def test_aggregate_llm_call_log_computes_success_rate_and_last_error_class
         latency_ms=10,
         fallback_level=0,
         status="llm_auth_error",
+        error_class="auth",
+        error_detail="LLM authentication failed",
         created_at=datetime.now(UTC),
     )
     scalar_results = iter([2, 1, last_row])
@@ -284,6 +286,45 @@ async def test_aggregate_llm_call_log_computes_success_rate_and_last_error_class
     assert aggregate.success_rate == 0.5
     assert aggregate.last_status == "llm_auth_error"
     assert aggregate.last_error_class == "auth"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_prefers_persisted_error_class_over_status_mapping() -> None:
+    from datetime import UTC, datetime
+
+    last_row = orm.LLMCallLog(
+        event_id="evt-2",
+        agent_name="TriageAgent",
+        prompt_key="triage_extract",
+        model_name="primary-model",
+        prompt_tokens=1,
+        completion_tokens=0,
+        total_tokens=1,
+        latency_ms=5,
+        fallback_level=0,
+        status="llm_invalid_json",
+        error_class="empty_content",
+        error_detail="empty completion content",
+        created_at=datetime.now(UTC),
+    )
+    scalar_results = iter([1, 0, last_row])
+
+    class _FakeSession:
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def scalar(self, _stmt: object) -> object:
+            return next(scalar_results)
+
+    def session_factory() -> _FakeSession:
+        return _FakeSession()
+
+    aggregate = await _aggregate_llm_call_log(session_factory, window_minutes=15)  # type: ignore[arg-type]
+    assert aggregate.last_status == "llm_invalid_json"
+    assert aggregate.last_error_class == "empty_content"
 
 
 @pytest.mark.asyncio

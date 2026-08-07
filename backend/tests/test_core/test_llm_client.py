@@ -24,6 +24,8 @@ from app.core.llm.base import (
     LLMProviderError,
     LLMTimeoutError,
     SQLAlchemyLLMCallAuditRecorder,
+    classify_llm_call_failure,
+    sanitize_llm_error_detail,
 )
 from app.core.llm.factory import get_llm_client
 from app.core.llm.mock_client import MockLLMClient
@@ -196,6 +198,83 @@ async def test_json_mode_raises_after_exactly_one_failed_repair() -> None:
         "llm_invalid_json",
         "llm_invalid_json",
     ]
+    assert all(entry.error_class == "invalid_json" for entry in audit.entries)
+    assert all(entry.error_detail is not None for entry in audit.entries)
+    assert all("still-invalid" not in (entry.error_detail or "") for entry in audit.entries)
+
+
+async def _failing_structured_chat(
+    content: str,
+    *,
+    event_id: str,
+) -> tuple[InMemoryLLMCallAuditRecorder, LLMInvalidJSONError]:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_response(content, model="primary-model"))
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(LLMInvalidJSONError) as exc_info:
+            await _client(http_client, audit=audit, fallback_models=()).chat(
+                MESSAGES,
+                event_id=event_id,
+                agent_name="TriageAgent",
+                prompt_key="triage_extract",
+                response_model=TriagePayload,
+            )
+    return audit, exc_info.value
+
+
+@pytest.mark.asyncio
+async def test_audit_distinguishes_empty_content_and_invalid_json() -> None:
+    """ISSUE-240: empty completion vs illegal JSON must be SQL-distinguishable."""
+
+    empty_audit, empty_exc = await _failing_structured_chat(
+        "",
+        event_id="evt-2026-empty",
+    )
+    invalid_audit, invalid_exc = await _failing_structured_chat(
+        "not-json{{{",
+        event_id="evt-2026-invalid",
+    )
+    schema_audit, schema_exc = await _failing_structured_chat(
+        '{"event_type":1,"confidence":"bad"}',
+        event_id="evt-2026-schema",
+    )
+
+    assert empty_exc.error_class == "empty_content"
+    assert invalid_exc.error_class == "invalid_json"
+    assert schema_exc.error_class == "schema_validation"
+
+    assert {entry.error_class for entry in empty_audit.entries} == {"empty_content"}
+    assert {entry.error_class for entry in invalid_audit.entries} == {"invalid_json"}
+    assert {entry.error_class for entry in schema_audit.entries} == {"schema_validation"}
+    assert empty_audit.entries[0].error_class != invalid_audit.entries[0].error_class
+
+    all_entries = empty_audit.entries + invalid_audit.entries + schema_audit.entries
+    assert {entry.status for entry in all_entries} == {"llm_invalid_json"}
+    assert all(entry.error_detail for entry in all_entries)
+    assert all(entry.error_class is not None for entry in all_entries)
+    assert all(len(entry.error_detail or "") <= 256 for entry in all_entries)
+
+    joined = " ".join(entry.error_detail or "" for entry in all_entries)
+    assert "sk-proj-" not in joined
+    assert "api_key" not in joined.lower()
+    assert "Classify this event" not in joined
+    assert "not-json{{{" not in joined
+
+
+def test_sanitize_llm_error_detail_redacts_and_truncates() -> None:
+    detail = sanitize_llm_error_detail(
+        "auth failed api_key=sk-proj-ABCDEFG1234567890 token=secret-value " + ("x" * 300)
+    )
+    assert detail is not None
+    assert len(detail) <= 256
+    assert "sk-proj-" not in detail
+    assert "[REDACTED]" in detail
+
+
+def test_classify_llm_call_failure_success_is_null() -> None:
+    assert classify_llm_call_failure(status="success", error=None) == (None, None)
 
 
 @pytest.mark.asyncio

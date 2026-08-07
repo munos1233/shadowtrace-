@@ -16,6 +16,7 @@ from app.core.llm.base import (
     LLMMessage,
     LLMProviderError,
     LLMResponse,
+    classify_llm_call_failure,
     default_golden_root,
 )
 
@@ -85,6 +86,7 @@ class MockLLMClient(BaseLLMClient):
             error.__cause__ = exc
 
         latency_ms = max(0, round((time.perf_counter() - started) * 1000))
+        error_class, error_detail = classify_llm_call_failure(status=status, error=error)
         await self._record_audit(
             LLMCallAudit(
                 event_id=event_id,
@@ -97,6 +99,8 @@ class MockLLMClient(BaseLLMClient):
                 latency_ms=latency_ms,
                 fallback_level=2,
                 status=status,
+                error_class=error_class,
+                error_detail=error_detail,
             )
         )
         if error is not None:
