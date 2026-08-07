@@ -35,7 +35,6 @@ from app.models.agent_io import (
     ScoringMode,
     TriageResult,
 )
-from app.models.evidence import Evidence
 from app.models.entities import (
     AccountEntity,
     DomainEntity,
@@ -58,6 +57,7 @@ from app.models.enums import (
     SourceDisposition,
     SourceObjectKind,
 )
+from app.models.evidence import Evidence
 from app.models.playbook import Playbook, PlaybookStep
 from app.models.playbook_release import PlaybookRef
 from app.models.source import SourceReference
@@ -724,7 +724,7 @@ async def test_sufficient_evidence_confirmed_threat_still_allows_l2_plus() -> No
         )
     )
     tool_names = {action.tool_name for action in plan.actions}
-    assert "block_ip" in tool_names or "disable_account" in tool_names or "isolate_host" in tool_names
+    assert tool_names & {"block_ip", "disable_account", "isolate_host"}
     assert "evidence_sufficiency_gate" not in plan.strategy_summary
 
 

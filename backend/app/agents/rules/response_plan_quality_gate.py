@@ -184,10 +184,13 @@ def apply_evidence_sufficiency_gate(
         ]
         removed = removed or bool(kept)
 
-    reason = evidence_insufficiency_reason_code(
-        evidence_output=evidence_output,
-        risk_assessment=risk_assessment,
-    ) or "evidence_insufficient"
+    reason = (
+        evidence_insufficiency_reason_code(
+            evidence_output=evidence_output,
+            risk_assessment=risk_assessment,
+        )
+        or "evidence_insufficient"
+    )
     note = f"evidence_sufficiency_gate: high_impact_blocked:{reason}"
     if removed or note not in strategy:
         strategy = f"{strategy}; {note}" if strategy else note
