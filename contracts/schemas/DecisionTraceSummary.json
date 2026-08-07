@@ -57,7 +57,21 @@
         }
       ],
       "default": null,
+      "description": "Wall-clock span from the first to last timeline entry (ms). Includes WAITING_* idle such as approval/writeback waits. Preserved for backward-compatible dashboards; prefer active_duration_ms for investigation effort.",
       "title": "Total Duration Ms"
+    },
+    "active_duration_ms": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Effective investigation duration (ms): wall-clock span minus halt gaps where timeline state is WAITING_* (e.g. waiting_approval, waiting_writeback). Use this for ops/eval '调查耗时' displays.",
+      "title": "Active Duration Ms"
     }
   },
   "title": "DecisionTraceSummary",

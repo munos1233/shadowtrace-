@@ -4437,9 +4437,8 @@
             "title": "Entries"
           },
           "summary": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Summary"
+            "$ref": "#/components/schemas/DecisionTraceSummary",
+            "description": "Trace aggregates. total_duration_ms is wall-clock (includes WAITING_* idle); active_duration_ms is effective investigation time excluding waiting_approval / waiting_writeback halt gaps (ISSUE-253)."
           },
           "missing_sources": {
             "items": {
@@ -4469,6 +4468,83 @@
           "event_id"
         ],
         "title": "DecisionTraceResponse"
+      },
+      "DecisionTraceSummary": {
+        "properties": {
+          "agent_count": {
+            "type": "integer",
+            "title": "Agent Count",
+            "default": 0
+          },
+          "tool_call_count": {
+            "type": "integer",
+            "title": "Tool Call Count",
+            "default": 0
+          },
+          "llm_call_count": {
+            "type": "integer",
+            "title": "Llm Call Count",
+            "default": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens",
+            "default": 0
+          },
+          "state_transition_count": {
+            "type": "integer",
+            "title": "State Transition Count",
+            "default": 0
+          },
+          "approval_count": {
+            "type": "integer",
+            "title": "Approval Count",
+            "default": 0
+          },
+          "action_execution_count": {
+            "type": "integer",
+            "title": "Action Execution Count",
+            "default": 0
+          },
+          "disposition_count": {
+            "type": "integer",
+            "title": "Disposition Count",
+            "default": 0
+          },
+          "writeback_count": {
+            "type": "integer",
+            "title": "Writeback Count",
+            "default": 0
+          },
+          "total_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Duration Ms",
+            "description": "Wall-clock span from the first to last timeline entry (ms). Includes WAITING_* idle such as approval/writeback waits. Preserved for backward-compatible dashboards; prefer active_duration_ms for investigation effort."
+          },
+          "active_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Duration Ms",
+            "description": "Effective investigation duration (ms): wall-clock span minus halt gaps where timeline state is WAITING_* (e.g. waiting_approval, waiting_writeback). Use this for ops/eval '调查耗时' displays."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DecisionTraceSummary",
+        "description": "Aggregated counts computed from the full (unfiltered) trace."
       },
       "DetectionContextProjectionErrorSummary": {
         "properties": {
