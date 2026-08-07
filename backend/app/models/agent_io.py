@@ -437,6 +437,9 @@ class RiskAssessment(BaseModel):
     high_source_evidence_limited: bool = False
     llm_admissibility: LlmAdmissibility | None = None
     confidence_cap_version: str | None = None
+    # ISSUE-241: structured demotion / adjudication reason codes (not CoT).
+    # Example: evidence_limited_demoted_from_confirmed_threat.
+    verdict_reason_codes: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

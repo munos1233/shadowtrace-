@@ -204,6 +204,16 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
         # Capability is not authoritative on security_event. Fail closed until
         # PolicyFilter evaluates the connector/adapter and writes Action readiness.
         writeback_readiness = WritebackReadiness.CAPABILITY_UNKNOWN
+    snapshot = (
+        dict(row.event_context_snapshot)
+        if isinstance(row.event_context_snapshot, dict)
+        else None
+    )
+    from app.services.risk_verdict_projection import risk_observability_from_snapshot
+
+    evidence_limited, scoring_mode, verdict_reason_codes = risk_observability_from_snapshot(
+        snapshot
+    )
     return EventSummary(
         event_id=row.event_id,
         event_type=EventType(row.event_type),
@@ -221,12 +231,11 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
         occurred_at=row.occurred_at,
         classification_source=derive_classification_source(
             degraded_flags=[str(f) for f in (row.degraded_flags or [])],
-            event_context_snapshot=(
-                dict(row.event_context_snapshot)
-                if isinstance(row.event_context_snapshot, dict)
-                else None
-            ),
+            event_context_snapshot=snapshot,
         ),
+        evidence_limited=evidence_limited,
+        scoring_mode=scoring_mode,
+        verdict_reason_codes=verdict_reason_codes,
         disposition_policy=policy,
         external_unsynced=bool(row.external_unsynced),
         escalated=bool(row.escalated),
@@ -242,6 +251,13 @@ def event_summary_from_domain(event: SecurityEvent) -> EventSummary:
         writeback_readiness = WritebackReadiness.SOURCE_UNRESOLVED
     else:
         writeback_readiness = WritebackReadiness.CAPABILITY_UNKNOWN
+    from app.services.risk_verdict_projection import risk_observability_from_snapshot
+
+    evidence_limited, scoring_mode, verdict_reason_codes = risk_observability_from_snapshot(
+        event.event_context_snapshot
+        if isinstance(event.event_context_snapshot, dict)
+        else None
+    )
     return EventSummary(
         event_id=event.event_id,
         event_type=event.event_type,
@@ -264,6 +280,9 @@ def event_summary_from_domain(event: SecurityEvent) -> EventSummary:
         )
         if event.classification_source is None
         else event.classification_source,
+        evidence_limited=evidence_limited,
+        scoring_mode=scoring_mode,
+        verdict_reason_codes=verdict_reason_codes,
         disposition_policy=event.disposition_policy,
         external_unsynced=event.external_unsynced,
         escalated=event.escalated,

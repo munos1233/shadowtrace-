@@ -1,6 +1,11 @@
-import { Card, Empty, Space, Tag, Tooltip, Typography } from "antd";
+import { Alert, Card, Empty, Space, Tag, Tooltip, Typography } from "antd";
 import ReactECharts from "echarts-for-react";
-import type { RiskAssessment, RiskFactor } from "../../types/event";
+import type { FinalVerdict, RiskAssessment, RiskFactor } from "../../types/event";
+import {
+  isHighRiskNoneMismatch,
+  labelVerdictReasonCode,
+  resolveVerdictDemotionCodes,
+} from "../../utils/verdictObservability";
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const RISK_FACTOR_LABELS: Record<string, string> = {
@@ -33,9 +38,11 @@ function normalizeFactors(assessment: RiskAssessment): RiskFactor[] {
 export default function RiskScorePanel({
   assessment,
   fallbackScore,
+  finalVerdict,
 }: {
   assessment?: RiskAssessment | null;
   fallbackScore?: number;
+  finalVerdict?: FinalVerdict | null;
 }) {
   if (!assessment) {
     return (
@@ -50,6 +57,18 @@ export default function RiskScorePanel({
   }
 
   const factors = normalizeFactors(assessment);
+  const demotionCodes = resolveVerdictDemotionCodes({
+    riskScore: assessment.risk_score,
+    finalVerdict,
+    evidenceLimited: assessment.evidence_limited,
+    verdictReasonCodes: assessment.verdict_reason_codes,
+  });
+  const showDemotionAlert =
+    demotionCodes.length > 0 &&
+    isHighRiskNoneMismatch({
+      riskScore: assessment.risk_score,
+      finalVerdict,
+    });
   const option = {
     animation: false,
     tooltip: { trigger: "item", confine: true },
@@ -82,7 +101,17 @@ export default function RiskScorePanel({
       data-testid="risk-radar"
       style={{ height: "100%" }}
     >
-      {(assessment.evidence_limited || assessment.severity_floor_applied) && (
+      {showDemotionAlert ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          data-testid="risk-verdict-demotion-alert"
+          message="高风险分未等同 confirmed_threat"
+          description={demotionCodes.map(labelVerdictReasonCode).join("；")}
+        />
+      ) : null}
+      {(assessment.evidence_limited || assessment.severity_floor_applied || demotionCodes.length > 0) && (
         <Space wrap style={{ marginBottom: 12 }} data-testid="risk-evidence-limited-tags">
           {assessment.evidence_limited ? (
             <Tag color="orange">证据不足 · 降信</Tag>
@@ -93,6 +122,11 @@ export default function RiskScorePanel({
           {assessment.source_risk_baseline != null ? (
             <Tag>源基线 {assessment.source_risk_baseline}</Tag>
           ) : null}
+          {demotionCodes.map((code) => (
+            <Tag key={code} color="gold" data-testid="verdict-reason-code-tag">
+              {labelVerdictReasonCode(code)}
+            </Tag>
+          ))}
         </Space>
       )}
       <ReactECharts option={option} style={{ height: 260 }} />

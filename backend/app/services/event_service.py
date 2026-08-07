@@ -995,12 +995,19 @@ class EventService:
         confidence: float,
         operator: str | None = None,
         factor_names: list[str] | None = None,
+        risk_assessment: dict[str, Any] | None = None,
     ) -> SecurityEvent:
         """Persist RiskAgent score fields onto ``security_event`` (ISSUE-035).
 
         Does **not** write ``final_verdict`` — that remains ``set_final_verdict`` only.
         Publishes ``risk_updated`` (locked Socket payload: ``RiskUpdatedPayload``).
+
+        When ``risk_assessment`` is provided, merge it into
+        ``event_context_snapshot.risk_assessment`` so list/detail can project
+        ``evidence_limited`` / ``scoring_mode`` / ``verdict_reason_codes`` (ISSUE-241).
         """
+        from app.services.risk_verdict_projection import merge_risk_assessment_into_snapshot
+
         score = max(0, min(100, int(risk_score)))
         conf = max(0.0, min(1.0, float(confidence)))
         previous_score = 0
@@ -1017,17 +1024,36 @@ class EventService:
                 row.risk_score = score
                 row.severity = severity.value if isinstance(severity, Severity) else str(severity)
                 row.confidence = conf
+                if isinstance(risk_assessment, dict) and risk_assessment:
+                    row.event_context_snapshot = merge_risk_assessment_into_snapshot(
+                        (
+                            dict(row.event_context_snapshot)
+                            if isinstance(row.event_context_snapshot, dict)
+                            else None
+                        ),
+                        risk_assessment,
+                    )
                 row.row_version = int(row.row_version or 1) + 1
+                reason_codes = []
+                if isinstance(risk_assessment, dict):
+                    raw_codes = risk_assessment.get("verdict_reason_codes")
+                    if isinstance(raw_codes, list):
+                        reason_codes = [str(c) for c in raw_codes[:5] if c is not None]
+                audit_reason = (
+                    f"risk_fields:score={score},"
+                    f"severity={row.severity},confidence={conf:.4f}"
+                )
+                if risk_assessment and risk_assessment.get("evidence_limited"):
+                    audit_reason = f"{audit_reason},evidence_limited=true"
+                if reason_codes:
+                    audit_reason = f"{audit_reason},verdict_reason_codes={','.join(reason_codes)}"
                 session.add(
                     orm.EventAuditLog(
                         event_id=event_id,
                         from_status=row.status,
                         to_status=row.status,
                         operator=operator or "RiskAgent",
-                        reason=(
-                            f"risk_fields:score={score},"
-                            f"severity={row.severity},confidence={conf:.4f}"
-                        ),
+                        reason=audit_reason,
                     )
                 )
                 await session.flush()

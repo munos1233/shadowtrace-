@@ -979,6 +979,7 @@ export default function EventDetailPage() {
           <RiskScorePanel
             assessment={context?.risk_assessment}
             fallbackScore={event.event.risk_score}
+            finalVerdict={event.event.final_verdict}
           />
         </Col>
       </Row>

@@ -87,6 +87,7 @@ class _FakeEventService:
         confidence: float,
         operator: str | None = None,
         factor_names: list[str] | None = None,
+        risk_assessment: dict[str, Any] | None = None,
     ) -> None:
         self.risk_updates.append(
             {
@@ -96,6 +97,7 @@ class _FakeEventService:
                 "confidence": confidence,
                 "operator": operator,
                 "factor_names": factor_names,
+                "risk_assessment": risk_assessment,
             }
         )
 
@@ -846,9 +848,17 @@ async def test_malicious_process_zero_evidence_applies_severity_floor(
     assert output.severity is Severity.HIGH
     assert output.confidence <= EVIDENCE_LIMITED_CONFIDENCE_CAP
     assert agent.last_verdict is FinalVerdict.NONE
+    assert "evidence_limited_demoted_from_confirmed_threat" in output.verdict_reason_codes
     evidence_factor = next(f for f in output.risk_factors if f.factor_name == "evidence_confidence")
     assert "source_baseline=76" in evidence_factor.reasoning
     assert "evidence_limited=true" in evidence_factor.reasoning
+    assert event_service.risk_updates
+    synced = event_service.risk_updates[-1]["risk_assessment"]
+    assert isinstance(synced, dict)
+    assert synced.get("evidence_limited") is True
+    assert "evidence_limited_demoted_from_confirmed_threat" in (
+        synced.get("verdict_reason_codes") or []
+    )
 
 
 @pytest.mark.asyncio

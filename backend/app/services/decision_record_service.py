@@ -220,12 +220,24 @@ def _enrich_agent_output(
             enriched.setdefault("reason_code", str(severity))
         enriched.setdefault("selected_action", f"triage:{output_data.get('event_type')}")
     elif agent_name == "risk_agent":
+        reason_codes = output_data.get("verdict_reason_codes")
+        reason_codes_text = ""
+        if isinstance(reason_codes, list) and reason_codes:
+            reason_codes_text = ",".join(str(code) for code in reason_codes[:10] if code)
+            # Prefer demotion / adjudication codes over scoring_mode for DecisionRecord.
+            enriched.setdefault("reason_code", str(reason_codes[0]))
+            enriched.setdefault(
+                "reason_codes",
+                [str(code) for code in reason_codes[:20] if code is not None],
+            )
         enriched.setdefault(
             "decision_summary",
             (
                 f"risk_score={output_data.get('risk_score')} "
                 f"severity={output_data.get('severity')} "
-                f"mode={output_data.get('scoring_mode')}"
+                f"mode={output_data.get('scoring_mode')} "
+                f"evidence_limited={bool(output_data.get('evidence_limited'))}"
+                + (f" verdict_reason_codes={reason_codes_text}" if reason_codes_text else "")
             )[:512],
         )
         if output_data.get("confidence") is not None:
@@ -449,6 +461,19 @@ def _build_record_payload(
         value = output_data.get(key)
         if isinstance(value, str) and value.strip():
             reason_codes.append(value.strip())
+    # ISSUE-241: prefer explicit structured lists from RiskAssessment / enrichment.
+    for key in ("reason_codes", "verdict_reason_codes"):
+        raw_list = output_data.get(key)
+        if not isinstance(raw_list, list):
+            continue
+        for item in raw_list:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text and text not in reason_codes:
+                reason_codes.append(text)
+            if len(reason_codes) >= 20:
+                break
 
     selected: dict[str, Any] = {}
     selected_action = output_data.get("selected_action")

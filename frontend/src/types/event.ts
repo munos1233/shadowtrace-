@@ -476,6 +476,8 @@ export interface RiskAssessment {
   evidence_limited?: boolean;
   severity_floor_applied?: boolean;
   source_risk_baseline?: number | null;
+  /** ISSUE-241: structured demotion / adjudication reason codes (not CoT). */
+  verdict_reason_codes?: string[];
 }
 
 export interface SourceSyncState {
@@ -532,6 +534,10 @@ export interface EventListItem {
   updated_at: string | null;
   occurred_at: string | null;
   classification_source?: ClassificationSource;
+  /** ISSUE-241: projected from risk_assessment when available. */
+  evidence_limited?: boolean;
+  scoring_mode?: ScoringMode | null;
+  verdict_reason_codes?: string[];
 }
 
 export interface EventListResponse {

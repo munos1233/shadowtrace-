@@ -102,6 +102,9 @@ _DECISION_WARNING_FIELDS = frozenset(
         "degraded_flags",
         "error_detail",
         "possible_false_positive",
+        # ISSUE-241: evidence_limited demotion must stay structured (not CoT).
+        "evidence_limited",
+        "verdict_reason_codes",
     }
 )
 _DECISION_ENTITY_FIELDS = frozenset(
@@ -313,12 +316,38 @@ class TraceProjection:
         else:
             raw_warnings = _extract_scalar(
                 data,
-                _DECISION_WARNING_FIELDS - frozenset({"warnings", "error_detail"}),
+                _DECISION_WARNING_FIELDS
+                - frozenset(
+                    {
+                        "warnings",
+                        "error_detail",
+                        "evidence_limited",
+                        "verdict_reason_codes",
+                    }
+                ),
             )
             if isinstance(raw_warnings, list):
                 warnings = [str(w)[:500] for w in raw_warnings[:20]]
             elif raw_warnings is not None:
                 warnings = [str(raw_warnings)[:500]]
+
+        # ISSUE-241: surface structured risk demotion codes (never free-form CoT).
+        if bool(data.get("evidence_limited")) and "evidence_limited" not in warnings:
+            warnings.append("evidence_limited")
+        reason_codes = data.get("verdict_reason_codes")
+        if isinstance(reason_codes, list):
+            for code in reason_codes[:10]:
+                if code is None:
+                    continue
+                text = str(code).strip()
+                if text and text not in warnings:
+                    warnings.append(text[:500])
+            if reason_codes and not structured_conclusion:
+                structured_conclusion = (
+                    f"risk_score={data.get('risk_score')} "
+                    f"evidence_limited=true "
+                    f"verdict_reason_codes={','.join(str(c) for c in reason_codes[:5] if c)}"
+                )[:512]
 
         entity_audit: dict[str, Any] = {}
         for key in _DECISION_ENTITY_FIELDS:

@@ -33,6 +33,9 @@ from app.models.agent_io import (
     TriageResult,
 )
 from app.models.enums import FinalVerdict
+from app.services.risk_verdict_projection import (
+    EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +167,11 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
             and input.rag_output.fp_similarity.max_score >= 0.7
         )
 
-        assessment = RiskAssessment(
+        # Build a provisional assessment for verdict resolution, then attach
+        # structured demotion reason codes before persistence (ISSUE-241).
+        # risk_score >= 70 still resolves to confirmed_threat first; evidence_limited
+        # fail-soft demotion to none is intentional and must remain observable.
+        provisional = RiskAssessment(
             risk_score=risk_score,
             severity=severity,
             confidence=confidence,
@@ -180,17 +187,21 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
             confidence_cap_version=adjustment.confidence_cap_version,
         )
 
-        await self._write_context(input.event_id, assessment)
-        await self._sync_security_event(input.event_id, assessment)
-
         verdict = self.verdict_resolver.resolve(
-            assessment,
+            provisional,
             false_positive_match=fp_match,
             rag_output=input.rag_output,
             fp_adjudication=fp_adjudication,
         )
+        reason_codes: list[str] = []
         if adjustment.evidence_limited and verdict is FinalVerdict.CONFIRMED_THREAT:
             verdict = FinalVerdict.NONE
+            reason_codes.append(EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT)
+
+        assessment = provisional.model_copy(update={"verdict_reason_codes": reason_codes})
+        await self._write_context(input.event_id, assessment)
+        await self._sync_security_event(input.event_id, assessment)
+
         self.last_verdict = verdict
         await self._persist_verdict(input.event_id, verdict, risk_score=assessment.risk_score)
         await self._maybe_flag_triage_risk_inconsistency(
@@ -382,6 +393,7 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
                 severity=assessment.severity,
                 confidence=assessment.confidence,
                 factor_names=[f.factor_name for f in assessment.risk_factors],
+                risk_assessment=assessment.model_dump(mode="json"),
             )
         except Exception:
             logger.warning(

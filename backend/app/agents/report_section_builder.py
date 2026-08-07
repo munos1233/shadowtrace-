@@ -544,6 +544,14 @@ class ReportSectionBuilder:
             f"source_scale_unnormalized={risk_assessment.source_scale_unnormalized}",
             f"llm_admissibility={llm_adm}",
             f"confidence_cap_version={risk_assessment.confidence_cap_version}",
+            (
+                "verdict_reason_codes="
+                + (
+                    ",".join(risk_assessment.verdict_reason_codes)
+                    if risk_assessment.verdict_reason_codes
+                    else "none"
+                )
+            ),
             "six_dimension_breakdown:",
         ]
         if risk_assessment.evidence_limited:

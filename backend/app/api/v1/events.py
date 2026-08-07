@@ -536,6 +536,8 @@ async def list_events(
         sort_by=sort_by,
         sort_order=sort_order,
     )
+    from app.services.risk_verdict_projection import risk_observability_from_snapshot
+
     items: list[s.EventListItem] = []
     for event in result.items:
         wb_required = _writeback_required(event.disposition_policy)
@@ -546,6 +548,14 @@ async def list_events(
             WritebackReadiness.CAPABILITY_UNKNOWN
             if wb_required
             else WritebackReadiness.NOT_REQUIRED
+        )
+        snapshot = (
+            event.event_context_snapshot
+            if isinstance(event.event_context_snapshot, dict)
+            else None
+        )
+        evidence_limited, scoring_mode, verdict_reason_codes = (
+            risk_observability_from_snapshot(snapshot)
         )
         items.append(
             s.EventListItem(
@@ -565,8 +575,11 @@ async def list_events(
                 occurred_at=event.occurred_at,
                 classification_source=derive_classification_source(
                     degraded_flags=list(event.degraded_flags or []),
-                    event_context_snapshot=event.event_context_snapshot,
+                    event_context_snapshot=snapshot,
                 ),
+                evidence_limited=evidence_limited,
+                scoring_mode=scoring_mode,
+                verdict_reason_codes=verdict_reason_codes,
             )
         )
     return s.EventListResponse(

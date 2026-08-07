@@ -19,15 +19,19 @@ CONFIRMED_THREAT_RISK_THRESHOLD = 70
 class VerdictResolver:
     """Resolve ``FinalVerdict`` with fixed priority (must not be overridden).
 
-    Priority (ISSUE-035 / ISSUE-047 / ISSUE-114 / #675):
+    Priority (ISSUE-035 / ISSUE-047 / ISSUE-114 / #675 / ISSUE-241):
     1. ``fp_adjudication.recommendation == close_as_fp`` → false_positive
        (post-evidence typed decision; never overridden by risk_score >= 70),
        **except** high-source + evidence-limited events (``#675`` guard).
        RiskAgent additionally downgrades ``confirmed_threat`` → ``none`` when
-       ``evidence_limited`` (see ``risk_agent.py`` post-resolve hook).
+       ``evidence_limited`` (see ``risk_agent.py`` post-resolve hook) and records
+       ``verdict_reason_codes`` so callers do not treat risk≥70 as confirmed_threat.
     2. Pre-evidence vector / RAG FP signal → possible_false_positive (advisory only)
-    3. risk_score >= 70 → confirmed_threat
+    3. risk_score >= 70 → confirmed_threat (**before** evidence_limited demotion)
     4. else → none
+
+    Do **not** equate ``risk_score >= 70`` with a durable ``confirmed_threat``
+    label: the evidence_limited fail-soft path may demote it to ``none``.
 
     Pre-evidence ``false_positive_match`` must never yield false_positive.
     Legacy ``false_positive_match`` journal entries are advisory only.

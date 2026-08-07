@@ -191,6 +191,12 @@ def _agent_detail(row: orm.AgentTrace, inferred: bool) -> dict[str, Any]:
         "query_timings",
         "success_sources",
         "failed_sources",
+        # ISSUE-241: risk demotion observability (structured; never CoT).
+        "risk_score",
+        "scoring_mode",
+        "evidence_limited",
+        "verdict_reason_codes",
+        "high_source_evidence_limited",
     ):
         if key in output_data and output_data[key] is not None:
             detail[key] = output_data[key]

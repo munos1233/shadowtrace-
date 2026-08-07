@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.agent_io import ScoringMode
 from app.models.disposition import SourceObjectLocator
 from app.models.entities import EntitySet
 from app.models.enums import (
@@ -98,6 +99,11 @@ class EventListItem(BaseModel):
     occurred_at: datetime | None = None
     # Derived read-only provenance (ISSUE-209); default source when unset.
     classification_source: ClassificationSource = ClassificationSource.SOURCE
+    # ISSUE-241: risk/verdict observability projected from risk_assessment.
+    # Explains high risk_score + final_verdict=none without removing fail-soft demotion.
+    evidence_limited: bool = False
+    scoring_mode: ScoringMode | None = None
+    verdict_reason_codes: list[str] = Field(default_factory=list)
 
 
 class EventSummary(EventListItem):

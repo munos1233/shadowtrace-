@@ -9,7 +9,7 @@
 */
 
 import { useMemo } from "react";
-import { Table, Button, Tooltip, Typography, Space } from "antd";
+import { Table, Button, Tag, Tooltip, Typography, Space } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ExperimentOutlined } from "@ant-design/icons";
 import type { EventListItem } from "../../types/event";
@@ -22,6 +22,11 @@ import {
   NON_TRIGGERABLE_STATUSES,
   isListExternalUnsynced,
 } from "./constants";
+import {
+  isHighRiskNoneMismatch,
+  labelVerdictReasonCode,
+  resolveVerdictDemotionCodes,
+} from "../../utils/verdictObservability";
 
 export interface EventTableProps {
   items: EventListItem[];
@@ -124,10 +129,37 @@ export default function EventTable({
         title: "研判结论",
         dataIndex: "final_verdict",
         key: "final_verdict",
-        width: 110,
-        render: (verdict: EventListItem["final_verdict"]) => (
-          <VerdictTag verdict={verdict} />
-        ),
+        width: 150,
+        render: (verdict: EventListItem["final_verdict"], record) => {
+          const demotionCodes = resolveVerdictDemotionCodes({
+            riskScore: record.risk_score,
+            finalVerdict: verdict,
+            evidenceLimited: record.evidence_limited,
+            verdictReasonCodes: record.verdict_reason_codes,
+          });
+          const showDemotion =
+            demotionCodes.length > 0 &&
+            isHighRiskNoneMismatch({
+              riskScore: record.risk_score,
+              finalVerdict: verdict,
+            });
+          return (
+            <Space direction="vertical" size={2}>
+              <VerdictTag verdict={verdict} />
+              {showDemotion ? (
+                <Tooltip title={demotionCodes.map(labelVerdictReasonCode).join("；")}>
+                  <Tag
+                    color="gold"
+                    style={{ marginInlineEnd: 0 }}
+                    data-testid="list-verdict-demotion-tag"
+                  >
+                    证据不足降级
+                  </Tag>
+                </Tooltip>
+              ) : null}
+            </Space>
+          );
+        },
       },
       {
         title: "风险分",

@@ -27,6 +27,11 @@ import StatusBadge from "./StatusBadge";
 import SeverityTag from "./SeverityTag";
 import VerdictTag from "./VerdictTag";
 import WritebackBadge from "./WritebackBadge";
+import {
+  isHighRiskNoneMismatch,
+  labelVerdictReasonCode,
+  resolveVerdictDemotionCodes,
+} from "../../utils/verdictObservability";
 
 const EVENT_TYPE_OPTIONS: { value: EventType; label: string }[] = [
   { value: "account_anomaly", label: "account_anomaly" },
@@ -79,6 +84,22 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
     if (lowConfidence) return "orange";
     return "default";
   }, [classificationSource, lowConfidence]);
+
+  const riskAssessment = event.event_context_snapshot?.risk_assessment;
+  const demotionCodes = useMemo(
+    () =>
+      resolveVerdictDemotionCodes({
+        riskScore: event.risk_score,
+        finalVerdict: event.final_verdict,
+        evidenceLimited: riskAssessment?.evidence_limited,
+        verdictReasonCodes: riskAssessment?.verdict_reason_codes,
+      }),
+    [event.final_verdict, event.risk_score, riskAssessment],
+  );
+  const showDemotionNotice = isHighRiskNoneMismatch({
+    riskScore: event.risk_score,
+    finalVerdict: event.final_verdict,
+  }) && demotionCodes.length > 0;
 
   const openModal = () => {
     form.setFieldsValue({
@@ -138,6 +159,11 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
               <SeverityTag severity={event.severity} />
               <VerdictTag verdict={event.final_verdict} />
               {event.external_unsynced && <Tag color="orange">外部状态未同步</Tag>}
+              {showDemotionNotice ? (
+                <Tag color="gold" data-testid="overview-verdict-demotion-tag">
+                  高分未确认威胁
+                </Tag>
+              ) : null}
             </Space>
           </Space>
         </Col>
@@ -148,6 +174,15 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
             status={event.risk_score >= 80 ? "exception" : "normal"}
             strokeColor={event.risk_score >= 60 ? "#fa8c16" : "#1677ff"}
           />
+          {showDemotionNotice ? (
+            <Typography.Paragraph
+              type="secondary"
+              style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}
+              data-testid="overview-verdict-demotion-reason"
+            >
+              {demotionCodes.map(labelVerdictReasonCode).join("；")}
+            </Typography.Paragraph>
+          ) : null}
         </Col>
       </Row>
       <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} style={{ marginTop: 20 }}>
