@@ -342,6 +342,78 @@ async def test_outbound_guard_accepts_clean_command() -> None:
     assert result.passed is True
 
 
+# ── ISSUE-224: outbound guard approved_action_ids ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_outbound_guard_rejects_unapproved_action_id() -> None:
+    """The guard must block a command whose action_id is not in the approved set.
+
+    This is the core defence-in-depth fix for ISSUE-224: the prior
+    tautological ``[command.action_id]`` self-reference always passed;
+    now the guard receives a genuine approved set and must reject
+    unapproved action_ids.
+    """
+    outbound = OutboundDispositionGuard()
+    approved_set = {"act-approved-1", "act-approved-2"}
+    command = _command(action_id="act-unapproved")
+    with pytest.raises(GuardrailViolationError) as exc_info:
+        await outbound.validate(
+            command,
+            {
+                "event_id": "evt-224-reject",
+                "source_locator": _locator(),
+                "approved_action_ids": approved_set,
+            },
+        )
+    violations = exc_info.value.details["violations"]
+    assert any(item["rule_name"] == "disposition_approved_action" for item in violations), (
+        f"Expected disposition_approved_action violation, got: "
+        f"{[item['rule_name'] for item in violations]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_guard_accepts_action_id_in_approved_set() -> None:
+    """The guard must pass when the command's action_id is in the approved set.
+
+    This validates that the ISSUE-224 fix does not break legitimate writebacks
+    when the approved set is genuinely sourced from the event's approved actions.
+    """
+    outbound = OutboundDispositionGuard()
+    approved_set = {"act-approved-1", "act-approved-2"}
+    command = _command(action_id="act-approved-1")
+    result = await outbound.validate(
+        command,
+        {
+            "event_id": "evt-224-accept",
+            "source_locator": _locator(),
+            "approved_action_ids": approved_set,
+        },
+    )
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_outbound_guard_skips_approval_when_not_provided() -> None:
+    """When approved_action_ids is absent, the guard skips the check.
+
+    This is backward-compatible behaviour: callers that don't provide
+    the approved set (e.g. ``_deliver_outbox``) still pass.  The
+    ``disposition_approved_action`` rule is a second line of defence
+    that only engages when context carries the approved set.
+    """
+    outbound = OutboundDispositionGuard()
+    result = await outbound.validate(
+        _command(action_id="any-id"),
+        {
+            "event_id": "evt-224-skip",
+            "source_locator": _locator(),
+        },
+    )
+    assert result.passed is True
+
+
 def _result_record_command(message_code: str | None) -> DispositionCommand:
     return _command(
         intent_kind=DispositionIntentKind.EXECUTION_RESULT_RECORD,

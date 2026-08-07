@@ -358,6 +358,16 @@ class EventDispositionService:
                         closure_cycle=closure_cycle,
                         target_disposition=resolve.disposition,
                     )
+                    # ISSUE-224: build approved_action_ids from the event's
+                    # actually-approved actions instead of the tautological
+                    # [action.action_id] self-reference that rendered
+                    # OutboundDispositionGuard's disposition_approved_action
+                    # check a no-op.
+                    approved_action_ids = await _query_approved_action_ids(
+                        session,
+                        event_id=event_id,
+                        plan_revision=plan_revision,
+                    )
                     try:
                         await self._sync.enqueue_command(
                             session,
@@ -365,7 +375,7 @@ class EventDispositionService:
                             event_id=event_id,
                             source_record_id=source_record_id,
                             logical_slot=_LOGICAL_SLOT,
-                            guard_context={"approved_action_ids": [action.action_id]},
+                            guard_context={"approved_action_ids": approved_action_ids},
                         )
                     except GuardrailViolationError:
                         return DispositionActivationResult(
@@ -402,8 +412,7 @@ class EventDispositionService:
                         select(orm.DispositionOutbox)
                         .where(
                             orm.DispositionOutbox.event_id == event_id,
-                            orm.DispositionOutbox.closure_cycle
-                            == int(deferred.plan_revision),
+                            orm.DispositionOutbox.closure_cycle == int(deferred.plan_revision),
                             orm.DispositionOutbox.intent_kind
                             == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
                             orm.DispositionOutbox.logical_slot == _LOGICAL_SLOT,
@@ -420,7 +429,6 @@ class EventDispositionService:
                     writeback_id=winner.writeback_id if winner is not None else None,
                 )
             raise
-
 
         # B1 fix (ISSUE-064): Synchronously deliver the outbox so the
         # adapter produces a receipt.  Without this the outbox row sits
@@ -557,6 +565,33 @@ def _approved_list(action: Action) -> list[SourceDisposition]:
         except ValueError:
             continue
     return result
+
+
+async def _query_approved_action_ids(
+    session: AsyncSession,
+    *,
+    event_id: str,
+    plan_revision: int,
+) -> list[str]:
+    """Return every APPROVED action_id for *event_id* / *plan_revision*.
+
+    Used by :meth:`EventDispositionService.activate_and_submit` to build a
+    truthful ``approved_action_ids`` set for :class:`OutboundDispositionGuard`
+    (ISSUE-224).  Previously the guard received only ``[self.action_id]`` as
+    context, which always matched the command's ``action_id`` and rendered the
+    ``disposition_approved_action`` check a tautology.
+    """
+    rows = (
+        await session.scalars(
+            select(orm.Action.action_id).where(
+                orm.Action.event_id == event_id,
+                orm.Action.plan_revision == plan_revision,
+                orm.Action.status == ActionStatus.APPROVED.value,
+                orm.Action.superseded_by_revision.is_(None),
+            )
+        )
+    ).all()
+    return sorted({str(row) for row in rows})
 
 
 def _verification_from_context(context: EventContext) -> VerificationResult | None:

@@ -130,7 +130,6 @@ class DispositionSyncService:
         ctx = {
             "event_id": event_id,
             "source_locator": command.source_locator,
-            "approved_action_ids": [command.action_id],
             **(guard_context or {}),
         }
         await self._guard.validate(command, ctx)
@@ -681,12 +680,16 @@ class DispositionSyncService:
                 }:
                     return
                 command = DispositionCommand.model_validate(outbox.command_payload)
+                # ISSUE-224: the outbox was already validated against the
+                # real approved set at enqueue time; the delivery-time guard
+                # re-validates source_locator, message_code, and analysis
+                # content but does not re-derive approved_action_ids (the
+                # action has already moved past APPROVED into EXECUTING).
                 await self._guard.validate(
                     command,
                     {
                         "event_id": outbox.event_id,
                         "source_locator": command.source_locator,
-                        "approved_action_ids": [command.action_id],
                     },
                 )
                 adapter = self._resolve_adapter(outbox)
