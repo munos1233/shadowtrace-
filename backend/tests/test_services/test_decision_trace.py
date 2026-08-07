@@ -1158,7 +1158,9 @@ class TestDecisionTraceDegradationAndEdgeCases:
                             {
                                 "tool_name": "query_dns",
                                 "source": "dns",
-                                "status": "success",
+                                "status": "tool_ok_empty",
+                                "provider_status": "success",
+                                "tool_outcome": "tool_ok_empty",
                                 "execution_time_ms": 12,
                                 "records_count": 0,
                                 "gap_reason": "no_records",
@@ -1174,6 +1176,10 @@ class TestDecisionTraceDegradationAndEdgeCases:
         tool_e = next(e for e in trace.entries if e.entry_type == DecisionTraceEntryType.TOOL_CALL)
         assert tool_e.detail["records_count"] == 0
         assert tool_e.detail["gap_reason"] == "no_records"
+        assert tool_e.detail["tool_outcome"] == "tool_ok_empty"
+        assert tool_e.detail["provider_status"] == "success"
+        assert "tool_ok_empty" in tool_e.title
+        assert "工具成功但无可用记录" in tool_e.title
 
         agent_e = next(
             e

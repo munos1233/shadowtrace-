@@ -14,6 +14,7 @@ from app.agents.evidence_agent import (
     EvidenceAgent,
     InMemoryEvidenceRepository,
     SqlAlchemyEvidenceRepository,
+    resolve_tool_outcome,
     time_range_around_occurred_at,
 )
 from app.agents.evidence_parser import TOOL_SOURCE_MAP, EvidenceParser
@@ -468,6 +469,10 @@ async def test_evidence_collect_skips_edr_when_no_valid_host(
 
     assert recorder.edr_calls == []
     assert any(gap.reason == "source_skipped" for gap in output.gaps)
+    edr_timing = next(
+        row for row in agent.last_query_timings if row["tool_name"] == "query_edr_process"
+    )
+    assert edr_timing["tool_outcome"] == "source_skipped"
 
 
 async def test_evidence_table_count_matches_list_after_upsert(
@@ -643,6 +648,29 @@ async def test_missing_event_service_marks_missing_scope_gaps(
     assert len(output.failed_sources) == len(EVIDENCE_QUERY_ORDER)
 
 
+def test_resolve_tool_outcome_distinguishes_empty_failed_and_skipped() -> None:
+    """ISSUE-249: tool_ok_empty / tool_failed / source_skipped are mutually exclusive."""
+    assert (
+        resolve_tool_outcome(success=True, failed=False, gap_reason=None) == "tool_ok"
+    )
+    assert (
+        resolve_tool_outcome(success=False, failed=False, gap_reason="no_records")
+        == "tool_ok_empty"
+    )
+    assert (
+        resolve_tool_outcome(success=False, failed=True, gap_reason="tool_failed")
+        == "tool_failed"
+    )
+    assert (
+        resolve_tool_outcome(success=False, failed=True, gap_reason="source_skipped")
+        == "source_skipped"
+    )
+    assert (
+        resolve_tool_outcome(success=False, failed=True, gap_reason="invalid_entity")
+        == "source_skipped"
+    )
+
+
 class _EmptyDnsExecutor:
     """Return SUCCESS with empty records for DNS to exercise no_records gaps."""
 
@@ -669,13 +697,40 @@ class _EmptyDnsExecutor:
         return await self._inner.call(tool_name, params, event_id, **kwargs)
 
 
+class _FailingDnsExecutor:
+    """Force DNS tool failure to contrast with tool_ok_empty."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    async def call(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        event_id: str,
+        **kwargs: Any,
+    ) -> ToolResult:
+        if tool_name == "query_dns":
+            return ToolResult(
+                call_id=f"call-fail-{new_sfx()}",
+                tool_name=tool_name,
+                provider_name="test",
+                status=ToolResultStatus.FAILED,
+                confidence=0.0,
+                data={},
+                execution_time_ms=2,
+                error_detail="dns provider unavailable",
+            )
+        return await self._inner.call(tool_name, params, event_id, **kwargs)
+
+
 async def test_empty_records_counts_as_gap_not_success_source(
     tool_executor: Any,
     evidence_projection: EvidenceProjection,
     wm: _FakeWorkingMemory,
     evidence_repo: InMemoryEvidenceRepository,
 ) -> None:
-    """Tool SUCCESS with zero parsed rows is a no_records gap, not a success source."""
+    """Tool SUCCESS with zero parsed rows is tool_ok_empty, not a success source."""
     event_id = f"evt-evd-empty-{new_sfx()}"
     await _seed_event_context(wm, event_id)
     executor = _EmptyDnsExecutor(tool_executor)
@@ -692,6 +747,68 @@ async def test_empty_records_counts_as_gap_not_success_source(
     dns_gaps = [gap for gap in output.gaps if gap.missing_source is EvidenceSource.DNS]
     assert len(dns_gaps) == 1
     assert dns_gaps[0].reason == "no_records"
+
+    dns_timing = next(row for row in agent.last_query_timings if row["tool_name"] == "query_dns")
+    assert dns_timing["tool_outcome"] == "tool_ok_empty"
+    assert dns_timing["status"] == "tool_ok_empty"
+    assert dns_timing["provider_status"] == "success"
+    assert dns_timing["records_count"] == 0
+    assert dns_timing["gap_reason"] == "no_records"
+    # ISSUE-101: empty provider success must not flip collection thresholds.
+    assert output.collection_status in {
+        CollectionStatus.FAILED,
+        CollectionStatus.DEGRADED,
+        CollectionStatus.PARTIAL_DONE,
+        CollectionStatus.COMPLETED,
+    }
+    if not output.success_sources:
+        assert output.collection_status is CollectionStatus.FAILED
+
+
+async def test_empty_records_tool_outcome_differs_from_tool_failed(
+    tool_executor: Any,
+    evidence_projection: EvidenceProjection,
+    wm: _FakeWorkingMemory,
+    evidence_repo: InMemoryEvidenceRepository,
+) -> None:
+    """ISSUE-249 acceptance: empty SUCCESS vs FAILED are distinguishable in timings."""
+    empty_event = f"evt-evd-empty-ok-{new_sfx()}"
+    await _seed_event_context(wm, empty_event)
+    empty_agent = _build_agent(
+        tool_executor=_EmptyDnsExecutor(tool_executor),
+        wm=wm,
+        evidence_repo=evidence_repo,
+    )
+    with bind_evidence_projection(evidence_projection):
+        with bind_evidence_query_scope(DEFAULT_SCOPE):
+            await empty_agent.execute(
+                EvidenceAgentInput(event_id=empty_event, triage_result=_main_scenario_triage())
+            )
+    empty_timing = next(
+        row for row in empty_agent.last_query_timings if row["tool_name"] == "query_dns"
+    )
+
+    fail_event = f"evt-evd-tool-fail-{new_sfx()}"
+    await _seed_event_context(wm, fail_event)
+    fail_agent = _build_agent(
+        tool_executor=_FailingDnsExecutor(tool_executor),
+        wm=wm,
+        evidence_repo=InMemoryEvidenceRepository(),
+    )
+    with bind_evidence_projection(evidence_projection):
+        with bind_evidence_query_scope(DEFAULT_SCOPE):
+            fail_output = await fail_agent.execute(
+                EvidenceAgentInput(event_id=fail_event, triage_result=_main_scenario_triage())
+            )
+    fail_timing = next(
+        row for row in fail_agent.last_query_timings if row["tool_name"] == "query_dns"
+    )
+
+    assert empty_timing["tool_outcome"] == "tool_ok_empty"
+    assert fail_timing["tool_outcome"] == "tool_failed"
+    assert empty_timing["tool_outcome"] != fail_timing["tool_outcome"]
+    assert EvidenceSource.DNS.value in fail_output.failed_sources
+    assert EvidenceSource.DNS.value not in fail_output.success_sources
 
 
 def _source_ref() -> SourceReference:
@@ -906,12 +1023,16 @@ async def test_query_timings_include_records_count_and_gap_reason(
     dns_timing = next(row for row in agent.last_query_timings if row["tool_name"] == "query_dns")
     assert dns_timing["records_count"] == 0
     assert dns_timing["gap_reason"] == "no_records"
+    assert dns_timing["tool_outcome"] == "tool_ok_empty"
+    assert dns_timing["status"] == "tool_ok_empty"
+    assert dns_timing["provider_status"] == "success"
     success_timing = next(
         row
         for row in agent.last_query_timings
         if row["tool_name"] != "query_dns" and row.get("records_count", 0) > 0
     )
     assert success_timing["gap_reason"] is None
+    assert success_timing["tool_outcome"] == "tool_ok"
 
 
 async def test_malicious_process_with_source_entities_produces_evidence(
