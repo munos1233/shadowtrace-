@@ -172,6 +172,39 @@ def test_decision_basis_does_not_fallback_to_legacy_summary() -> None:
         }
     )
     assert basis["structured_conclusion"] == ""
+    assert basis.get("summary_unavailable") == "no_typed_decision_fields"
+    assert "legacy CoT narrative" not in str(basis)
+
+
+def test_decision_basis_synthesizes_typed_agent_brief() -> None:
+    basis = TraceProjection.decision_basis(
+        {
+            "event_type": "data_exfiltration",
+            "severity": "high",
+            "need_investigation": True,
+            "summary": "must not win over typed fields",
+        },
+        agent_name="triage_agent",
+    )
+    assert "severity=high" in basis["structured_conclusion"]
+    assert "event_type=data_exfiltration" in basis["structured_conclusion"]
+    assert basis["brief"] == basis["structured_conclusion"]
+    assert "summary_unavailable" not in basis
+
+
+def test_decision_basis_short_text_mode_uses_bounded_non_cot_fallback() -> None:
+    basis = TraceProjection.decision_basis(
+        {
+            "event_id": "evt-short-text",
+            "short_rationale": "bounded operator note",
+            "thought": "must never be used",
+            "summary": "legacy narrative must never be used",
+        },
+        agent_name="memory_agent",
+        rationale_mode="short_text",
+    )
+    assert basis["structured_conclusion"] == "bounded operator note"
+    assert "must never be used" not in str(basis)
 
 
 def test_decision_basis_prefers_warnings_over_error_detail() -> None:
@@ -523,6 +556,41 @@ async def test_log_trace_persists_and_is_queryable(
     assert row.llm_tokens_used == 150
     assert row.error_detail is None
     assert "_decision_basis" in row.output_data
+    assert row.output_data["decision_summary"]
+    assert "severity=high" in row.output_data["decision_summary"]
+    assert "severity=high" in row.output_data["_decision_basis"]["structured_conclusion"]
+    assert "summary_unavailable" not in row.output_data["_decision_basis"]
+
+
+@pytest.mark.asyncio
+async def test_log_trace_backfills_structured_conclusion_for_risk_agent(
+    service: AgentTraceService,
+) -> None:
+    """ISSUE-243: typed agent outputs get a non-empty structured brief before persist."""
+    event_id = _id("evt")
+    started_at = datetime(2026, 7, 17, 10, 0, 0, tzinfo=UTC)
+    completed_at = started_at + timedelta(milliseconds=200)
+
+    trace_id = await service.log_trace(
+        event_id=event_id,
+        agent_name="risk_agent",
+        input_data={"event_id": event_id},
+        output_data={
+            "risk_score": 88,
+            "severity": "critical",
+            "scoring_mode": "rule",
+            "thought": "must not persist",
+        },
+        status="completed",
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+    row = await service.get_trace(trace_id)
+    assert row is not None
+    assert "thought" not in row.output_data
+    assert "risk_score=88" in row.output_data["decision_summary"]
+    assert row.output_data["_decision_basis"]["brief"]
+    assert "must not persist" not in str(row.output_data)
 
 
 @pytest.mark.asyncio

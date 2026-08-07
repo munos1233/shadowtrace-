@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     )
     llm_audit_window_minutes: int = Field(default=60, alias="LLM_AUDIT_WINDOW_MINUTES")
     event_chat_enabled: bool = Field(default=True, alias="EVENT_CHAT_ENABLED")
+    decision_rationale_mode: str = Field(
+        default="structured",
+        alias="DECISION_RATIONALE_MODE",
+        description=(
+            "ISSUE-243: off|structured|short_text. Structured decision briefs are "
+            "always synthesized; short_text may add a bounded redacted fallback "
+            "into decision basis (never restores CoT keys). Production forbids "
+            "short_text."
+        ),
+    )
 
     @field_validator("llm_probe_method", mode="before")
     @classmethod
@@ -108,6 +118,14 @@ class Settings(BaseSettings):
         normalized = str(value or "chat").strip().lower()
         if normalized not in {"chat", "models"}:
             raise ValueError("LLM_PROBE_METHOD must be 'chat' or 'models'")
+        return normalized
+
+    @field_validator("decision_rationale_mode", mode="before")
+    @classmethod
+    def validate_decision_rationale_mode(cls, value: object) -> str:
+        normalized = str(value or "structured").strip().lower()
+        if normalized not in {"off", "structured", "short_text"}:
+            raise ValueError("DECISION_RATIONALE_MODE must be 'off', 'structured', or 'short_text'")
         return normalized
 
     embedding_mode: str = Field(default="mock", alias="EMBEDDING_MODE")
@@ -497,6 +515,9 @@ class Settings(BaseSettings):
             violations.append(
                 "react_shadow_pivot_enabled=true forbids retrieval_fixture_fallback=true"
             )
+        if self.decision_rationale_mode.strip().lower() == "short_text":
+            # ISSUE-243: production may only use off|structured (no free short_text path).
+            violations.append("decision_rationale_mode=short_text")
         return violations
 
     def trusted_proxy_allowlist_hosts(self) -> frozenset[str]:

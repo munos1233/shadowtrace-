@@ -74,11 +74,15 @@ def _agent_status_verb(status: str) -> str:
     return "完成"
 
 
-def _agent_decision_basis(output_data: Any) -> dict[str, Any]:
+def _agent_decision_basis(output_data: Any, *, agent_name: str | None = None) -> dict[str, Any]:
     """Return sanitized decision basis; never trust legacy stored CoT (ISSUE-131)."""
     if not isinstance(output_data, dict):
-        return {}
-    basis = TraceProjection.decision_basis(output_data)
+        return {
+            "structured_conclusion": "",
+            "brief": "",
+            "summary_unavailable": "empty_output",
+        }
+    basis = TraceProjection.decision_basis(output_data, agent_name=agent_name)
     stored = output_data.get("_decision_basis")
     if not isinstance(stored, dict) or not stored:
         return basis
@@ -127,14 +131,17 @@ def _agent_title(agent_name: str, status: str, output_data: Any) -> str:
     label = action_labels.get(agent_name, "执行")
     title = f"{agent_name} {verb}{label}"
 
-    basis = _agent_decision_basis(output_data)
+    basis = _agent_decision_basis(output_data, agent_name=agent_name)
     if agent_name in {"TriageAgent", "triage_agent"} and isinstance(output_data, dict):
         severity = output_data.get("severity")
         if severity is not None:
             return f"{title}：severity={severity}"
-    conclusion = basis.get("structured_conclusion")
+    conclusion = basis.get("structured_conclusion") or basis.get("brief")
     if isinstance(conclusion, str) and conclusion.strip():
         return f"{title}：{conclusion[:120]}"
+    unavailable = basis.get("summary_unavailable")
+    if isinstance(unavailable, str) and unavailable.strip():
+        return f"{title}：summary_unavailable={unavailable.strip()}"
     return f"{title}：status={status}"
 
 
@@ -147,7 +154,7 @@ def _agent_detail(row: orm.AgentTrace, inferred: bool) -> dict[str, Any]:
         "model": row.llm_model,
     }
     output_data = row.output_data if isinstance(row.output_data, dict) else {}
-    basis = _agent_decision_basis(output_data)
+    basis = _agent_decision_basis(output_data, agent_name=row.agent_name)
     compat = TraceProjection.project_for_compat(output_data)
     for legacy_key in (
         "thought",
@@ -162,6 +169,8 @@ def _agent_detail(row: orm.AgentTrace, inferred: bool) -> dict[str, Any]:
     for key in (
         "input_summary",
         "structured_conclusion",
+        "brief",
+        "summary_unavailable",
         "confidence",
         "evidence_refs",
         "selected_action",
@@ -175,6 +184,11 @@ def _agent_detail(row: orm.AgentTrace, inferred: bool) -> dict[str, Any]:
         value = basis.get(key)
         if value not in (None, "", [], {}):
             detail[key] = value
+    # Primary brief alias for UI/evals even when conclusion is empty but reason exists.
+    if "brief" not in detail and isinstance(detail.get("structured_conclusion"), str):
+        detail["brief"] = detail["structured_conclusion"]
+    if "structured_conclusion" not in detail and isinstance(detail.get("brief"), str):
+        detail["structured_conclusion"] = detail["brief"]
     for key in (
         "severity",
         "event_type",

@@ -26,9 +26,32 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
+const COT_COMPAT_KEYS = [
+  "thought",
+  "reflection",
+  "rationale",
+  "reasoning",
+  "chain_of_thought",
+  "chain-of-thought",
+] as const;
+
+const NOT_RETAINED = "[NOT_RETAINED]";
+
 function textList(value: unknown): string {
   if (Array.isArray(value)) return value.map(String).join("、");
   return value === undefined || value === null || value === "" ? "暂无数据" : String(value);
+}
+
+function primaryBrief(detail: Record<string, unknown>): string {
+  const brief = detail.brief ?? detail.structured_conclusion;
+  if (typeof brief === "string" && brief.trim()) {
+    return brief;
+  }
+  const unavailable = detail.summary_unavailable;
+  if (typeof unavailable === "string" && unavailable.trim()) {
+    return `summary_unavailable=${unavailable}`;
+  }
+  return "暂无数据";
 }
 
 function AgentDecisionBasis({ entry }: { entry: DecisionTraceEntry }) {
@@ -43,20 +66,30 @@ function AgentDecisionBasis({ entry }: { entry: DecisionTraceEntry }) {
   const rules = [textList(detail.rules_applied), detail.rule_version]
     .filter((value) => value && value !== "暂无数据")
     .join(" / ");
+  const cotNotRetained = COT_COMPAT_KEYS.some(
+    (key) => detail[key] === NOT_RETAINED,
+  );
 
   return (
-    <Descriptions size="small" column={1} style={{ marginTop: 8 }}>
-      <Descriptions.Item label="决策依据">
-        {textList(detail.structured_conclusion)}
-      </Descriptions.Item>
-      <Descriptions.Item label="证据引用">
-        {textList(detail.evidence_refs)}
-      </Descriptions.Item>
-      <Descriptions.Item label="规则 / 版本">{rules || "暂无数据"}</Descriptions.Item>
-      <Descriptions.Item label="模型 / 版本">{model || "暂无数据"}</Descriptions.Item>
-      <Descriptions.Item label="置信度">{confidence}</Descriptions.Item>
-      <Descriptions.Item label="警告">{textList(detail.warnings)}</Descriptions.Item>
-    </Descriptions>
+    <div style={{ marginTop: 8 }}>
+      <Descriptions size="small" column={1}>
+        <Descriptions.Item label="决策依据">
+          {primaryBrief(detail)}
+        </Descriptions.Item>
+        <Descriptions.Item label="证据引用">
+          {textList(detail.evidence_refs)}
+        </Descriptions.Item>
+        <Descriptions.Item label="规则 / 版本">{rules || "暂无数据"}</Descriptions.Item>
+        <Descriptions.Item label="模型 / 版本">{model || "暂无数据"}</Descriptions.Item>
+        <Descriptions.Item label="置信度">{confidence}</Descriptions.Item>
+        <Descriptions.Item label="警告">{textList(detail.warnings)}</Descriptions.Item>
+      </Descriptions>
+      {cotNotRetained ? (
+        <Typography.Text type="secondary" style={{ display: "block", marginTop: 4 }}>
+          原始思维链未保留（ISSUE-131）
+        </Typography.Text>
+      ) : null}
+    </div>
   );
 }
 

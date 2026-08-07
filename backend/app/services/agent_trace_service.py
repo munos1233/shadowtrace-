@@ -3,6 +3,10 @@
 Stores redacted, bounded input/output projections so the audit trail reveals
 *what* an Agent decided and *which* evidence it cited, without persisting raw
 payloads, secrets, prompts, or hidden reasoning chains.
+
+ISSUE-243: every agent_execution must carry a non-empty structured brief
+(``decision_summary`` / ``structured_conclusion``) or an explicit
+``summary_unavailable`` reason. Raw CoT keys remain omitted / ``[NOT_RETAINED]``.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import uuid
 from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 import orjson
 from pydantic import BaseModel
@@ -27,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 MAX_AUDIT_FIELD_BYTES = 1_048_576
 _MAX_DECISION_TEXT_CHARS = 4_096
+_MAX_DECISION_SUMMARY_CHARS = 512
 _MAX_AUDIT_DEPTH = 32
 _RAW_KEYS = frozenset({"raw_payload", "raw_data", "source_snapshot", "raw_result", "prompt"})
 _COT_KEYS = frozenset(
@@ -40,6 +45,17 @@ _COT_KEYS = frozenset(
     }
 )
 _NOT_RETAINED = "[NOT_RETAINED]"
+_LEGACY_NARRATIVE_KEYS = frozenset(
+    {
+        "summary",
+        "narrative_summary",
+        "strategy_summary",
+        "analysis",
+        "explanation",
+    }
+)
+DecisionRationaleMode = Literal["off", "structured", "short_text"]
+_VALID_RATIONALE_MODES = frozenset({"off", "structured", "short_text"})
 
 # Fields that TraceProjection extracts for the structured decision_basis summary.
 _DECISION_ID_FIELDS = frozenset(
@@ -223,6 +239,301 @@ def _collect_refs(data: dict[str, Any], keys: frozenset[str]) -> list[str]:
     return refs[:100]
 
 
+def _normalize_agent_name(agent_name: str | None) -> str:
+    if not agent_name:
+        return ""
+    name = str(agent_name).strip()
+    if not name:
+        return ""
+    if name.endswith("Agent") and "_" not in name and name != "Agent":
+        return f"{name[: -len('Agent')].lower()}_agent"
+    return name.lower()
+
+
+def _as_mapping(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return dict(value)
+    return None
+
+
+def _safe_scalar_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned or cleaned == _NOT_RETAINED:
+            return None
+        return _truncate_text(cleaned, _MAX_DECISION_SUMMARY_CHARS)
+    if isinstance(value, Enum):
+        return _safe_scalar_text(value.value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def _existing_structured_conclusion(data: dict[str, Any]) -> str | None:
+    """Return an already-safe conclusion field; never fall back to CoT/narrative."""
+    for key in ("decision_summary", "structured_conclusion", "verdict", "final_verdict"):
+        text = _safe_scalar_text(data.get(key))
+        if text is not None:
+            return text
+    return None
+
+
+def _join_kv(parts: list[str]) -> str:
+    return " ".join(part for part in parts if part).strip()[:_MAX_DECISION_SUMMARY_CHARS]
+
+
+def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) -> str:
+    """Rule-based brief from typed agent fields (no CoT / free narrative keys)."""
+    name = _normalize_agent_name(agent_name)
+
+    if name == "triage_agent":
+        notes = data.get("notes")
+        note_bits: list[str] = []
+        if isinstance(notes, list):
+            note_bits = [
+                str(item).strip()
+                for item in notes[:5]
+                if item is not None and str(item).strip() and str(item).strip() != _NOT_RETAINED
+            ]
+        base = _join_kv(
+            [
+                f"event_type={data.get('event_type')}"
+                if data.get("event_type") is not None
+                else "",
+                f"severity={data.get('severity')}" if data.get("severity") is not None else "",
+                f"need_investigation={data.get('need_investigation')}"
+                if data.get("need_investigation") is not None
+                else "",
+            ]
+        )
+        if note_bits:
+            joined = "; ".join(note_bits)
+            return _truncate_text(f"{base}; {joined}" if base else joined, _MAX_DECISION_SUMMARY_CHARS)
+        return base
+
+    if name == "risk_agent":
+        return _join_kv(
+            [
+                f"risk_score={data.get('risk_score')}"
+                if data.get("risk_score") is not None
+                else "",
+                f"severity={data.get('severity')}" if data.get("severity") is not None else "",
+                f"mode={data.get('scoring_mode')}"
+                if data.get("scoring_mode") is not None
+                else "",
+            ]
+        )
+
+    if name == "evidence_agent":
+        query_timings = data.get("query_timings") or []
+        query_count = len(query_timings) if isinstance(query_timings, list) else 0
+        query_plan = data.get("query_plan") if isinstance(data.get("query_plan"), Mapping) else {}
+        degraded = query_plan.get("degraded_reasons") if isinstance(query_plan, Mapping) else None
+        if isinstance(degraded, list) and degraded:
+            return _truncate_text(
+                ",".join(str(item) for item in degraded if item is not None),
+                _MAX_DECISION_SUMMARY_CHARS,
+            )
+        return _join_kv(
+            [
+                f"collection_status={data.get('collection_status')}"
+                if data.get("collection_status") is not None
+                else "",
+                f"queries={query_count}",
+            ]
+        )
+
+    if name == "planner_agent":
+        steps = data.get("steps") or []
+        if isinstance(steps, list) and steps and isinstance(steps[0], Mapping):
+            goal = _safe_scalar_text(steps[0].get("step_goal"))
+            if goal:
+                return goal
+        plan_id = data.get("plan_id")
+        revision = data.get("revision")
+        return _join_kv(
+            [
+                f"plan_id={plan_id}" if plan_id is not None else "",
+                f"revision={revision}" if revision is not None else "",
+                f"steps={len(steps) if isinstance(steps, list) else 0}",
+            ]
+        )
+
+    if name == "response_agent":
+        actions = data.get("actions") or []
+        action_count = len(actions) if isinstance(actions, list) else 0
+        return _join_kv(
+            [
+                f"response_plan actions={action_count}",
+                f"plan_id={data.get('plan_id') or 'none'}",
+                f"generated_by={data.get('generated_by') or 'unknown'}",
+            ]
+        )
+
+    if name == "verify_agent":
+        results = data.get("results") or []
+        failed_actions = data.get("failed_actions") or []
+        return _join_kv(
+            [
+                f"overall_status={data.get('overall_status') or 'unknown'}",
+                f"verification_phase={data.get('verification_phase') or 'unknown'}",
+                f"results={len(results) if isinstance(results, list) else 0}",
+                f"failed_actions={len(failed_actions) if isinstance(failed_actions, list) else 0}",
+            ]
+        )
+
+    if name == "report_agent":
+        return _join_kv(
+            [
+                f"report_id={data.get('report_id')}" if data.get("report_id") is not None else "",
+                f"status={data.get('status')}" if data.get("status") is not None else "",
+                f"quality={data.get('quality_status')}"
+                if data.get("quality_status") is not None
+                else "",
+            ]
+        )
+
+    if name in {"react_engine", "super_agent"}:
+        reason = _safe_scalar_text(data.get("reason_code"))
+        selected = _safe_scalar_text(data.get("selected_action"))
+        return _join_kv(
+            [
+                f"reason_code={reason}" if reason else "",
+                f"selected_action={selected}" if selected else "",
+            ]
+        )
+
+    # Generic typed fallback for unknown agents / ClassName variants.
+    return _join_kv(
+        [
+            f"event_type={data.get('event_type')}" if data.get("event_type") is not None else "",
+            f"severity={data.get('severity')}" if data.get("severity") is not None else "",
+            f"risk_score={data.get('risk_score')}" if data.get("risk_score") is not None else "",
+            f"collection_status={data.get('collection_status')}"
+            if data.get("collection_status") is not None
+            else "",
+            f"overall_status={data.get('overall_status')}"
+            if data.get("overall_status") is not None
+            else "",
+            f"reason_code={data.get('reason_code')}"
+            if data.get("reason_code") is not None
+            else "",
+            f"selected_action={data.get('selected_action')}"
+            if data.get("selected_action") is not None
+            else "",
+        ]
+    )
+
+
+def _short_text_fallback(data: dict[str, Any]) -> str:
+    """Optional short_text mode: bounded non-CoT snippets only (never CoT key names)."""
+    for key in ("short_rationale", "decision_notes"):
+        text = _safe_scalar_text(data.get(key))
+        if text is not None:
+            return text
+    notes = data.get("notes")
+    if isinstance(notes, list):
+        bits = [
+            str(item).strip()
+            for item in notes[:8]
+            if item is not None and str(item).strip() and str(item).strip() != _NOT_RETAINED
+        ]
+        if bits:
+            return _truncate_text("; ".join(bits), _MAX_DECISION_SUMMARY_CHARS)
+    degradation = data.get("degradation_reasons")
+    if isinstance(degradation, list) and degradation:
+        return _truncate_text(
+            ",".join(str(item) for item in degradation if item is not None),
+            _MAX_DECISION_SUMMARY_CHARS,
+        )
+    # Never promote CoT keys or legacy free-text narrative fields.
+    return ""
+
+
+def resolve_decision_rationale_mode(mode: str | None = None) -> DecisionRationaleMode:
+    """Resolve effective rationale mode; production never allows ``short_text``."""
+    if mode is None:
+        try:
+            from app.core.config import get_settings
+
+            mode = get_settings().decision_rationale_mode
+        except Exception:  # noqa: BLE001 - tracing must not depend on settings wiring
+            mode = "structured"
+    normalized = str(mode or "structured").strip().lower()
+    if normalized not in _VALID_RATIONALE_MODES:
+        normalized = "structured"
+    try:
+        from app.core.config import get_settings
+
+        if get_settings().is_production() and normalized == "short_text":
+            return "structured"
+    except Exception:  # noqa: BLE001
+        pass
+    return normalized  # type: ignore[return-value]
+
+
+def synthesize_decision_summary(
+    agent_name: str | None,
+    value: Any,
+    *,
+    rationale_mode: str | None = None,
+) -> tuple[str, str | None]:
+    """Return ``(summary, summary_unavailable_reason)``.
+
+    Prefer existing structured fields; otherwise synthesize from typed agent
+    outputs. Never promote CoT keys or legacy free-text narrative fields.
+    """
+    data = _as_mapping(value)
+    if data is None:
+        return "", "empty_output"
+    if not data:
+        return "", "empty_output"
+
+    existing = _existing_structured_conclusion(data)
+    if existing is not None:
+        return existing, None
+
+    mode = resolve_decision_rationale_mode(rationale_mode)
+    summary = _synthesize_from_typed_fields(agent_name, data)
+    if summary:
+        return summary, None
+
+    if mode == "short_text":
+        short = _short_text_fallback(data)
+        if short:
+            return short, None
+
+    # Only legacy narrative / CoT / opaque blobs remain.
+    return "", "no_typed_decision_fields"
+
+
+def ensure_decision_summary(
+    agent_name: str | None,
+    value: Any,
+    *,
+    rationale_mode: str | None = None,
+) -> tuple[dict[str, Any], str, str | None]:
+    """Return enriched output dict plus synthesized summary / unavailable reason."""
+    data = _as_mapping(value)
+    if data is None:
+        return {}, "", "empty_output"
+    enriched = dict(data)
+    summary, unavailable = synthesize_decision_summary(
+        agent_name,
+        enriched,
+        rationale_mode=rationale_mode,
+    )
+    if summary and not _safe_scalar_text(enriched.get("decision_summary")):
+        enriched["decision_summary"] = summary
+    return enriched, summary, unavailable
+
+
 class TraceProjection:
     """Safe projection of Agent I/O for the audit trail.
 
@@ -254,27 +565,29 @@ class TraceProjection:
         }
 
     @staticmethod
-    def decision_basis(value: Any) -> dict[str, Any]:
+    def decision_basis(
+        value: Any,
+        *,
+        agent_name: str | None = None,
+        rationale_mode: str | None = None,
+    ) -> dict[str, Any]:
         """Extract a compact structured summary from a projected model.
 
         Fields: input_summary, evidence_refs, rules_applied, model_name,
-        structured_conclusion, selected_action, confidence, warnings.
+        structured_conclusion, selected_action, confidence, warnings,
+        and ``summary_unavailable`` when no safe brief can be synthesized.
         """
-        if isinstance(value, BaseModel):
-            data = value.model_dump(mode="json")
-        elif isinstance(value, Mapping):
-            data = dict(value)
-        else:
+        data = _as_mapping(value)
+        if data is None:
             return {}
 
         id_scalar = _extract_scalar(data, _DECISION_ID_FIELDS)
         input_summary = str(id_scalar) if id_scalar is not None else f"keys={sorted(data)[:20]}"
 
-        raw_conclusion = data.get("decision_summary")
-        if raw_conclusion in (None, ""):
-            raw_conclusion = _extract_scalar(data, _DECISION_CONCLUSION_FIELDS)
-        structured_conclusion = (
-            _truncate_text(str(raw_conclusion)) if raw_conclusion is not None else ""
+        structured_conclusion, unavailable = synthesize_decision_summary(
+            agent_name,
+            data,
+            rationale_mode=rationale_mode,
         )
 
         evidence_refs = _collect_refs(data, _DECISION_EVIDENCE_FIELDS)
@@ -322,11 +635,11 @@ class TraceProjection:
 
         entity_audit: dict[str, Any] = {}
         for key in _DECISION_ENTITY_FIELDS:
-            value = data.get(key)
-            if isinstance(value, list) and value:
-                entity_audit[key] = value[:20]
-            elif key == "entity_rejection_summary" and isinstance(value, dict) and value:
-                entity_audit[key] = value
+            field_value = data.get(key)
+            if isinstance(field_value, list) and field_value:
+                entity_audit[key] = field_value[:20]
+            elif key == "entity_rejection_summary" and isinstance(field_value, dict) and field_value:
+                entity_audit[key] = field_value
         degradation_reasons = data.get("degradation_reasons")
         if isinstance(degradation_reasons, list) and degradation_reasons:
             entity_audit["degradation_reasons"] = [
@@ -339,10 +652,13 @@ class TraceProjection:
             "rules_applied": rules_applied,
             "model_name": model_name,
             "structured_conclusion": structured_conclusion,
+            "brief": structured_conclusion,
             "selected_action": selected_action,
             "confidence": confidence,
             "warnings": warnings,
         }
+        if unavailable:
+            basis["summary_unavailable"] = unavailable
         basis.update(entity_audit)
         return basis
 
@@ -391,10 +707,29 @@ class AgentTraceService:
     ) -> str:
         trace_id = self.new_trace_id()
         input_projected = TraceProjection.project(input_data)
-        output_projected = TraceProjection.project(output_data) if output_data is not None else {}
-        decision_basis = (
-            TraceProjection.decision_basis(output_data) if output_data is not None else {}
-        )
+        rationale_mode = resolve_decision_rationale_mode()
+        if output_data is not None:
+            enriched_output, _summary, _unavailable = ensure_decision_summary(
+                agent_name,
+                output_data,
+                rationale_mode=rationale_mode,
+            )
+            output_projected = TraceProjection.project(enriched_output)
+            decision_basis = TraceProjection.decision_basis(
+                enriched_output,
+                agent_name=agent_name,
+                rationale_mode=rationale_mode,
+            )
+        else:
+            output_projected = {}
+            decision_basis = {
+                "structured_conclusion": "",
+                "brief": "",
+                "summary_unavailable": "empty_output",
+                "evidence_refs": [],
+                "rules_applied": [],
+                "warnings": [],
+            }
         output_projected["_decision_basis"] = decision_basis
 
         duration_ms: int | None = None
@@ -483,4 +818,11 @@ class AgentTraceService:
             return await session.get(orm.AgentTrace, trace_id)
 
 
-__all__ = ["AgentTraceService", "MAX_AUDIT_FIELD_BYTES", "TraceProjection"]
+__all__ = [
+    "AgentTraceService",
+    "MAX_AUDIT_FIELD_BYTES",
+    "TraceProjection",
+    "ensure_decision_summary",
+    "resolve_decision_rationale_mode",
+    "synthesize_decision_summary",
+]

@@ -1005,6 +1005,65 @@ class TestDecisionTraceDegradationAndEdgeCases:
         assert "hidden chain-of-thought" not in str(agent.detail)
 
     @pytest.mark.asyncio
+    async def test_agent_execution_synthesizes_brief_when_decision_summary_missing(
+        self,
+        service: DecisionTraceService,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """ISSUE-243: read path fills structured brief for typed agent outputs."""
+        event_id = _id("evt")
+
+        async with session_factory() as session:
+            async with session.begin():
+                await _seed_security_event(session, event_id)
+                await _seed_agent_trace(
+                    session,
+                    event_id,
+                    agent_name="risk_agent",
+                    output_data={
+                        "risk_score": 72,
+                        "severity": "high",
+                        "scoring_mode": "heuristic",
+                        "confidence": 0.8,
+                    },
+                )
+
+        trace = await service.get_decision_trace(event_id)
+        agent = next(
+            e for e in trace.entries if e.entry_type == DecisionTraceEntryType.AGENT_EXECUTION
+        )
+        assert "risk_score=72" in agent.detail["structured_conclusion"]
+        assert agent.detail["brief"] == agent.detail["structured_conclusion"]
+        assert "status=completed" not in agent.title
+        assert "risk_score=72" in agent.title
+
+    @pytest.mark.asyncio
+    async def test_empty_agent_output_exposes_summary_unavailable(
+        self,
+        service: DecisionTraceService,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        event_id = _id("evt")
+
+        async with session_factory() as session:
+            async with session.begin():
+                await _seed_security_event(session, event_id)
+                await _seed_agent_trace(
+                    session,
+                    event_id,
+                    agent_name="memory_agent",
+                    output_data={},
+                )
+
+        trace = await service.get_decision_trace(event_id)
+        agent = next(
+            e for e in trace.entries if e.entry_type == DecisionTraceEntryType.AGENT_EXECUTION
+        )
+        assert agent.detail["summary_unavailable"] == "empty_output"
+        assert "summary_unavailable=empty_output" in agent.title
+        assert "status=completed" not in agent.title
+
+    @pytest.mark.asyncio
     async def test_running_agent_title_uses_in_progress_wording(
         self,
         service: DecisionTraceService,

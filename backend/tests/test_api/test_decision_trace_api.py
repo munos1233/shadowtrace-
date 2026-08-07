@@ -237,3 +237,6 @@ async def test_decision_trace_api_zero_leakage_on_injected_cot(
     agent = next(entry for entry in body["entries"] if entry["entry_type"] == "agent_execution")
     assert agent["detail"]["thought"] == "[NOT_RETAINED]"
     assert agent["detail"]["reflection"] == "[NOT_RETAINED]"
+    assert agent["detail"]["structured_conclusion"] == "bounded action selected"
+    assert agent["detail"]["brief"] == "bounded action selected"
+    assert secret not in agent["detail"]["structured_conclusion"]
