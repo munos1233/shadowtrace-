@@ -103,11 +103,52 @@ make smoke-demo        # exit 0 并打印 URL/端口表
 | `make bootstrap-demo` | 同 `make bootstrap`（demo guard + 迁移/种子） |
 | `make smoke-demo` | demo 全栈冒烟：bootstrap + worker + scheduler + OTEL/Prometheus/Grafana |
 | `make down-demo` | 停止 demo 栈（含 worker/scheduler/observability）——**up-demo 后必用** |
+| `make eval-full-loop` | **金标全闭环评测**（ISSUE-256）：mock-xdr seed → full_loop → **脚本审批** |
 | `make up-observability` | 仅启动 OTEL/Prometheus/Grafana（不含 app） |
 | `make down-observability` | 停止 observability 栈 |
 | `make down` | 停止并移除容器（**数据卷保留**） |
 | `make down-v` | 停止并移除容器 + **删除所有数据卷** |
 | `make test` | 运行后端 pytest 健康检查测试 |
+
+### 动态评测金标剖面（ISSUE-256）
+
+第二轮动态评测里，用手搓 `POST /events` 跑「全闭环」会在 Mock 上 **没有实体 → Evidence 失败**；靠 `APPROVAL_TIMEOUT_MINUTES=30` 空等结束会踩 R2-012 / ISSUE-247。金标剧本如下（**不改生产默认安全策略**）：
+
+```bash
+# 1) 有 investigation 执行能力的栈（demo 或 WORKER=1）
+make up-demo
+# 或: make up WORKER=1
+
+# 2) 一键金标：seed_mock_xdr_and_ingest + include_response_execution + 脚本 approve
+make eval-full-loop
+# 等价：
+# python3 scripts/dynamic_eval_full_loop.py --seed-via-compose \
+#   --scenario insider_data_exfiltration --max-events 1
+```
+
+| 项 | 金标 / 评测 | 生产默认（保持不变） |
+|----|-------------|----------------------|
+| 事件夹具 | `scripts/seed_mock_xdr_and_ingest.py` | 同左（bootstrap 已用） |
+| 禁止夹具 | 手搓 `POST /events` 冒充全闭环 | — |
+| investigate | `include_response_execution=true`，通常 `generate_report=true` | bootstrap 默认二者皆 false |
+| 审批收场 | `scripts/dynamic_eval_approve.py` / `make eval-full-loop` | 人工 UI 或脚本；**禁止**靠超时收场 |
+| `APPROVAL_TIMEOUT_MINUTES` | 评测可在本地 `.env` 设 `2~5` | **30**（勿为评测改仓库默认） |
+| `LLM_TIMEOUT_SECONDS` | 评测可设 `45~60` | `.env.example` 默认 `30` |
+
+**Bootstrap 可选剖面**（默认行为不变）：
+
+```bash
+BOOTSTRAP_GENERATE_REPORT=true make bootstrap
+BOOTSTRAP_INCLUDE_RESPONSE=true make bootstrap   # 会停在 waiting_approval，需脚本审批
+```
+
+**耗时与混跑诚实说明（R2-014 / R2-017）：**
+
+- Compose investigation worker 使用 `celery -c 2`。一次触发 **3** 路调查会排队约数分钟；评测请优先 `--max-events 1` / `EVAL_MAX_EVENTS=1`。
+- 默认 `EMBEDDING_MODE=mock`；即使 `LLM_MODE` 指向真实 openai_compatible 端点，embedding 仍可能是 mock，除非两边都显式覆盖。这是预期混跑，不是金标缺陷。
+- 本剖面 **不**改变 ISSUE-206 / 计划审批 / `evidence_limited` 产品合同。
+
+评测超时建议写在本地 `.env`（参考仓库根目录 `.env.example` 中「Dynamic eval / gold-path profile」注释块），**不要**把仓库里的 `APPROVAL_TIMEOUT_MINUTES=30` 改成 2。
 
 ---
 
