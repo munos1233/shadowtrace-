@@ -24,7 +24,9 @@ from app.core.llm.base import (
     LLMProviderError,
     LLMTimeoutError,
     SQLAlchemyLLMCallAuditRecorder,
+    bump_max_tokens,
     classify_llm_call_failure,
+    ensure_json_mode_messages,
     sanitize_llm_error_detail,
 )
 from app.core.llm.factory import get_llm_client
@@ -41,14 +43,24 @@ class TriagePayload(BaseModel):
 MESSAGES = [LLMMessage(role="user", content="Classify this event")]
 
 
-def _response(content: str, *, model: str, prompt_tokens: int = 4) -> dict[str, Any]:
+def _response(
+    content: str | None,
+    *,
+    model: str,
+    prompt_tokens: int = 4,
+    completion_tokens: int = 3,
+    finish_reason: str | None = "stop",
+) -> dict[str, Any]:
+    choice: dict[str, Any] = {"message": {"content": content}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
     return {
         "model": model,
-        "choices": [{"message": {"content": content}}],
+        "choices": [choice],
         "usage": {
             "prompt_tokens": prompt_tokens,
-            "completion_tokens": 3,
-            "total_tokens": prompt_tokens + 3,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
         },
     }
 
@@ -169,6 +181,7 @@ async def test_json_mode_repairs_invalid_output_once_and_parses_model() -> None:
     assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.87)
     assert len(calls) == 2
     assert calls[0]["response_format"] == {"type": "json_object"}
+    assert any("JSON" in message["content"] for message in calls[0]["messages"])
     assert "Return corrected JSON only" in calls[1]["messages"][-1]["content"]
     assert [entry.status for entry in audit.entries] == ["llm_invalid_json", "success"]
 
@@ -275,6 +288,140 @@ def test_sanitize_llm_error_detail_redacts_and_truncates() -> None:
 
 def test_classify_llm_call_failure_success_is_null() -> None:
     assert classify_llm_call_failure(status="success", error=None) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_empty_content_retries_once_with_higher_max_tokens() -> None:
+    """ISSUE-239: empty content gets a bounded max_tokens bump, not blind model fallback."""
+
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json=_response(
+                    "",
+                    model=payload["model"],
+                    completion_tokens=48,
+                    finish_reason="length",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"event_type":"host_compromise","confidence":0.81}',
+                model=payload["model"],
+            ),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        response = await _client(http_client, audit=audit).chat(
+            MESSAGES,
+            event_id="evt-2026-empty-retry",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+            max_tokens=256,
+            json_mode=True,
+            response_model=TriagePayload,
+        )
+
+    assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.81)
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 256
+    assert calls[1]["max_tokens"] == bump_max_tokens(256)
+    assert "empty content" in calls[1]["messages"][-1]["content"].lower()
+    assert [(entry.status, entry.error_class) for entry in audit.entries] == [
+        ("llm_invalid_json", "empty_content"),
+        ("success", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_empty_content_does_not_enter_json_repair_path() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        return httpx.Response(
+            200,
+            json=_response(None, model="primary-model", completion_tokens=32),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(LLMInvalidJSONError) as exc_info:
+            await _client(http_client, audit=audit).chat(
+                MESSAGES,
+                event_id="evt-2026-empty-fail",
+                agent_name="TriageAgent",
+                prompt_key="triage_extract",
+                response_model=TriagePayload,
+            )
+
+    assert exc_info.value.error_class == "empty_content"
+    assert len(calls) == 2
+    assert [entry.error_class for entry in audit.entries] == ["empty_content", "empty_content"]
+    # Second call is the empty-content bump hint, not the schema repair prompt.
+    assert "empty content" in calls[1]["messages"][-1]["content"].lower()
+    assert all("Return corrected JSON only" not in c["messages"][-1]["content"] for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_length_truncated_invalid_json_bumps_tokens_before_repair() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json=_response(
+                    '{"event_type":"host_compromise","confidence":',
+                    model=payload["model"],
+                    finish_reason="length",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"event_type":"host_compromise","confidence":0.66}',
+                model=payload["model"],
+            ),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        response = await _client(http_client, audit=audit).chat(
+            MESSAGES,
+            event_id="evt-2026-trunc",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+            max_tokens=128,
+            response_model=TriagePayload,
+        )
+
+    assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.66)
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 128
+    assert calls[1]["max_tokens"] == bump_max_tokens(128)
+    assert all("Return corrected JSON only" not in c["messages"][-1]["content"] for c in calls)
+    assert [(entry.status, entry.error_class) for entry in audit.entries] == [
+        ("llm_invalid_json", "invalid_json"),
+        ("success", None),
+    ]
+
+
+def test_ensure_json_mode_messages_injects_hint_when_missing() -> None:
+    ensured = ensure_json_mode_messages(MESSAGES)
+    assert any("JSON" in message.content for message in ensured)
+    already = [LLMMessage(role="user", content="Return JSON object")]
+    assert ensure_json_mode_messages(already)[0].content == "Return JSON object"
 
 
 @pytest.mark.asyncio
