@@ -232,6 +232,33 @@ function makeTraceEntries(): DecisionTraceEntry[] {
 }
 
 describe("DecisionTraceTimeline", () => {
+  it("defaults duration display to active_duration_ms over wall clock", () => {
+    renderWithProviders(
+      <DecisionTraceTimeline
+        entries={makeTraceEntries()}
+        summary={{
+          agent_count: 1,
+          tool_call_count: 1,
+          llm_call_count: 0,
+          total_tokens: 0,
+          state_transition_count: 2,
+          approval_count: 0,
+          action_execution_count: 0,
+          disposition_count: 0,
+          writeback_count: 0,
+          total_duration_ms: 32 * 60 * 1000,
+          active_duration_ms: 2 * 60 * 1000,
+        }}
+      />,
+    );
+    const summary = screen.getByTestId("trace-duration-summary");
+    expect(summary).toHaveTextContent("调查耗时");
+    expect(summary).toHaveTextContent("2 min");
+    expect(summary).toHaveTextContent("有效");
+    expect(summary).toHaveTextContent("墙钟");
+    expect(summary).toHaveTextContent("32 min");
+  });
+
   it("renders all eight ordered trace types and safe agent/writeback evidence", () => {
     renderWithProviders(<DecisionTraceTimeline entries={makeTraceEntries()} />);
 

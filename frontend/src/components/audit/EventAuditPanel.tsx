@@ -245,6 +245,7 @@ export default function EventAuditPanel({
           <DecisionTraceTimeline
             entries={trace.entries}
             missingSources={trace.missing_sources}
+            summary={trace.summary}
             onToolCallSelect={selectCallById}
           />
         )

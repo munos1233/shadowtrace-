@@ -83,7 +83,10 @@ export interface DecisionTraceSummary {
   action_execution_count: number;
   disposition_count: number;
   writeback_count: number;
+  /** Wall-clock span including WAITING_* idle (legacy-compatible). */
   total_duration_ms: number | null;
+  /** Effective investigation duration excluding WAITING_* halt gaps. */
+  active_duration_ms: number | null;
 }
 
 export interface DecisionTraceResponse {

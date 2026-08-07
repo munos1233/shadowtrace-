@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 import type {
   DecisionTraceEntry,
   DecisionTraceEntryType,
+  DecisionTraceSummary,
 } from "../../types/trace";
 import {
   ALL_TRACE_TYPES,
@@ -24,6 +25,15 @@ import JsonTree from "./JsonTree";
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatDurationMs(value: number): string {
+  if (value < 1000) return `${value} ms`;
+  const seconds = value / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = Math.round(seconds % 60);
+  return rem > 0 ? `${minutes} min ${rem} s` : `${minutes} min`;
 }
 
 const COT_COMPAT_KEYS = [
@@ -190,10 +200,12 @@ function TraceDetail({ entry }: { entry: DecisionTraceEntry }) {
 export default function DecisionTraceTimeline({
   entries,
   missingSources = [],
+  summary = null,
   onToolCallSelect,
 }: {
   entries: DecisionTraceEntry[];
   missingSources?: string[];
+  summary?: DecisionTraceSummary | null;
   onToolCallSelect?: (callId: string) => void;
 }) {
   const [selectedTypes, setSelectedTypes] =
@@ -209,6 +221,11 @@ export default function DecisionTraceTimeline({
     [entries, selectedTypes],
   );
 
+  // ISSUE-253: prefer active (excludes WAITING_* idle); wall clock is secondary.
+  const activeMs = summary?.active_duration_ms ?? null;
+  const wallMs = summary?.total_duration_ms ?? null;
+  const primaryDurationMs = activeMs ?? wallMs;
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       {missingSources.length > 0 && (
@@ -218,6 +235,24 @@ export default function DecisionTraceTimeline({
           message="部分决策轨迹来源不可用"
           description={missingSources.join("；")}
         />
+      )}
+      {primaryDurationMs != null && (
+        <Typography.Paragraph style={{ marginBottom: 0 }} data-testid="trace-duration-summary">
+          <Typography.Text type="secondary">调查耗时：</Typography.Text>
+          <Typography.Text strong>
+            {formatDurationMs(primaryDurationMs)}
+          </Typography.Text>
+          {activeMs != null ? (
+            <Typography.Text type="secondary">（有效，已排除审批/写回空等）</Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">（墙钟）</Typography.Text>
+          )}
+          {activeMs != null && wallMs != null && wallMs !== activeMs ? (
+            <Typography.Text type="secondary">
+              {" "}· 墙钟 {formatDurationMs(wallMs)}
+            </Typography.Text>
+          ) : null}
+        </Typography.Paragraph>
       )}
       <Checkbox.Group
         aria-label="轨迹类型筛选"
