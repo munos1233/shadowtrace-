@@ -11,8 +11,13 @@
 #   --profile optional   OpenSearch + Neo4j
 # Live mode: copy infra/.env.live.example → ../.env.live (compose auto-loads when present)
 #
+# DB migration ownership (ISSUE-238):
+#   Only `backend` runs `alembic upgrade head` via docker-entrypoint.sh.
+#   mock-xdr / worker / scheduler-* set SKIP_DB_MIGRATE=true and wait on
+#   backend healthy so parallel profile ups cannot race-create alembic_version.
+#
 # Usage:
-#   make up                # start core services
+#   make up                # start core services (backend owns migrate)
 #   make up WORKER=1       # start with Celery investigation worker
 #   make up-demo           # core + worker + scheduler + observability (ISSUE-141)
 #   make bootstrap         # migrate + seed demo data
@@ -181,6 +186,7 @@ services:
   # --------------------------------------------------------------------------
   # Celery worker — async investigation execution
   #   docker compose --profile worker up -d
+  # Shares backend image/ENTRYPOINT; must not race alembic (ISSUE-238).
   # --------------------------------------------------------------------------
   worker:
     profiles: ["worker", "demo"]
@@ -192,6 +198,8 @@ services:
       - path: ../.env.live
         required: false
     environment:
+      # Backend is the sole Compose migrator; skip entrypoint alembic here.
+      SKIP_DB_MIGRATE: "true"
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
       SOURCE_MODE: mock_xdr
@@ -234,6 +242,9 @@ services:
         condition: service_healthy
       mock-xdr:
         condition: service_healthy
+      # Wait until backend finished migrate + became healthy (schema ready).
+      backend:
+        condition: service_healthy
 
   # --------------------------------------------------------------------------
   # Ingestion scheduler — Celery Beat + dedicated ingestion worker (ISSUE-107)
@@ -256,6 +267,8 @@ services:
       - path: ../.env.live
         required: false
     environment:
+      # Backend is the sole Compose migrator; skip entrypoint alembic here.
+      SKIP_DB_MIGRATE: "true"
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
       SOURCE_MODE: mock_xdr
@@ -290,6 +303,8 @@ services:
         condition: service_healthy
       mock-xdr:
         condition: service_healthy
+      backend:
+        condition: service_healthy
 
   scheduler-worker:
     profiles: ["scheduler", "demo"]
@@ -301,6 +316,8 @@ services:
       - path: ../.env.live
         required: false
     environment:
+      # Backend is the sole Compose migrator; skip entrypoint alembic here.
+      SKIP_DB_MIGRATE: "true"
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
       SOURCE_MODE: mock_xdr
@@ -342,6 +359,8 @@ services:
       redis:
         condition: service_healthy
       mock-xdr:
+        condition: service_healthy
+      backend:
         condition: service_healthy
 
   # --------------------------------------------------------------------------
