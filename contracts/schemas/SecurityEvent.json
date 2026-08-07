@@ -911,6 +911,7 @@
         }
       ],
       "default": null,
+      "description": "Bounded event observability snapshot for list/detail. Complete investigation state remains in WorkingMemory and decision-trace.",
       "title": "Event Context Snapshot"
     },
     "row_version": {

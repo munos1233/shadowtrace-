@@ -690,11 +690,37 @@ class EventService:
         if not event.event_context_snapshot:
             try:
                 from app.services.context_service import _context_as_dict, _to_jsonable
+                from app.services.event_context_snapshot_projection import (
+                    merge_evidence_summary_into_snapshot,
+                    merge_report_generated_into_snapshot,
+                    merge_storyline_summary_into_snapshot,
+                )
 
                 ctx = await self._store.get_full_context(event_id)
-                snapshot = {
-                    key: _to_jsonable(value) for key, value in _context_as_dict(ctx).items()
-                }
+                raw = {key: _to_jsonable(value) for key, value in _context_as_dict(ctx).items()}
+                # ISSUE-254: do not return the full EventContext dump on GET.
+                # Project bounded observability fields; full state stays in WM/trace.
+                snapshot: dict[str, Any] = {}
+                if isinstance(raw.get("risk_assessment"), dict):
+                    snapshot["risk_assessment"] = raw["risk_assessment"]
+                if raw.get("analysis_only_complete") is not None:
+                    snapshot["analysis_only_complete"] = bool(raw["analysis_only_complete"])
+                if raw.get("report_generated") is not None:
+                    snapshot = merge_report_generated_into_snapshot(
+                        snapshot, bool(raw["report_generated"])
+                    )
+                elif raw.get("report") is not None:
+                    snapshot = merge_report_generated_into_snapshot(snapshot, True)
+                if isinstance(raw.get("evidence_output"), dict):
+                    snapshot = merge_evidence_summary_into_snapshot(
+                        snapshot, raw["evidence_output"]
+                    )
+                if isinstance(raw.get("storyline"), dict):
+                    snapshot = merge_storyline_summary_into_snapshot(snapshot, raw["storyline"])
+                if isinstance(raw.get("classification_override"), dict):
+                    snapshot["classification_override"] = raw["classification_override"]
+                if raw.get("execution_substate") is not None:
+                    snapshot["execution_substate"] = raw["execution_substate"]
                 event = event.model_copy(update={"event_context_snapshot": snapshot})
             except Exception:
                 logger.debug(
@@ -1112,6 +1138,128 @@ class EventService:
                 payload["factors"] = list(factor_names)
             await self._bus.publish_event(event_id, "risk_updated", payload)
         return result
+
+    async def merge_evidence_context_snapshot(
+        self,
+        event_id: str,
+        evidence_output: Any,
+    ) -> None:
+        """Merge bounded evidence summary into ``event_context_snapshot`` (ISSUE-254)."""
+        from app.services.event_context_snapshot_projection import (
+            merge_evidence_summary_into_snapshot,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    row = await session.get(
+                        orm.SecurityEvent,
+                        event_id,
+                        with_for_update=True,
+                    )
+                    if row is None:
+                        return
+                    payload = (
+                        evidence_output.model_dump(mode="json")
+                        if hasattr(evidence_output, "model_dump")
+                        else evidence_output
+                    )
+                    if not isinstance(payload, dict):
+                        return
+                    row.event_context_snapshot = merge_evidence_summary_into_snapshot(
+                        (
+                            dict(row.event_context_snapshot)
+                            if isinstance(row.event_context_snapshot, dict)
+                            else None
+                        ),
+                        payload,
+                    )
+                    await session.flush()
+        except Exception:
+            logger.warning(
+                "merge_evidence_context_snapshot failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+
+    async def merge_storyline_context_snapshot(
+        self,
+        event_id: str,
+        storyline: Any,
+    ) -> None:
+        """Merge bounded storyline summary into ``event_context_snapshot`` (ISSUE-254)."""
+        from app.services.event_context_snapshot_projection import (
+            merge_storyline_summary_into_snapshot,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    row = await session.get(
+                        orm.SecurityEvent,
+                        event_id,
+                        with_for_update=True,
+                    )
+                    if row is None:
+                        return
+                    payload = (
+                        storyline.model_dump(mode="json")
+                        if hasattr(storyline, "model_dump")
+                        else storyline
+                    )
+                    if not isinstance(payload, dict):
+                        return
+                    row.event_context_snapshot = merge_storyline_summary_into_snapshot(
+                        (
+                            dict(row.event_context_snapshot)
+                            if isinstance(row.event_context_snapshot, dict)
+                            else None
+                        ),
+                        payload,
+                    )
+                    await session.flush()
+        except Exception:
+            logger.warning(
+                "merge_storyline_context_snapshot failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+
+    async def merge_report_generated_context_snapshot(
+        self,
+        event_id: str,
+        generated: bool,
+    ) -> None:
+        """Persist ``report_generated`` onto the durable snapshot (ISSUE-254)."""
+        from app.services.event_context_snapshot_projection import (
+            merge_report_generated_into_snapshot,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    row = await session.get(
+                        orm.SecurityEvent,
+                        event_id,
+                        with_for_update=True,
+                    )
+                    if row is None:
+                        return
+                    row.event_context_snapshot = merge_report_generated_into_snapshot(
+                        (
+                            dict(row.event_context_snapshot)
+                            if isinstance(row.event_context_snapshot, dict)
+                            else None
+                        ),
+                        generated,
+                    )
+                    await session.flush()
+        except Exception:
+            logger.warning(
+                "merge_report_generated_context_snapshot failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
 
     async def update_classification(
         self,

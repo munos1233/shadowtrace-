@@ -1868,3 +1868,120 @@ async def test_supporting_parent_back_reference_enriches_entities(
     assert event_after is not None
     hostnames = {h.hostname for h in event_after.entities.hosts if h.hostname}
     assert "DEV-WKS-012" in hostnames
+
+
+@pytest.mark.asyncio
+async def test_merge_evidence_snapshot_summary_empty_evidence(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ISSUE-254: empty evidence still projects collection_status/gaps on snapshot."""
+    from app.models.agent_io import CollectionStatus, EvidenceOutput
+    from app.models.enums import EvidenceSource
+    from app.models.evidence import EvidenceGap
+
+    sfx = _sfx()
+    created = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(kind=SourceObjectKind.INCIDENT, object_id=f"INC-snap254-{sfx}"),
+            title="snapshot-evidence-empty",
+            event_type=EventType.MALICIOUS_PROCESS,
+            severity=Severity.HIGH,
+            source_type="mock_xdr",
+        )
+    )
+    assert created.event_id
+    output = EvidenceOutput(
+        evidence_list=[],
+        gaps=[
+            EvidenceGap(
+                event_id=created.event_id,
+                missing_source=EvidenceSource.ENDPOINT,
+                reason="all_sources_failed",
+            )
+        ],
+        failed_sources=["endpoint"],
+        overall_confidence=0.0,
+        collection_status=CollectionStatus.FAILED,
+    )
+    await event_service.merge_evidence_context_snapshot(created.event_id, output)
+
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, created.event_id)
+        assert row is not None
+        snap = dict(row.event_context_snapshot or {})
+    assert snap.get("collection_status") == CollectionStatus.FAILED.value
+    assert snap.get("evidence_count") == 0
+    assert snap.get("evidence_gaps")
+    assert snap["evidence_gaps"][0]["missing_source"] == EvidenceSource.ENDPOINT.value
+    assert "all_sources_failed" in snap["evidence_gaps"][0]["reason"]
+    assert "evidence_list" not in snap
+    assert "chain_of_thought" not in snap
+    assert "raw_prompt" not in snap
+
+
+@pytest.mark.asyncio
+async def test_merge_storyline_snapshot_summary_grounding(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ISSUE-254: storyline writeback mirrors grounding_status without full phases."""
+    from app.models.agent_io import (
+        AttackStoryline,
+        StorylineGeneratedBy,
+        StorylineGroundingStatus,
+    )
+
+    sfx = _sfx()
+    created = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(kind=SourceObjectKind.INCIDENT, object_id=f"INC-stl254-{sfx}"),
+            title="snapshot-storyline",
+            event_type=EventType.MALICIOUS_PROCESS,
+            severity=Severity.MEDIUM,
+            source_type="mock_xdr",
+        )
+    )
+    assert created.event_id
+    storyline = AttackStoryline(
+        storyline_id=f"stl-{sfx}",
+        event_id=created.event_id,
+        narrative_summary="ungrounded empty phases",
+        phases=[],
+        generated_by=StorylineGeneratedBy.RULE,
+        grounding_status=StorylineGroundingStatus.UNGROUNDED,
+    )
+    await event_service.merge_storyline_context_snapshot(created.event_id, storyline)
+
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, created.event_id)
+        assert row is not None
+        snap = dict(row.event_context_snapshot or {})
+    assert snap["storyline"]["grounding_status"] == "ungrounded"
+    assert snap["storyline"]["phase_count"] == 0
+    assert "phases" not in snap["storyline"]
+
+
+@pytest.mark.asyncio
+async def test_merge_report_generated_snapshot_flag(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ISSUE-254: report_generated is mirrored onto durable snapshot."""
+    sfx = _sfx()
+    created = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(kind=SourceObjectKind.INCIDENT, object_id=f"INC-rpt254-{sfx}"),
+            title="snapshot-report-flag",
+            event_type=EventType.MALICIOUS_PROCESS,
+            severity=Severity.LOW,
+            source_type="mock_xdr",
+        )
+    )
+    assert created.event_id
+    await event_service.merge_report_generated_context_snapshot(created.event_id, True)
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, created.event_id)
+        assert row is not None
+        snap = dict(row.event_context_snapshot or {})
+    assert snap.get("report_generated") is True

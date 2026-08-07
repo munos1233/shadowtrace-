@@ -64,7 +64,16 @@ class SecurityEvent(BaseModel):
     degraded_flags: list[str] = Field(default_factory=list)
     escalated: bool = False
     external_unsynced: bool = False
-    event_context_snapshot: dict[str, Any] | None = None
+    # ISSUE-254: API-facing bounded observability projection (evidence/storyline
+    # counters, report_generated, risk_assessment, …). Full EventContext remains
+    # in WorkingMemory / journal / decision-trace — never treat this column as WM.
+    event_context_snapshot: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Bounded event observability snapshot for list/detail. "
+            "Complete investigation state remains in WorkingMemory and decision-trace."
+        ),
+    )
     row_version: int = Field(default=1, ge=1)
     # Derived on API GET (ISSUE-209); not an ORM-persisted column.
     classification_source: ClassificationSource | None = None
