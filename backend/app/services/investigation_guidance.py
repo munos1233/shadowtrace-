@@ -36,9 +36,7 @@ _ANALYSIS_ONLY_DEFERRED_SUFFIX = (
     "本事件已完成仅分析，无法从 REPORTING 补发处置方案。"
     "对新事件请在发起调查前选择「分析并生成处置方案」。"
 )
-_ANALYSIS_ONLY_MODE_HINT = (
-    "（当前部署 ORCHESTRATION_MODE=analysis_only，完整处置链路不可用。）"
-)
+_ANALYSIS_ONLY_MODE_HINT = "（当前部署 ORCHESTRATION_MODE=analysis_only，完整处置链路不可用。）"
 
 
 @dataclass(frozen=True)
