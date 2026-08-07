@@ -149,9 +149,7 @@ def build_decision_brief(
 ) -> str:
     """Bounded decision brief for template enrichment (no CoT / prompt text)."""
     event_type = triage_result.event_type.value if triage_result else "unknown"
-    need_investigation = (
-        triage_result.need_investigation if triage_result is not None else None
-    )
+    need_investigation = triage_result.need_investigation if triage_result is not None else None
     parts = [
         f"事件类型 {event_type}",
         f"严重级别 {risk_assessment.severity.value}",
@@ -193,17 +191,13 @@ def build_evidence_limited_reason(
     """Explain key risk retention when evidence is limited (structured, no CoT)."""
     if not risk_assessment.evidence_limited:
         return None
-    reasons: list[str] = [
-        "证据受限（evidence_limited=true），威胁信号保留但置信度受采集完整性约束"
-    ]
+    reasons: list[str] = ["证据受限（evidence_limited=true），威胁信号保留但置信度受采集完整性约束"]
     status = evidence_output.collection_status.value
     reasons.append(f"采集状态={status}")
     if evidence_output.failed_sources:
         reasons.append("失败源=" + ",".join(evidence_output.failed_sources))
     if evidence_output.gaps:
-        gap_bits = [
-            f"{gap.missing_source.value}:{gap.reason}" for gap in evidence_output.gaps[:5]
-        ]
+        gap_bits = [f"{gap.missing_source.value}:{gap.reason}" for gap in evidence_output.gaps[:5]]
         reasons.append("缺口=" + ";".join(gap_bits))
     if not evidence_output.evidence_list:
         reasons.append("证据列表为空")
@@ -229,10 +223,7 @@ def build_actions_status_summary(
         return f"处置阶段状态={phase}；RESPONSE 动作 0 个。"
     counts = _action_status_counts(response_actions)
     count_text = ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
-    return (
-        f"处置阶段状态={phase}；RESPONSE 动作共 {len(response_actions)} 个"
-        f"（{count_text}）。"
-    )
+    return f"处置阶段状态={phase}；RESPONSE 动作共 {len(response_actions)} 个（{count_text}）。"
 
 
 class ReportSectionBuilder:
@@ -577,9 +568,7 @@ class ReportSectionBuilder:
         event_type = triage_result.event_type.value if triage_result else "unknown"
         # Prefer auditable decision_summary; keep deprecated reasoning only as
         # a last-resort display field (never as enrichment CoT).
-        decision_summary = (
-            (triage_result.decision_summary if triage_result else "") or ""
-        ).strip()
+        decision_summary = ((triage_result.decision_summary if triage_result else "") or "").strip()
         reasoning = ""
         if not decision_summary and triage_result is not None:
             reasoning = (triage_result.reasoning or "").strip()
