@@ -561,10 +561,15 @@ async def test_each_success_and_failure_attempt_is_persisted_as_orm_rows() -> No
             prompt_key="risk_score",
         )
 
-    assert [(row.prompt_key, row.status, row.fallback_level) for row in rows] == [
-        ("risk_score", "llm_timeout", 0),
-        ("risk_score", "success", 1),
+    assert [
+        (row.prompt_key, row.status, row.fallback_level, row.error_class)
+        for row in rows
+    ] == [
+        ("risk_score", "llm_timeout", 0, "timeout"),
+        ("risk_score", "success", 1, None),
     ]
+    assert rows[0].error_detail is not None
+    assert rows[1].error_detail is None
     assert all(session.committed for session in sessions)
 
 
