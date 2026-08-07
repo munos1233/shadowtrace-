@@ -129,9 +129,7 @@ def test_strong_triage_with_not_a_threat_substring_not_weak() -> None:
         event_type=EventType.DATA_EXFILTRATION,
         severity=Severity.HIGH,
         need_investigation=True,
-        decision_summary=(
-            "Confirmed exfiltration; not a threat to unrelated production segments."
-        ),
+        decision_summary=("Confirmed exfiltration; not a threat to unrelated production segments."),
     )
     assert not triage_has_weak_classification_signal(triage)
     assert not should_flag_triage_risk_inconsistency(

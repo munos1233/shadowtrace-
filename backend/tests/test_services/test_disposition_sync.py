@@ -35,7 +35,6 @@ from app.mock_xdr.api import create_app
 from app.mock_xdr.state import MockXDRState
 from app.models.action import Action
 from app.models.disposition import SourceObjectLocator, TargetWritebackResult
-from app.models.execution import ActionExecutionJob, TargetExecutionResult
 from app.models.enums import (
     ActionCategory,
     ActionExecutionPhase,
@@ -57,6 +56,7 @@ from app.models.enums import (
     WritebackReadiness,
     WritebackStatus,
 )
+from app.models.execution import ActionExecutionJob, TargetExecutionResult
 from app.models.ids import new_disposition_id
 from app.models.source import SourceReference
 from app.services.context_service import (

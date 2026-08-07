@@ -622,9 +622,7 @@ class TestRouteAfterTriage:
         self,
     ) -> None:
         assert (
-            route_after_triage(
-                _base_state(need_investigation=False, generate_report=False)
-            )
+            route_after_triage(_base_state(need_investigation=False, generate_report=False))
             == ROUTE_REPORT
         )
 

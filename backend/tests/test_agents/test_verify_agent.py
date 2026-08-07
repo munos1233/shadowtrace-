@@ -318,8 +318,7 @@ class FakeEventDispositionService:
             writeback_id=(
                 self._writeback_id
                 if self.activated
-                or self._skipped_reason
-                in ("already_submitted", "concurrent_head_conflict")
+                or self._skipped_reason in ("already_submitted", "concurrent_head_conflict")
                 else None
             ),
         )
@@ -1655,9 +1654,7 @@ class TestRegressionShouldFix:
         assert phase1_gate["overall_status"] == VerificationOverallStatus.WAITING.value
         assert phase1_gate["verification_phase"] == VerificationPhase.EFFECT.value
         immediate_rows = [
-            row
-            for row in phase1_gate["results"]
-            if row["action_id"] == immediate.action_id
+            row for row in phase1_gate["results"] if row["action_id"] == immediate.action_id
         ]
         assert immediate_rows[0]["detail"] == "pending_execution"
         assert result.overall_status is not VerificationOverallStatus.SUCCESS

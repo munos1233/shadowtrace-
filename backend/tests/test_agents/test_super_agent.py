@@ -21,9 +21,9 @@ from app.agents.super_agent import SuperAgent, _run_orchestration_with_renewal_w
 from app.core.errors import (
     DependencyUnavailableError,
     GuardrailViolationError,
+    InvalidStateTransitionError,
     InvestigationInProgressError,
     InvestigationLeaseLostError,
-    InvalidStateTransitionError,
     ShadowTraceError,
     ToolCallGrantUnavailableError,
     ValidationError,

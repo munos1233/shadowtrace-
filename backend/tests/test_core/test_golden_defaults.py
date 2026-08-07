@@ -85,9 +85,9 @@ def test_insider_scenario_goldens_preserve_demo_regression_pack() -> None:
     assert isinstance(risk_content, dict)
     assert _average_risk_score(risk_content) >= _CONFIRMED_THREAT_THRESHOLD
 
-    report_content = _load_golden(
-        "report_generate", "insider_data_exfiltration.json"
-    ).get("content", {})
+    report_content = _load_golden("report_generate", "insider_data_exfiltration.json").get(
+        "content", {}
+    )
     blob = json.dumps(report_content, ensure_ascii=False).lower()
     assert "zhangsan" in blob
     assert "pc-fin-023" in blob

@@ -1349,25 +1349,33 @@ async def test_concurrent_activate_and_submit_keeps_single_active_head(
 
     async with session_factory() as session:
         active = (
-            await session.execute(
-                select(orm.DispositionOutbox).where(
-                    orm.DispositionOutbox.event_id == event_id,
-                    orm.DispositionOutbox.closure_cycle == 1,
-                    orm.DispositionOutbox.intent_kind
-                    == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
-                    orm.DispositionOutbox.logical_slot == "terminal",
-                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+            (
+                await session.execute(
+                    select(orm.DispositionOutbox).where(
+                        orm.DispositionOutbox.event_id == event_id,
+                        orm.DispositionOutbox.closure_cycle == 1,
+                        orm.DispositionOutbox.intent_kind
+                        == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
+                        orm.DispositionOutbox.logical_slot == "terminal",
+                        orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         all_outboxes = (
-            await session.execute(
-                select(orm.DispositionOutbox).where(
-                    orm.DispositionOutbox.event_id == event_id,
-                    orm.DispositionOutbox.closure_cycle == 1,
+            (
+                await session.execute(
+                    select(orm.DispositionOutbox).where(
+                        orm.DispositionOutbox.event_id == event_id,
+                        orm.DispositionOutbox.closure_cycle == 1,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert len(active) == 1, f"expected exactly one active head, got {len(active)}"
     if len(activated) == 2:
         superseded = [o for o in all_outboxes if o.superseded_by_disposition_id is not None]
@@ -1401,14 +1409,18 @@ async def test_second_action_supersedes_first_with_lineage(
 
     async with session_factory() as session:
         active = (
-            await session.execute(
-                select(orm.DispositionOutbox).where(
-                    orm.DispositionOutbox.event_id == event_id,
-                    orm.DispositionOutbox.closure_cycle == 1,
-                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+            (
+                await session.execute(
+                    select(orm.DispositionOutbox).where(
+                        orm.DispositionOutbox.event_id == event_id,
+                        orm.DispositionOutbox.closure_cycle == 1,
+                        orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         first_row = await session.scalar(
             select(orm.DispositionOutbox).where(
                 orm.DispositionOutbox.disposition_id == first.disposition_id

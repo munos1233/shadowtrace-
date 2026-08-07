@@ -118,10 +118,7 @@ def apply_containment_quality_gate(
 
     rule_containment = _containment_candidates(rule_fallback_candidates)
     if not rule_containment:
-        note = (
-            "containment_quality_gate_unsatisfied: "
-            "no grounded containment after PolicyFilter"
-        )
+        note = "containment_quality_gate_unsatisfied: no grounded containment after PolicyFilter"
         if generated_by is ResponsePlanGeneratedBy.LLM:
             generated_by = ResponsePlanGeneratedBy.TEMPLATE
         strategy = f"{strategy}; {note}" if strategy else note

@@ -109,6 +109,4 @@ def snapshot_has_human_classification_override(
 ) -> bool:
     """True when ORM snapshot mirrors a durable human PATCH marker (ISSUE-209)."""
     override = classification_override_from_snapshot(snapshot)
-    return (
-        isinstance(override, dict) and str(override.get("source") or "") == "human"
-    )
+    return isinstance(override, dict) and str(override.get("source") or "") == "human"

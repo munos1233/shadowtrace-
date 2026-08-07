@@ -1299,9 +1299,7 @@ class EventService:
                                 from_status=row.status,
                                 to_status=row.status,
                                 operator=operator,
-                                reason=(
-                                    f"event_type_orm_rewrite:{previous_type}->{new_type}"
-                                ),
+                                reason=(f"event_type_orm_rewrite:{previous_type}->{new_type}"),
                             )
                         )
                         await session.flush()
@@ -1310,9 +1308,7 @@ class EventService:
                         summary = event_summary_from_security_event(row)
                         applied = True
 
-            if current_status is not None and should_skip_orm_event_type_rewrite(
-                current_status
-            ):
+            if current_status is not None and should_skip_orm_event_type_rewrite(current_status):
                 try:
                     await self._degraded.set_flag(
                         event_id,
@@ -1478,9 +1474,7 @@ class EventService:
                     updated_at=row.updated_at,
                     warnings=list(report.warnings),
                     error_detail=report.error_detail,
-                    report_quality=report_quality_from_row(
-                        getattr(row, "report_quality", None)
-                    ),
+                    report_quality=report_quality_from_row(getattr(row, "report_quality", None)),
                 )
 
     async def get_report(
@@ -1525,9 +1519,7 @@ class EventService:
                 updated_at=row.updated_at,
                 warnings=warnings,
                 error_detail=error_detail,
-                report_quality=report_quality_from_row(
-                    getattr(row, "report_quality", None)
-                ),
+                report_quality=report_quality_from_row(getattr(row, "report_quality", None)),
             )
 
     async def upsert_generate_report_action(

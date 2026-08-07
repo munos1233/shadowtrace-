@@ -67,9 +67,7 @@ def _patch_production_graph_build_baseline(monkeypatch: pytest.MonkeyPatch) -> N
     [
         (
             "response_agent",
-            lambda mp: mp.setattr(
-                "app.agents.response_agent.ResponseAgent", lambda **_k: None
-            ),
+            lambda mp: mp.setattr("app.agents.response_agent.ResponseAgent", lambda **_k: None),
         ),
         (
             "verify_agent",

@@ -26,8 +26,7 @@ def has_immediate_effect_pending(
 ) -> bool:
     rows = results if results is not None else (verification.results if verification else [])
     return any(
-        item.effect_status is EffectStatus.SKIPPED
-        and item.detail in IMMEDIATE_PENDING_SKIP_DETAILS
+        item.effect_status is EffectStatus.SKIPPED and item.detail in IMMEDIATE_PENDING_SKIP_DETAILS
         for item in rows
     )
 

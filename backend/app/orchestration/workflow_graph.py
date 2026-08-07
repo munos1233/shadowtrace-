@@ -14,7 +14,6 @@ from app.agents.planner_agent import PlannerAgent
 from app.agents.rag_agent import RAGAgent
 from app.core.config import get_settings
 from app.core.errors import InvalidStateTransitionError, ValidationError
-from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
 from app.models.agent_io import (
     CollectionStatus,
     EffectStatus,
@@ -50,6 +49,7 @@ from app.models.enums import (
 )
 from app.models.security_event import EventSummary
 from app.models.workflow import TransitionContext
+from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
 from app.orchestration.graph_state import InvestigationState
 from app.orchestration.replan_handler import (
     ReplanHandler,

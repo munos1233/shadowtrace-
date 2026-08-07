@@ -154,9 +154,7 @@ def assess_report_quality(
     verification = _section_content(report, _VERIFICATION_KEY)
     if _actions_chapter_incomplete(actions, flags.response_phase_status):
         return ReportQuality.INCOMPLETE_PLACEHOLDER
-    if _verification_chapter_incomplete(
-        verification, flags.verification_phase_status
-    ):
+    if _verification_chapter_incomplete(verification, flags.verification_phase_status):
         return ReportQuality.INCOMPLETE_PLACEHOLDER
 
     if generated_by == GENERATED_BY_TEMPLATE:
@@ -211,9 +209,7 @@ def should_reject_incomplete_without_force(
     """True when POST must 422 (incomplete + force=false + gate on)."""
     parsed = report_quality_from_row(quality)
     return (
-        parsed is ReportQuality.INCOMPLETE_PLACEHOLDER
-        and not bool(force)
-        and bool(gate_enforced)
+        parsed is ReportQuality.INCOMPLETE_PLACEHOLDER and not bool(force) and bool(gate_enforced)
     )
 
 

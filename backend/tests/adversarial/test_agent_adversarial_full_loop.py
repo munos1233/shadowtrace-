@@ -191,8 +191,7 @@ async def test_adversarial_noisy_production_full_response_closed_loop(
         "disposition_target_gaps": disposition_gaps,
         "status_sequence_includes_closed": EventStatus.CLOSED.value in status_sequence,
         "status_sequence_includes_reporting": EventStatus.REPORTING.value in status_sequence,
-        "status_sequence_includes_planning": EventStatus.PLANNING_RESPONSE.value
-        in status_sequence,
+        "status_sequence_includes_planning": EventStatus.PLANNING_RESPONSE.value in status_sequence,
         "status_sequence_includes_waiting_approval": EventStatus.WAITING_APPROVAL.value
         in status_sequence,
         "status_sequence_includes_executing": EventStatus.EXECUTING_RESPONSE.value

@@ -128,13 +128,16 @@ async def test_patch_classification_then_get_is_human_and_audited(
 
     async with session_factory() as session:
         rows = (
-            await session.execute(
-                select(orm.EventAuditLog).where(orm.EventAuditLog.event_id == event_id)
+            (
+                await session.execute(
+                    select(orm.EventAuditLog).where(orm.EventAuditLog.event_id == event_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert any(
-        "classification_override:other->data_exfiltration" in (row.reason or "")
-        for row in rows
+        "classification_override:other->data_exfiltration" in (row.reason or "") for row in rows
     )
 
 
@@ -345,10 +348,14 @@ async def test_patch_syncs_triage_result_event_type(
 
     async with session_factory() as session:
         rows = (
-            await session.execute(
-                select(orm.EventAuditLog).where(orm.EventAuditLog.event_id == event_id)
+            (
+                await session.execute(
+                    select(orm.EventAuditLog).where(orm.EventAuditLog.event_id == event_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert any("triage_result_event_type_synced" in (row.reason or "") for row in rows)
 
 

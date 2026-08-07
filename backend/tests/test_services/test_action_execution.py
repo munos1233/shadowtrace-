@@ -915,9 +915,9 @@ async def test_reclaimed_action_can_be_executed_again(
 
     async with session_factory() as session:
         outbox_count_before = await session.scalar(
-            select(func.count()).select_from(orm.DispositionOutbox).where(
-                orm.DispositionOutbox.event_id == event_id
-            )
+            select(func.count())
+            .select_from(orm.DispositionOutbox)
+            .where(orm.DispositionOutbox.event_id == event_id)
         )
 
     async with session_factory() as session:
@@ -938,17 +938,15 @@ async def test_reclaimed_action_can_be_executed_again(
         assert row.execution_job_id == _job_id
         jobs = (
             await session.scalars(
-                select(orm.ActionExecutionJob).where(
-                    orm.ActionExecutionJob.action_id == action_id
-                )
+                select(orm.ActionExecutionJob).where(orm.ActionExecutionJob.action_id == action_id)
             )
         ).all()
         assert len(jobs) == 1
         assert jobs[0].job_id == _job_id
         outbox_count_after = await session.scalar(
-            select(func.count()).select_from(orm.DispositionOutbox).where(
-                orm.DispositionOutbox.event_id == event_id
-            )
+            select(func.count())
+            .select_from(orm.DispositionOutbox)
+            .where(orm.DispositionOutbox.event_id == event_id)
         )
         assert int(outbox_count_after or 0) == int(outbox_count_before or 0)
 

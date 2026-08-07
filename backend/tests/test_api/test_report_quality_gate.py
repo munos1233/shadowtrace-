@@ -58,9 +58,7 @@ def _sections(**overrides: str) -> list[ReportSection]:
     contents["executed_actions"] = NOT_EXECUTED_ACTIONS
     contents["verification_results"] = NOT_EXECUTED_VERIFICATION
     contents.update(overrides)
-    return [
-        ReportSection(key=key, title=key, content=contents[key]) for key in SECTION_KEYS
-    ]
+    return [ReportSection(key=key, title=key, content=contents[key]) for key in SECTION_KEYS]
 
 
 def _report(
@@ -153,6 +151,7 @@ def _patch_generate_stack(
 
     report_input.model_copy = _model_copy  # type: ignore[attr-defined]
     return store, stack, report_input
+
 
 @pytest.mark.asyncio
 async def test_post_report_rejects_incomplete_without_force() -> None:

@@ -200,9 +200,7 @@ def test_alembic_version_num_column_width(migrated: None) -> None:
                     )
                 )
                 result = row.one()
-                assert result[0] >= min_width, (
-                    f"expected width >= {min_width}, got {result[0]}"
-                )
+                assert result[0] >= min_width, f"expected width >= {min_width}, got {result[0]}"
                 stamped = await conn.scalar(text("SELECT version_num FROM alembic_version"))
                 assert stamped == "0032_investigation_intent_generate_report"
         finally:
@@ -756,16 +754,21 @@ async def test_enqueue_supersedes_prior_head_and_keeps_single_active(
 
     # Invariant: exactly one active (non-superseded) head for the lineage.
     active = (
-        await session.execute(
-            select(m.DispositionOutbox).where(
-                m.DispositionOutbox.event_id == event_id,
-                m.DispositionOutbox.closure_cycle == 1,
-                m.DispositionOutbox.intent_kind == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
-                m.DispositionOutbox.logical_slot == "terminal",
-                m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+        (
+            await session.execute(
+                select(m.DispositionOutbox).where(
+                    m.DispositionOutbox.event_id == event_id,
+                    m.DispositionOutbox.closure_cycle == 1,
+                    m.DispositionOutbox.intent_kind
+                    == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
+                    m.DispositionOutbox.logical_slot == "terminal",
+                    m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(active) == 1
     assert active[0].disposition_id == second.disposition_id
 
@@ -782,16 +785,21 @@ async def test_enqueue_supersedes_prior_head_and_keeps_single_active(
     second_row = await session.get(m.DispositionOutbox, second.outbox_id)
     assert second_row.superseded_by_disposition_id == third.disposition_id
     active = (
-        await session.execute(
-            select(m.DispositionOutbox).where(
-                m.DispositionOutbox.event_id == event_id,
-                m.DispositionOutbox.closure_cycle == 1,
-                m.DispositionOutbox.intent_kind == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
-                m.DispositionOutbox.logical_slot == "terminal",
-                m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+        (
+            await session.execute(
+                select(m.DispositionOutbox).where(
+                    m.DispositionOutbox.event_id == event_id,
+                    m.DispositionOutbox.closure_cycle == 1,
+                    m.DispositionOutbox.intent_kind
+                    == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
+                    m.DispositionOutbox.logical_slot == "terminal",
+                    m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(active) == 1
     assert active[0].disposition_id == third.disposition_id
 
@@ -877,13 +885,17 @@ async def test_enqueue_does_not_supersede_across_closure_cycles(
 
     # Both cycles each hold one active head (index key includes closure_cycle).
     active = (
-        await session.execute(
-            select(m.DispositionOutbox).where(
-                m.DispositionOutbox.event_id == event_id,
-                m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+        (
+            await session.execute(
+                select(m.DispositionOutbox).where(
+                    m.DispositionOutbox.event_id == event_id,
+                    m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {r.closure_cycle for r in active} == {1, 2}
 
     await session.rollback()
@@ -972,17 +984,21 @@ async def test_concurrent_enqueue_same_lineage_keeps_single_active_head() -> Non
 
         async with factory() as check_session:
             active = (
-                await check_session.execute(
-                    select(m.DispositionOutbox).where(
-                        m.DispositionOutbox.event_id == event_id,
-                        m.DispositionOutbox.closure_cycle == 1,
-                        m.DispositionOutbox.intent_kind
-                        == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
-                        m.DispositionOutbox.logical_slot == "terminal",
-                        m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                (
+                    await check_session.execute(
+                        select(m.DispositionOutbox).where(
+                            m.DispositionOutbox.event_id == event_id,
+                            m.DispositionOutbox.closure_cycle == 1,
+                            m.DispositionOutbox.intent_kind
+                            == DispositionIntentKind.EVENT_STATUS_UPDATE.value,
+                            m.DispositionOutbox.logical_slot == "terminal",
+                            m.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         assert len(active) == 1, f"expected exactly one active head, got {len(active)}"
     finally:
         await engine.dispose()

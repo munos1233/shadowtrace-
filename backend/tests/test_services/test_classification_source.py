@@ -31,15 +31,11 @@ def test_derive_classification_source_priority() -> None:
         == "human"
     )
     assert (
-        derive_classification_source(
-            degraded_flags=["event_type_from_llm_fallback=true"]
-        ).value
+        derive_classification_source(degraded_flags=["event_type_from_llm_fallback=true"]).value
         == "llm_fallback"
     )
     assert (
-        derive_classification_source(
-            degraded_flags=["event_type_from_heuristic=true"]
-        ).value
+        derive_classification_source(degraded_flags=["event_type_from_heuristic=true"]).value
         == "heuristic"
     )
     assert derive_classification_source(degraded_flags=[]).value == "source"

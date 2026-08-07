@@ -794,8 +794,7 @@ def _build_timeline(*, base: datetime, seed: int) -> list[dict[str, Any]]:
             account=ACCOUNT,
             action="process_create",
             cmdline=(
-                f"{PROC_MYSQL} --host=127.0.0.1 --user=readonly "
-                f"--result-file={STAGING_SHARE}"
+                f"{PROC_MYSQL} --host=127.0.0.1 --user=readonly --result-file={STAGING_SHARE}"
             ),
             is_key_event=True,
         )

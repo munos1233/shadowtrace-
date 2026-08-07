@@ -48,8 +48,7 @@ def test_all_revision_ids_fit_alembic_version_num_width() -> None:
         if length > max_width
     ]
     assert not violations, (
-        "revision id(s) exceed alembic_version.version_num width "
-        f"({max_width}): {violations}"
+        f"revision id(s) exceed alembic_version.version_num width ({max_width}): {violations}"
     )
 
 

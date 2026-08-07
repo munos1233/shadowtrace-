@@ -406,8 +406,7 @@ class Settings(BaseSettings):
         violations = self.production_fail_closed_violations()
         if violations:
             raise ConfigurationError(
-                "app_env=production forbids unsafe runtime configuration: "
-                + ", ".join(violations),
+                "app_env=production forbids unsafe runtime configuration: " + ", ".join(violations),
                 error_code="configuration_error",
                 details={"app_env": self.app_env, "violations": violations},
             )

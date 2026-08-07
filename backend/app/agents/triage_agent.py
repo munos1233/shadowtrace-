@@ -1017,9 +1017,7 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
                     exc_info=True,
                 )
                 value = None
-            found = human_override_event_type(
-                value if isinstance(value, dict) else None
-            )
+            found = human_override_event_type(value if isinstance(value, dict) else None)
             if found is not None:
                 return found
 

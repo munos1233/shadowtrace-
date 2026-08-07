@@ -37,7 +37,6 @@ from app.core.errors import (
     ShadowTraceError,
     is_retryable,
 )
-from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
 from app.models.agent_io import (
     CollectionStatus,
     EvidenceAgentInput,
@@ -69,6 +68,7 @@ from app.models.ids import report_id_for_event
 from app.models.report import InvestigationReport
 from app.models.security_event import EventSummary
 from app.models.workflow import MAX_AGENT_RETRIES, TransitionContext
+from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
 from app.orchestration.lease import EventLease, generate_owner_id
 from app.orchestration.workflow_graph import (
     alert_text_from_snapshot,
@@ -1591,9 +1591,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             exc_info=(type(exc), exc, exc.__traceback__),
         )
         audit_status = (
-            EventStatus.REPORTING.value
-            if stage == "after_analysis"
-            else EventStatus.CLOSED.value
+            EventStatus.REPORTING.value if stage == "after_analysis" else EventStatus.CLOSED.value
         )
         if self.audit_service is not None:
             try:

@@ -189,11 +189,15 @@ async def _reconcile_verify_resume_patch(
         patch["verify_failed_writebacks"] = []
         patch["execution_substate"] = ExecutionSubstate.NONE.value
 
-    if need_manual and not legitimate_manual and _can_clear_manual_resolution(
-        degraded_flags=degraded_flags,
-        rows=outbox_rows,
-        failed_writebacks=failed_writebacks,
-        disposition_policy=disposition_policy,
+    if (
+        need_manual
+        and not legitimate_manual
+        and _can_clear_manual_resolution(
+            degraded_flags=degraded_flags,
+            rows=outbox_rows,
+            failed_writebacks=failed_writebacks,
+            disposition_policy=disposition_policy,
+        )
     ):
         patch["verify_need_manual_resolution"] = False
         patch.setdefault("execution_substate", ExecutionSubstate.NONE.value)

@@ -75,9 +75,7 @@ def missing_response_targets(
 ) -> list[str]:
     """Return required containment targets absent from the response plan."""
     required = [
-        str(item)
-        for item in (ground_truth.get("must_response_targets") or [])
-        if str(item).strip()
+        str(item) for item in (ground_truth.get("must_response_targets") or []) if str(item).strip()
     ]
     if not required:
         required = [

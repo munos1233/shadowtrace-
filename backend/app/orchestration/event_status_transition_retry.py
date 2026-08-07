@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from app.core.errors import InvalidStateTransitionError, ShadowTraceError, is_retryable
 from app.models.enums import EventStatus
@@ -81,8 +80,7 @@ async def transition_with_bounded_retry(
                 if delay > 0:
                     await asyncio.sleep(delay)
                 logger.warning(
-                    "%s: transition to %s failed for event=%s "
-                    "(attempt %d/%d, retrying)",
+                    "%s: transition to %s failed for event=%s (attempt %d/%d, retrying)",
                     log_prefix,
                     target.value,
                     event_id,
@@ -102,8 +100,7 @@ async def transition_with_bounded_retry(
             )
             raise ShadowTraceError(
                 message=(
-                    f"{log_prefix} state transition to {target.value} "
-                    f"failed for event={event_id}"
+                    f"{log_prefix} state transition to {target.value} failed for event={event_id}"
                 ),
                 error_code="internal_error",
                 details={
