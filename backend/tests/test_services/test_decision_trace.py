@@ -22,11 +22,13 @@ from sqlalchemy.pool import NullPool
 
 from app.db import models as orm
 from app.db.orm.approval import ApprovalRecordORM
-from app.models.decision_trace import DecisionTrace
+from app.models.decision_trace import DecisionTrace, DecisionTraceEntry
 from app.models.enums import DecisionTraceEntryType
 from app.services.decision_trace_service import (
     _ENTRY_TYPE_ORDER,
     DecisionTraceService,
+    _compute_timeline_durations,
+    _is_halt_status,
 )
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -667,10 +669,180 @@ class TestDecisionTraceEmptyAndMissing:
         trace = await service.get_decision_trace(event_id)
         assert trace.summary.total_duration_ms is not None
         assert 29_000 <= trace.summary.total_duration_ms <= 31_000
+        # No WAITING_* halt → active ≈ wall (ISSUE-253).
+        assert trace.summary.active_duration_ms is not None
+        assert abs(trace.summary.active_duration_ms - trace.summary.total_duration_ms) <= 1
+
+    @pytest.mark.asyncio
+    async def test_active_duration_excludes_waiting_approval_idle(
+        self,
+        service: DecisionTraceService,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Synthetic 30min approval halt: wall ≫ active (ISSUE-253 / ID-R2-016)."""
+        event_id = _id("evt")
+        t0 = _SEED_NOW
+        enter_wait = t0 + timedelta(minutes=2)
+        leave_wait = enter_wait + timedelta(minutes=30)
+        done = leave_wait + timedelta(seconds=30)
+
+        async with session_factory() as session:
+            async with session.begin():
+                await _seed_security_event(session, event_id)
+                await _seed_agent_trace(session, event_id, started_at=t0)
+                await _seed_audit_log(
+                    session,
+                    event_id,
+                    from_status="planning_response",
+                    to_status="waiting_approval",
+                    created_at=enter_wait,
+                )
+                await _seed_audit_log(
+                    session,
+                    event_id,
+                    from_status="waiting_approval",
+                    to_status="executing_response",
+                    created_at=leave_wait,
+                )
+                await _seed_audit_log(
+                    session,
+                    event_id,
+                    from_status="executing_response",
+                    to_status="verifying",
+                    created_at=done,
+                )
+
+        trace = await service.get_decision_trace(event_id)
+        wall = trace.summary.total_duration_ms
+        active = trace.summary.active_duration_ms
+        assert wall is not None and active is not None
+        # Wall ≈ 32.5 min; active ≈ 2.5 min (excludes 30 min approval idle).
+        assert wall >= 32 * 60 * 1000
+        assert active <= 3 * 60 * 1000
+        assert active < wall
+        assert wall - active >= 29 * 60 * 1000
+
+    @pytest.mark.asyncio
+    async def test_active_duration_excludes_waiting_writeback_idle(
+        self,
+        service: DecisionTraceService,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """waiting_writeback halt gaps also subtract from active (ISSUE-253)."""
+        event_id = _id("evt")
+        t0 = _SEED_NOW
+        enter_wait = t0 + timedelta(minutes=1)
+        leave_wait = enter_wait + timedelta(minutes=10)
+
+        async with session_factory() as session:
+            async with session.begin():
+                await _seed_security_event(session, event_id)
+                await _seed_agent_trace(session, event_id, started_at=t0)
+                await _seed_audit_log(
+                    session,
+                    event_id,
+                    from_status="verifying",
+                    to_status="waiting_writeback",
+                    created_at=enter_wait,
+                )
+                await _seed_audit_log(
+                    session,
+                    event_id,
+                    from_status="waiting_writeback",
+                    to_status="verifying",
+                    created_at=leave_wait,
+                )
+
+        trace = await service.get_decision_trace(event_id)
+        wall = trace.summary.total_duration_ms
+        active = trace.summary.active_duration_ms
+        assert wall is not None and active is not None
+        assert wall > active
+        assert wall - active >= 9 * 60 * 1000
+        assert active <= 90_000
 
 
 class TestDecisionTraceService:
     """Unit-level tests for internal helpers."""
+
+    def test_halt_status_detection(self) -> None:
+        assert _is_halt_status("waiting_approval") is True
+        assert _is_halt_status("WAITING_WRITEBACK") is True
+        assert _is_halt_status("waiting_execution") is True
+        assert _is_halt_status("waiting_custom_gate") is True
+        assert _is_halt_status("verifying") is False
+        assert _is_halt_status("none") is False
+        assert _is_halt_status(None) is False
+        assert _is_halt_status(12) is False
+
+    def test_compute_timeline_durations_with_synthetic_waiting_gap(self) -> None:
+        t0 = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+        entries = [
+            DecisionTraceEntry(
+                entry_id="dte-1",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0,
+                actor="TriageAgent",
+                title="start",
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-2",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(minutes=2),
+                actor="system",
+                title="enter wait",
+                detail={"from_status": "planning_response", "to_status": "waiting_approval"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-3",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(minutes=32),
+                actor="system",
+                title="leave wait",
+                detail={"from_status": "waiting_approval", "to_status": "executing_response"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-4",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0 + timedelta(minutes=33),
+                actor="VerifyAgent",
+                title="done",
+            ),
+        ]
+        wall, active = _compute_timeline_durations(entries)
+        assert wall == 33 * 60 * 1000
+        assert active == 3 * 60 * 1000
+        assert wall > active
+
+    def test_compute_timeline_durations_without_halt_matches_wall(self) -> None:
+        t0 = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+        entries = [
+            DecisionTraceEntry(
+                entry_id="dte-1",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0,
+                actor="TriageAgent",
+                title="start",
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-2",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(seconds=10),
+                actor="system",
+                title="progress",
+                detail={"from_status": "triaging", "to_status": "analyzing"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-3",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0 + timedelta(seconds=30),
+                actor="RiskAgent",
+                title="done",
+            ),
+        ]
+        wall, active = _compute_timeline_durations(entries)
+        assert wall == 30_000
+        assert active == 30_000
 
     def test_sort_key_entry_type_ordering(self) -> None:
         """Verify _ENTRY_TYPE_ORDER covers all 8 types."""
