@@ -117,12 +117,14 @@ class StorylineService:
         *,
         llm_client: Any | None = None,
         working_memory: Any | None = None,
+        event_service: Any | None = None,
     ) -> None:
         self._llm_client = llm_client
         if working_memory is not None:
             self._bound_wm = working_memory.for_writer("StorylineService")
         else:
             self._bound_wm = None
+        self._event_service = event_service
         self.last_degraded_reason: str | None = None
 
     # ------------------------------------------------------------------ #
@@ -413,20 +415,31 @@ class StorylineService:
     # ------------------------------------------------------------------ #
 
     async def _write(self, event_id: str, storyline: AttackStoryline) -> None:
-        if self._bound_wm is None:
-            return
-        try:
-            await self._bound_wm.write(
-                event_id,
-                "storyline",
-                storyline.model_dump(mode="json"),
-            )
-        except Exception as exc:
-            logger.warning("StorylineService WM write failed event=%s", event_id, exc_info=True)
-            await self._mark_degraded(
-                event_id,
-                reason=f"storyline_write_failed: {exc}",
-            )
+        if self._bound_wm is not None:
+            try:
+                await self._bound_wm.write(
+                    event_id,
+                    "storyline",
+                    storyline.model_dump(mode="json"),
+                )
+            except Exception as exc:
+                logger.warning("StorylineService WM write failed event=%s", event_id, exc_info=True)
+                await self._mark_degraded(
+                    event_id,
+                    reason=f"storyline_write_failed: {exc}",
+                )
+        # ISSUE-254: durable bounded storyline summary (grounding_status, …).
+        if self._event_service is not None:
+            merger = getattr(self._event_service, "merge_storyline_context_snapshot", None)
+            if merger is not None:
+                try:
+                    await merger(event_id, storyline)
+                except Exception:
+                    logger.warning(
+                        "failed to merge storyline snapshot summary event=%s",
+                        event_id,
+                        exc_info=True,
+                    )
 
     async def _mark_degraded(self, event_id: str, *, reason: str) -> None:
         """Best-effort degraded marker when storyline WM write fails."""

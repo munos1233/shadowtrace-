@@ -1333,20 +1333,31 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
             )
 
     async def _write_context(self, event_id: str, output: EvidenceOutput) -> None:
-        if self.working_memory is None:
-            return
-        try:
-            await self.working_memory.write(
-                event_id,
-                "evidence_output",
-                output.model_dump(mode="json"),
-            )
-        except Exception:
-            logger.warning(
-                "failed to write evidence_output to working memory event=%s",
-                event_id,
-                exc_info=True,
-            )
+        if self.working_memory is not None:
+            try:
+                await self.working_memory.write(
+                    event_id,
+                    "evidence_output",
+                    output.model_dump(mode="json"),
+                )
+            except Exception:
+                logger.warning(
+                    "failed to write evidence_output to working memory event=%s",
+                    event_id,
+                    exc_info=True,
+                )
+        # ISSUE-254: durable bounded summary for GET event / list observability.
+        if self.event_service is not None:
+            merger = getattr(self.event_service, "merge_evidence_context_snapshot", None)
+            if merger is not None:
+                try:
+                    await merger(event_id, output)
+                except Exception:
+                    logger.warning(
+                        "failed to merge evidence snapshot summary event=%s",
+                        event_id,
+                        exc_info=True,
+                    )
 
     async def _record_trace(
         self,

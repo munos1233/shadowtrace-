@@ -152,6 +152,18 @@ async def _sync_report_context_and_bus(
             exc_info=True,
         )
 
+    # ISSUE-254: durable report_generated on event_context_snapshot (assists ISSUE-250).
+    merger = getattr(event_service, "merge_report_generated_context_snapshot", None)
+    if merger is not None:
+        try:
+            await merger(event_id, True)
+        except Exception:
+            logger.warning(
+                "Failed to merge report_generated snapshot for event=%s",
+                event_id,
+                exc_info=True,
+            )
+
     bus = getattr(event_service, "_bus", None)
     if bus is not None:
         try:

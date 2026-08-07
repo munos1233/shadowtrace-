@@ -882,6 +882,17 @@ def build_investigation_graph(
                         state["event_id"],
                         exc_info=True,
                     )
+            snapshot_svc = services.get("event_service")
+            merger = getattr(snapshot_svc, "merge_report_generated_context_snapshot", None)
+            if merger is not None:
+                try:
+                    await merger(state["event_id"], False)
+                except Exception:
+                    logger.warning(
+                        "failed to merge report_generated=false snapshot event=%s",
+                        state["event_id"],
+                        exc_info=True,
+                    )
             current_event_status = EventStatus(
                 state.get("event_status", EventStatus.TRIAGING.value)
             )
@@ -1750,17 +1761,28 @@ def build_investigation_graph(
         event_id = state["event_id"]
 
         async def _persist_report_generated_flag(generated: bool) -> None:
-            if store is None:
-                return
-            try:
-                await store.set(event_id, "report_generated", generated)
-            except Exception:
-                logger.warning(
-                    "failed to persist report_generated=%s event=%s",
-                    generated,
-                    event_id,
-                    exc_info=True,
-                )
+            if store is not None:
+                try:
+                    await store.set(event_id, "report_generated", generated)
+                except Exception:
+                    logger.warning(
+                        "failed to persist report_generated=%s event=%s",
+                        generated,
+                        event_id,
+                        exc_info=True,
+                    )
+            # ISSUE-254: durable snapshot overlay for GET event / guidance.
+            snapshot_svc = services.get("event_service")
+            merger = getattr(snapshot_svc, "merge_report_generated_context_snapshot", None)
+            if merger is not None:
+                try:
+                    await merger(event_id, generated)
+                except Exception:
+                    logger.warning(
+                        "failed to merge report_generated snapshot event=%s",
+                        event_id,
+                        exc_info=True,
+                    )
 
         if not state.get("generate_report", True):
             await _persist_report_generated_flag(False)
