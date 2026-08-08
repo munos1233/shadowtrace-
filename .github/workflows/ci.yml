@@ -430,6 +430,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Docker build context guards (ISSUE-278)
+        run: |
+          set -euo pipefail
+          python scripts/check_docker_build_context.py --validate-dockerignore
+          python scripts/check_docker_build_context.py --context backend-root --seed-dirty
+          python scripts/check_docker_build_context.py --context frontend --seed-dirty
+
       - name: Build and validate stack
         run: |
           set -euo pipefail
@@ -452,6 +463,14 @@ jobs:
           trap cleanup EXIT
 
           compose build
+
+          backend_image="$(compose images -q backend)"
+          if [[ -z "${backend_image}" ]]; then
+            echo "backend image id missing after compose build"
+            exit 1
+          fi
+          python scripts/check_docker_build_context.py --inspect-image "${backend_image}"
+
           compose up -d --wait --wait-timeout 180
 
           for service in postgres redis mock-xdr backend frontend; do

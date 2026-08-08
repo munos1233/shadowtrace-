@@ -1,0 +1,34 @@
+# ISSUE-278: frontend build context — keep lockfile + sources, drop local deps and reports.
+
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+
+# Playwright / Vitest artifacts
+e2e/test-results/
+e2e/playwright-report/
+e2e/.seed.json
+playwright-report/
+coverage/
+
+# VCS / IDE
+.git
+.github
+.gitignore
+.cursor
+.idea
+.vscode
+*.swp
+.DS_Store
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+*.log
+*.local
+
+# Unit/e2e sources are not required for production `pnpm build`.
+tests/

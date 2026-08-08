@@ -692,7 +692,13 @@ ci-build:
 		exit "$$status"; \
 	}; \
 	trap cleanup EXIT INT TERM; \
+	python3 "$(CURDIR)/scripts/check_docker_build_context.py" --validate-dockerignore; \
+	python3 "$(CURDIR)/scripts/check_docker_build_context.py" --context backend-root --seed-dirty; \
+	python3 "$(CURDIR)/scripts/check_docker_build_context.py" --context frontend --seed-dirty; \
 	compose build; \
+	backend_image=$$(compose images -q backend); \
+	if [ -z "$$backend_image" ]; then echo "backend image id missing after compose build"; exit 1; fi; \
+	python3 "$(CURDIR)/scripts/check_docker_build_context.py" --inspect-image "$$backend_image"; \
 	compose up -d --wait --wait-timeout 180; \
 	for service in postgres redis mock-xdr backend frontend; do \
 		container_id=$$(compose ps -q "$$service"); \

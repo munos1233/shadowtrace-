@@ -34,8 +34,10 @@ COPY backend/migrations ./migrations
 COPY backend/alembic.ini ./alembic.ini
 COPY backend/docker-entrypoint.sh /docker-entrypoint.sh
 COPY contracts /contracts
-# Nested tree for scripts/generate_mock_data.py path resolution.
-COPY backend/ ./backend/
+# Nested tree for entrypoint `python -m scripts.load_playbook_release` (ISSUE-245).
+# Do not COPY backend/tests or host .venv — .dockerignore + selective COPY (ISSUE-278).
+COPY backend/scripts ./backend/scripts
+COPY backend/.python-version ./backend/.python-version
 COPY scripts/ ./scripts/
 COPY data/ ./data/
 
