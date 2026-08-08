@@ -255,6 +255,7 @@ describe("DecisionTraceTimeline", () => {
     expect(summary).toHaveTextContent("调查耗时");
     expect(summary).toHaveTextContent("2 min");
     expect(summary).toHaveTextContent("有效");
+    expect(summary).toHaveTextContent("已排除审批空等");
     expect(summary).toHaveTextContent("墙钟");
     expect(summary).toHaveTextContent("32 min");
   });

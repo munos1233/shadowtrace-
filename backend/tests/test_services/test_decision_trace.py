@@ -722,45 +722,6 @@ class TestDecisionTraceEmptyAndMissing:
         assert active < wall
         assert wall - active >= 29 * 60 * 1000
 
-    @pytest.mark.asyncio
-    async def test_active_duration_excludes_waiting_writeback_idle(
-        self,
-        service: DecisionTraceService,
-        session_factory: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """waiting_writeback halt gaps also subtract from active (ISSUE-253)."""
-        event_id = _id("evt")
-        t0 = _SEED_NOW
-        enter_wait = t0 + timedelta(minutes=1)
-        leave_wait = enter_wait + timedelta(minutes=10)
-
-        async with session_factory() as session:
-            async with session.begin():
-                await _seed_security_event(session, event_id)
-                await _seed_agent_trace(session, event_id, started_at=t0)
-                await _seed_audit_log(
-                    session,
-                    event_id,
-                    from_status="verifying",
-                    to_status="waiting_writeback",
-                    created_at=enter_wait,
-                )
-                await _seed_audit_log(
-                    session,
-                    event_id,
-                    from_status="waiting_writeback",
-                    to_status="verifying",
-                    created_at=leave_wait,
-                )
-
-        trace = await service.get_decision_trace(event_id)
-        wall = trace.summary.total_duration_ms
-        active = trace.summary.active_duration_ms
-        assert wall is not None and active is not None
-        assert wall > active
-        assert wall - active >= 9 * 60 * 1000
-        assert active <= 90_000
-
 
 class TestDecisionTraceService:
     """Unit-level tests for internal helpers."""
@@ -812,6 +773,117 @@ class TestDecisionTraceService:
         wall, active = _compute_timeline_durations(entries)
         assert wall == 33 * 60 * 1000
         assert active == 3 * 60 * 1000
+        assert wall > active
+
+    def test_compute_open_ended_halt_truncated_by_later_activity(self) -> None:
+        """Open halt with later non-transition activity truncates idle there."""
+        t0 = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+        entries = [
+            DecisionTraceEntry(
+                entry_id="dte-1",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0,
+                actor="system",
+                title="start",
+                detail={"to_status": "triaging"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-2",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(minutes=1),
+                actor="system",
+                title="enter wait",
+                detail={"to_status": "waiting_approval"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-3",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0 + timedelta(minutes=31),
+                actor="agent",
+                title="later work",
+            ),
+        ]
+        wall, active = _compute_timeline_durations(entries)
+        assert wall == 31 * 60 * 1000
+        # Idle truncated at first subsequent activity (min 1 → 31) => active = 1min
+        assert active == 1 * 60 * 1000
+
+    def test_missing_exit_transition_truncated_by_subsequent_activity(self) -> None:
+        """Missing leave-wait audit must not count later work as idle."""
+        t0 = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+        entries = [
+            DecisionTraceEntry(
+                entry_id="dte-1",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0,
+                actor="system",
+                title="start",
+                detail={"to_status": "triaging"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-2",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(minutes=1),
+                actor="system",
+                title="enter wait",
+                detail={"to_status": "waiting_approval"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-3",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0 + timedelta(minutes=5),
+                actor="ResponseAgent",
+                title="work after missing exit",
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-4",
+                entry_type=DecisionTraceEntryType.AGENT_EXECUTION,
+                timestamp=t0 + timedelta(minutes=35),
+                actor="VerifyAgent",
+                title="more work",
+            ),
+        ]
+        wall, active = _compute_timeline_durations(entries)
+        assert wall == 35 * 60 * 1000
+        # Idle only 1→5 minutes (4 min); active = 31 min.
+        assert active == 31 * 60 * 1000
+
+    def test_algo_can_exclude_waiting_writeback_if_recorded_on_timeline(self) -> None:
+        """Algorithm recognizes waiting_writeback labels if present on audit timeline.
+
+        Production does not emit EventStatus waiting_writeback today; this locks
+        the helper behavior without claiming the writeback substate path works.
+        """
+        t0 = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+        entries = [
+            DecisionTraceEntry(
+                entry_id="dte-1",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0,
+                actor="system",
+                title="start",
+                detail={"to_status": "verifying"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-2",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(minutes=1),
+                actor="system",
+                title="enter writeback wait label",
+                detail={"to_status": "waiting_writeback"},
+            ),
+            DecisionTraceEntry(
+                entry_id="dte-3",
+                entry_type=DecisionTraceEntryType.STATE_TRANSITION,
+                timestamp=t0 + timedelta(minutes=11),
+                actor="system",
+                title="leave",
+                detail={"to_status": "verifying"},
+            ),
+        ]
+        wall, active = _compute_timeline_durations(entries)
+        assert wall == 11 * 60 * 1000
+        assert active == 1 * 60 * 1000
         assert wall > active
 
     def test_compute_timeline_durations_without_halt_matches_wall(self) -> None:

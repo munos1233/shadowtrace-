@@ -243,7 +243,7 @@ export default function DecisionTraceTimeline({
             {formatDurationMs(primaryDurationMs)}
           </Typography.Text>
           {activeMs != null ? (
-            <Typography.Text type="secondary">（有效，已排除审批/写回空等）</Typography.Text>
+            <Typography.Text type="secondary">（有效，已排除审批空等）</Typography.Text>
           ) : (
             <Typography.Text type="secondary">（墙钟）</Typography.Text>
           )}

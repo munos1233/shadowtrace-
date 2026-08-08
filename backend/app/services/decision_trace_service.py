@@ -38,8 +38,10 @@ _ENTRY_TYPE_ORDER: dict[DecisionTraceEntryType, int] = {
 }
 
 # Halt / idle statuses excluded from active_duration_ms (ISSUE-253).
-# Includes EventStatus.waiting_approval and ExecutionSubstate waiting_* values
-# so any recorded to_status matching these subtracts from effective effort.
+# Production EventAuditLog STATE_TRANSITION.to_status uses EventStatus values;
+# today that reliably covers waiting_approval. waiting_writeback is an
+# ExecutionSubstate and is NOT written as EventStatus — keep it recognized if
+# ever recorded, but do not claim production writeback idle is deducted.
 _HALT_STATUSES: frozenset[str] = frozenset(
     {
         "waiting_approval",
@@ -534,9 +536,12 @@ def _compute_timeline_durations(
 
     * ``total_duration_ms`` — wall clock ``last_ts - first_ts`` (unchanged semantics).
     * ``active_duration_ms`` — wall clock minus contiguous halt intervals inferred
-      from ``STATE_TRANSITION`` entries whose ``to_status`` is WAITING_*.
+      from ``STATE_TRANSITION`` entries whose ``to_status`` is WAITING_*
+      (production: primarily ``waiting_approval``).
 
-    Open halt at end of timeline counts through ``last_ts``.
+    Open halt at end of timeline counts through ``last_ts``, unless a later
+    non-transition entry shows activity (missing exit transition must not treat
+    subsequent work as idle).
     """
     if not entries:
         return None, None
@@ -548,15 +553,20 @@ def _compute_timeline_durations(
     idle_ms = 0
     halt_started: datetime | None = None
     for entry in entries:
-        if entry.entry_type != DecisionTraceEntryType.STATE_TRANSITION:
+        if entry.entry_type is DecisionTraceEntryType.STATE_TRANSITION:
+            to_status = entry.detail.get("to_status")
+            if to_status is None:
+                continue
+            in_halt = _is_halt_status(to_status)
+            if in_halt and halt_started is None:
+                halt_started = entry.timestamp
+            elif not in_halt and halt_started is not None:
+                idle_ms += _ms_between(halt_started, entry.timestamp)
+                halt_started = None
             continue
-        to_status = entry.detail.get("to_status")
-        if to_status is None:
-            continue
-        in_halt = _is_halt_status(to_status)
-        if in_halt and halt_started is None:
-            halt_started = entry.timestamp
-        elif not in_halt and halt_started is not None:
+
+        # Missing exit transition: truncate idle at first subsequent activity.
+        if halt_started is not None:
             idle_ms += _ms_between(halt_started, entry.timestamp)
             halt_started = None
 
