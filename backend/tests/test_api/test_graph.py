@@ -144,6 +144,9 @@ def test_graph_returns_empty_arrays_when_not_generated() -> None:
         "central_entities": [],
         "attack_path_candidates": [],
         "cross_event_paths": [],
+        "summary": None,
+        "degraded": False,
+        "degraded_reason": None,
     }
 
 

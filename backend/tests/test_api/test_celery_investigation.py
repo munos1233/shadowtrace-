@@ -49,7 +49,15 @@ def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     store: dict[str, str] = {}
 
     class _FakeRedis:
-        async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        async def set(
+            self,
+            key: str,
+            value: str,
+            ex: int | None = None,
+            nx: bool = False,
+        ) -> bool:
+            if nx and key in store:
+                return False
             store[key] = value
             return True
 
@@ -59,6 +67,12 @@ def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
         async def delete(self, key: str) -> int:
             return 1 if store.pop(key, None) is not None else 0
+
+        def register_script(self, _script: str) -> object:
+            async def _eval(*_args: object, **_kwargs: object) -> int:
+                return 1
+
+            return _eval
 
     async def _ping(self: RedisClient) -> bool:
         return True

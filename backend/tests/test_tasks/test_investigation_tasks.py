@@ -268,7 +268,10 @@ async def test_dispatch_investigation_passes_include_response_flag(
     )
     assert task_id
     assert captured["args"] == ["evt-dispatch-include"]
-    assert captured["kwargs"] == {"include_response_execution": True}
+    assert captured["kwargs"] == {
+        "include_response_execution": True,
+        "generate_report": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -293,6 +296,7 @@ async def test_dispatch_investigation_forwards_owner_id_and_lease_acquired(
     assert task_id
     assert captured["kwargs"] == {
         "include_response_execution": False,
+        "generate_report": True,
         "owner_id": "owner-http-1",
         "lease_acquired": True,
     }
