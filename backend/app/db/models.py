@@ -1027,6 +1027,12 @@ class InvestigationIntent(Base):
         ),
         Index("ix_investigation_intent_status_updated", "status", "updated_at"),
         Index("ix_investigation_intent_claim_expires", "claim_expires_at"),
+        Index(
+            "uq_investigation_intent_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     intent_id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -1049,6 +1055,9 @@ class InvestigationIntent(Base):
     include_response_execution: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # ISSUE-204: API default True for backward compat; auto/Celery intents set False.
     generate_report: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    payload_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    orchestration_mode: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(_TS, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         _TS, server_default=func.now(), onupdate=func.now(), nullable=False

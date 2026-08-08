@@ -8,11 +8,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.v1.deps import reset_deps
@@ -95,6 +98,19 @@ async def _poll_event_status(
 
 
 @pytest.fixture(autouse=True)
+def _wire_events_session_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Route durable intent + projection paths through the test DB session."""
+    monkeypatch.setattr("app.api.v1.deps._get_session_factory", lambda: session_factory)
+    monkeypatch.setattr(
+        "app.tasks.investigation_intent_tasks.dispatch_pending_investigation_intents.delay",
+        lambda: None,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_services() -> None:
     """Reset lazy singletons between tests so each test gets clean state."""
     reset_deps()
@@ -115,6 +131,24 @@ def client(
 
     app.dependency_overrides[get_event_service] = _override_event_service
     return TestClient(app)
+
+
+@pytest.fixture
+async def async_client(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_service: EventService,
+) -> AsyncIterator[AsyncClient]:
+    """Async HTTP client for multi-request flows (avoids TestClient loop drift)."""
+    from app.api.v1.deps import get_event_service
+
+    async def _override_event_service() -> EventService:
+        return event_service
+
+    app.dependency_overrides[get_event_service] = _override_event_service
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+        yield http_client
+    app.dependency_overrides.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -1831,12 +1865,11 @@ async def test_investigate_duplicate_returns_409_analysis_only_mode(
 
 @pytest.mark.asyncio
 async def test_investigate_duplicate_celery_mode_returns_409(
-    client: TestClient,
+    async_client: AsyncClient,
     event_service: EventService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ISSUE-186: repeated investigate in celery mode → 409 (align with background)."""
-    from app.api.v1 import events as events_module
+    """ISSUE-872: repeated investigate in celery mode → 409 when intent is active."""
     from app.core.config import get_settings
 
     monkeypatch.setenv("TASK_MODE", "celery")
@@ -1844,174 +1877,160 @@ async def test_investigate_duplicate_celery_mode_returns_409(
 
     event_id = await _create_test_event(event_service, title="Investigate celery duplicate 409")
 
-    class _BlockedLease:
-        async def acquire(self, _event_id: str, _owner_id: str, ttl_s: int = 600) -> bool:
-            return False
-
-        async def release(self, _event_id: str, _owner_id: str) -> bool:
-            return True
-
-    monkeypatch.setattr(events_module, "get_event_lease", lambda: _BlockedLease())
-
-    resp = client.post(
+    resp_first = await async_client.post(
         f"/api/v1/events/{event_id}/investigate",
-        headers=_hdr(),
+        headers={**_hdr(), "Idempotency-Key": "idem-first"},
     )
-    assert resp.status_code == 409, resp.text
-    data = resp.json()
+    assert resp_first.status_code == 202, resp_first.text
+
+    resp_second = await async_client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers={**_hdr(), "Idempotency-Key": "idem-second"},
+    )
+    assert resp_second.status_code == 409, resp_second.text
+    data = resp_second.json()
     assert data["error_code"] == "investigation_in_progress"
     assert data["details"]["event_id"] == event_id
 
 
 @pytest.mark.asyncio
-async def test_investigate_celery_dispatch_failure_releases_lease(
+async def test_investigate_celery_creates_durable_intent_before_202(
     client: TestClient,
     event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ISSUE-186: celery dispatch failure must release the HTTP-held lease."""
-    from app.api.v1 import events as events_module
+    """ISSUE-872: celery path commits durable intent before returning 202."""
+    from sqlalchemy import select
+
     from app.core.config import get_settings
-    from app.core.errors import DependencyUnavailableError
+    from app.db import models as orm
+    from app.models.enums import InvestigationIntentStatus
+    from app.models.investigation_intent import INTENT_KIND_HTTP_INVESTIGATE
+    from app.services.investigation_intent_service import deterministic_investigation_task_id
 
     monkeypatch.setenv("TASK_MODE", "celery")
     get_settings.cache_clear()
-
-    event_id = await _create_test_event(event_service, title="Celery dispatch fail release")
-    released: list[tuple[str, str]] = []
-
-    class _TrackingLease:
-        async def acquire(self, _event_id: str, _owner_id: str, ttl_s: int = 600) -> bool:
-            return True
-
-        async def release(self, ev_id: str, owner_id: str) -> bool:
-            released.append((ev_id, owner_id))
-            return True
-
-    async def _fail_dispatch(*_args: object, **_kwargs: object) -> str:
-        raise DependencyUnavailableError(
-            message="broker down",
-            error_code="task_unavailable",
-            details={"dependency": "celery"},
-        )
-
-    monkeypatch.setattr(events_module, "get_event_lease", lambda: _TrackingLease())
     monkeypatch.setattr(
-        "app.tasks.investigation_tasks.dispatch_investigation",
-        _fail_dispatch,
+        "app.tasks.investigation_intent_tasks.dispatch_pending_investigation_intents.delay",
+        lambda: None,
     )
 
-    resp = client.post(
-        f"/api/v1/events/{event_id}/investigate",
-        headers=_hdr(),
-    )
-    assert resp.status_code == 503, resp.text
-    assert len(released) == 1
-    assert released[0][0] == event_id
-
-
-@pytest.mark.asyncio
-async def test_analysis_only_celery_dispatches_dedicated_task(
-    client: TestClient,
-    event_service: EventService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ISSUE-225: analysis_only + celery routes to dispatch_analysis_only_investigation."""
-    from app.api.v1 import events as events_module
-    from app.core.config import get_settings
-
-    monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
-    monkeypatch.setenv("TASK_MODE", "celery")
-    get_settings.cache_clear()
-
-    event_id = await _create_test_event(event_service, title="Analysis-only celery dispatch")
-    captured: dict[str, object] = {}
-
-    class _TrackingLease:
-        async def acquire(self, _event_id: str, owner_id: str, ttl_s: int = 600) -> bool:
-            captured["owner_id"] = owner_id
-            return True
-
-        async def release(self, ev_id: str, owner_id: str) -> bool:
-            captured["released"] = (ev_id, owner_id)
-            return True
-
-    async def _dispatch(
-        ev_id: str,
-        *,
-        generate_report: bool = True,
-        owner_id: str | None = None,
-        lease_acquired: bool = False,
-    ) -> str:
-        captured["event_id"] = ev_id
-        captured["generate_report"] = generate_report
-        captured["dispatch_owner_id"] = owner_id
-        captured["lease_acquired"] = lease_acquired
-        return "task-analysis-only-001"
-
-    monkeypatch.setattr(events_module, "get_event_lease", lambda: _TrackingLease())
-    monkeypatch.setattr(
-        "app.tasks.investigation_tasks.dispatch_analysis_only_investigation",
-        _dispatch,
-    )
-
+    event_id = await _create_test_event(event_service, title="Celery durable intent")
     resp = client.post(
         f"/api/v1/events/{event_id}/investigate",
         headers=_hdr(),
     )
     assert resp.status_code == 202, resp.text
-    assert captured["event_id"] == event_id
-    assert captured["lease_acquired"] is True
-    assert captured["dispatch_owner_id"] == captured["owner_id"]
-    assert "released" not in captured
+    body = resp.json()
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(orm.InvestigationIntent).where(
+                orm.InvestigationIntent.event_id == event_id,
+                orm.InvestigationIntent.intent_kind == INTENT_KIND_HTTP_INVESTIGATE,
+            )
+        )
+        assert row is not None
+        assert row.status == InvestigationIntentStatus.PENDING.value
+        assert body["task_id"] == deterministic_investigation_task_id(row.intent_id, row.revision)
 
 
 @pytest.mark.asyncio
-async def test_analysis_only_celery_dispatch_failure_releases_lease(
-    client: TestClient,
+async def test_investigate_celery_idempotent_replay_returns_same_task_id(
+    async_client: AsyncClient,
     event_service: EventService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ISSUE-225: analysis_only celery dispatch failure must release the HTTP-held lease."""
-    from app.api.v1 import events as events_module
+    """ISSUE-872: same idempotency key + payload replays the original intent."""
     from app.core.config import get_settings
-    from app.core.errors import DependencyUnavailableError
+
+    monkeypatch.setenv("TASK_MODE", "celery")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.tasks.investigation_intent_tasks.dispatch_pending_investigation_intents.delay",
+        lambda: None,
+    )
+
+    event_id = await _create_test_event(event_service, title="Celery idempotent replay")
+    headers = {**_hdr(), "Idempotency-Key": "stable-idem"}
+    first = await async_client.post(f"/api/v1/events/{event_id}/investigate", headers=headers)
+    second = await async_client.post(f"/api/v1/events/{event_id}/investigate", headers=headers)
+    assert first.status_code == 202, first.text
+    assert second.status_code == 202, second.text
+    assert first.json()["task_id"] == second.json()["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_investigate_celery_idempotency_payload_conflict_returns_409(
+    async_client: AsyncClient,
+    event_service: EventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-872: reused idempotency key with different payload → 409."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TASK_MODE", "celery")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.tasks.investigation_intent_tasks.dispatch_pending_investigation_intents.delay",
+        lambda: None,
+    )
+
+    event_id = await _create_test_event(event_service, title="Celery idempotency conflict")
+    headers = {**_hdr(), "Idempotency-Key": "shared-idem"}
+    first = await async_client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=headers,
+        json={"generate_report": True},
+    )
+    second = await async_client.post(
+        f"/api/v1/events/{event_id}/investigate",
+        headers=headers,
+        json={"generate_report": False},
+    )
+    assert first.status_code == 202, first.text
+    assert second.status_code == 409, second.text
+    assert second.json()["error_code"] == "investigation_intent_conflict"
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_celery_creates_http_intent_with_mode(
+    client: TestClient,
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-872: analysis_only + celery persists orchestration_mode on durable intent."""
+    from sqlalchemy import select
+
+    from app.core.config import get_settings
+    from app.db import models as orm
+    from app.models.investigation_intent import INTENT_KIND_HTTP_INVESTIGATE
 
     monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
     monkeypatch.setenv("TASK_MODE", "celery")
     get_settings.cache_clear()
-
-    event_id = await _create_test_event(event_service, title="Analysis-only celery fail release")
-    released: list[tuple[str, str]] = []
-
-    class _TrackingLease:
-        async def acquire(self, _event_id: str, _owner_id: str, ttl_s: int = 600) -> bool:
-            return True
-
-        async def release(self, ev_id: str, owner_id: str) -> bool:
-            released.append((ev_id, owner_id))
-            return True
-
-    async def _fail_dispatch(*_args: object, **_kwargs: object) -> str:
-        raise DependencyUnavailableError(
-            message="broker down",
-            error_code="task_unavailable",
-            details={"dependency": "celery"},
-        )
-
-    monkeypatch.setattr(events_module, "get_event_lease", lambda: _TrackingLease())
     monkeypatch.setattr(
-        "app.tasks.investigation_tasks.dispatch_analysis_only_investigation",
-        _fail_dispatch,
+        "app.tasks.investigation_intent_tasks.dispatch_pending_investigation_intents.delay",
+        lambda: None,
     )
 
+    event_id = await _create_test_event(event_service, title="Analysis-only celery intent")
     resp = client.post(
         f"/api/v1/events/{event_id}/investigate",
         headers=_hdr(),
     )
-    assert resp.status_code == 503, resp.text
-    assert len(released) == 1
-    assert released[0][0] == event_id
+    assert resp.status_code == 202, resp.text
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(orm.InvestigationIntent).where(
+                orm.InvestigationIntent.event_id == event_id,
+                orm.InvestigationIntent.intent_kind == INTENT_KIND_HTTP_INVESTIGATE,
+            )
+        )
+        assert row is not None
+        assert row.orchestration_mode == "analysis_only"
+        assert row.generate_report is True
 
 
 @pytest.mark.asyncio

@@ -225,7 +225,8 @@ def publish_investigation_for_intent(
     """Publish a deterministic Celery task for a claimed investigation intent.
 
     ``include_response_execution`` is resolved by AutoResponsePolicyService at
-    ENQUEUED commit time (#613); auto-investigate intent creation never sets it.
+    ENQUEUED commit time (#613) for auto-investigate intents; HTTP intents store
+    the caller payload on the row (#872).
 
     ``generate_report`` is stored on the intent row (ISSUE-204); auto paths
     default False at intent creation.
@@ -241,6 +242,25 @@ def publish_investigation_for_intent(
         },
         task_id=task_id,
         queue=TASK_QUEUE,
+    )
+
+
+def publish_analysis_only_for_intent(
+    *,
+    event_id: str,
+    task_id: str,
+    intent_id: str,
+    generate_report: bool = True,
+) -> None:
+    """Publish analysis-only Celery task for a claimed HTTP/auto intent (#872)."""
+    run_analysis_only_investigation.apply_async(
+        args=[event_id],
+        kwargs={
+            "generate_report": bool(generate_report),
+            "intent_id": intent_id,
+        },
+        task_id=task_id,
+        queue=ANALYSIS_ONLY_TASK_QUEUE,
     )
 
 
@@ -662,6 +682,7 @@ def run_analysis_only_investigation(
     self: Any,
     event_id: str,
     generate_report: bool = True,
+    intent_id: str | None = None,
     owner_id: str | None = None,
     lease_acquired: bool = False,
 ) -> dict[str, str]:
@@ -679,6 +700,23 @@ def run_analysis_only_investigation(
             self.request.id,
             resolved_owner,
         )
+    if intent_id:
+        from app.models.investigation_intent import IntentDeliveryAdmission
+
+        admission = asyncio.run(_admit_intent_delivery(intent_id, str(self.request.id)))
+        if admission is not IntentDeliveryAdmission.ACCEPTED:
+            reason = {
+                IntentDeliveryAdmission.STALE_SUPERSEDED: "stale_broker_task",
+                IntentDeliveryAdmission.ALREADY_TERMINAL: "intent_already_terminal",
+                IntentDeliveryAdmission.MISSING: "intent_missing",
+            }[admission]
+            logger.info(
+                "run_analysis_only delivery rejected event=%s intent=%s admission=%s",
+                event_id,
+                intent_id,
+                admission.value,
+            )
+            return _skipped_delivery_result(event_id, reason=reason)
     try:
         try:
             result = asyncio.run(
@@ -690,6 +728,8 @@ def run_analysis_only_investigation(
                     lease_acquired=lease_acquired,
                 )
             )
+            if intent_id:
+                asyncio.run(_finalize_intent_from_result(intent_id, result))
             return result
         finally:
             _release_celery_task_loop_resources()
@@ -708,6 +748,16 @@ def run_analysis_only_investigation(
                 resolved_owner,
                 exc_info=True,
             )
+        if intent_id:
+            from app.db.session import get_session_factory
+            from app.services.investigation_intent_service import InvestigationIntentService
+
+            asyncio.run(
+                InvestigationIntentService(get_session_factory()).mark_dead(
+                    intent_id,
+                    error="soft_time_limit_exceeded",
+                )
+            )
         raise
     except (DependencyUnavailableError, OperationalError, OSError, ConnectionError) as exc:
         logger.warning(
@@ -716,13 +766,35 @@ def run_analysis_only_investigation(
             self.request.retries,
             exc_info=True,
         )
+        if intent_id and self.request.retries >= self.max_retries:
+            from app.db.session import get_session_factory
+            from app.services.investigation_intent_service import InvestigationIntentService
+
+            asyncio.run(
+                InvestigationIntentService(get_session_factory()).mark_retry(
+                    intent_id,
+                    error=str(exc),
+                )
+            )
+            raise
         raise self.retry(exc=exc) from exc
-    except Exception:
+    except Exception as exc:
         logger.error(
-            "run_analysis_only failed for event=%s",
+            "run_analysis_only failed for event=%s intent=%s",
             event_id,
+            intent_id,
             exc_info=True,
         )
+        if intent_id:
+            from app.db.session import get_session_factory
+            from app.services.investigation_intent_service import InvestigationIntentService
+
+            asyncio.run(
+                InvestigationIntentService(get_session_factory()).mark_dead(
+                    intent_id,
+                    error=str(exc),
+                )
+            )
         raise
 
 
@@ -737,6 +809,7 @@ __all__ = [
     "execute_analysis_only_investigation",
     "execute_investigation",
     "lookup_task_event_id",
+    "publish_analysis_only_for_intent",
     "publish_investigation_for_intent",
     "register_task_metadata",
     "resolve_task_state",

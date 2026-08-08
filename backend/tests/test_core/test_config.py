@@ -35,6 +35,7 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
         "LLM_MODE": "openai_compatible",
         "EMBEDDING_MODE": "remote",
         "SIMULATION_ENABLED": False,
+        "TASK_MODE": "celery",
     }
     kwargs.update(overrides)
     return kwargs
@@ -247,3 +248,14 @@ def test_super_agent_transition_retry_settings_defaults() -> None:
     settings = Settings(APP_ENV="development")
     assert settings.super_agent_transition_max_retries == 3
     assert settings.super_agent_transition_retry_backoff_seconds == 0.2
+
+
+def test_unknown_task_mode_rejected_at_startup() -> None:
+    with pytest.raises(ValueError, match="TASK_MODE"):
+        Settings(APP_ENV="development", TASK_MODE="celeryy")
+
+
+def test_production_rejects_background_task_mode() -> None:
+    with pytest.raises(ConfigurationError) as exc_info:
+        Settings(**_base_kwargs(TASK_MODE="background"))
+    assert "task_mode=background" in exc_info.value.details["violations"]

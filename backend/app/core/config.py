@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.errors import ConfigurationError
+from app.models.enums import TaskMode
 from app.models.workflow import AUTO_APPROVABLE_ACTION_LEVELS, parse_action_level_label
 
 
@@ -137,6 +138,15 @@ class Settings(BaseSettings):
         if normalized not in {"off", "structured", "short_text"}:
             raise ValueError("DECISION_RATIONALE_MODE must be 'off', 'structured', or 'short_text'")
         return normalized
+
+    @field_validator("task_mode", mode="before")
+    @classmethod
+    def validate_task_mode(cls, value: object) -> TaskMode:
+        normalized = str(value or TaskMode.BACKGROUND.value).strip().lower()
+        try:
+            return TaskMode(normalized)
+        except ValueError as exc:
+            raise ValueError("TASK_MODE must be 'celery' or 'background'") from exc
 
     embedding_mode: str = Field(default="mock", alias="EMBEDDING_MODE")
     embedding_api_base_url: str = Field(default="", alias="EMBEDDING_API_BASE_URL")
@@ -323,7 +333,7 @@ class Settings(BaseSettings):
         ge=30.0,
         le=86400.0,
     )
-    task_mode: str = Field(default="background", alias="TASK_MODE")
+    task_mode: TaskMode = Field(default=TaskMode.BACKGROUND, alias="TASK_MODE")
     celery_broker_url: str = Field(default="", alias="CELERY_BROKER_URL")
     approval_timeout_minutes: int = Field(default=30, alias="APPROVAL_TIMEOUT_MINUTES")
 
@@ -537,6 +547,8 @@ class Settings(BaseSettings):
         if self.decision_rationale_mode.strip().lower() == "short_text":
             # ISSUE-243: production may only use off|structured (no free short_text path).
             violations.append("decision_rationale_mode=short_text")
+        if self.task_mode is TaskMode.BACKGROUND:
+            violations.append("task_mode=background")
         return violations
 
     def trusted_proxy_allowlist_hosts(self) -> frozenset[str]:

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from kombu.exceptions import OperationalError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.celery_app import celery_app
@@ -20,7 +21,9 @@ from app.core.errors import (
     InvestigationInProgressError,
     InvestigationLeaseLostError,
 )
-from app.models.enums import EventStatus
+from app.db import models as orm
+from app.models.enums import EventStatus, Severity
+from app.services.investigation_intent_service import deterministic_investigation_task_id
 from app.tasks import investigation_tasks as tasks
 
 
@@ -268,7 +271,10 @@ async def test_dispatch_investigation_passes_include_response_flag(
     )
     assert task_id
     assert captured["args"] == ["evt-dispatch-include"]
-    assert captured["kwargs"] == {"include_response_execution": True}
+    assert captured["kwargs"] == {
+        "include_response_execution": True,
+        "generate_report": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -293,6 +299,7 @@ async def test_dispatch_investigation_forwards_owner_id_and_lease_acquired(
     assert task_id
     assert captured["kwargs"] == {
         "include_response_execution": False,
+        "generate_report": True,
         "owner_id": "owner-http-1",
         "lease_acquired": True,
     }
@@ -1270,11 +1277,13 @@ def test_run_analysis_only_honors_delivery_info_redelivered_flag(
 
 
 @pytest.mark.asyncio
-async def test_schedule_investigation_analysis_only_celery_routes_to_dispatch(
+async def test_schedule_investigation_analysis_only_celery_submits_durable_intent(
     monkeypatch: pytest.MonkeyPatch,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """ISSUE-225: _schedule_investigation uses dispatch_analysis_only_investigation."""
+    """ISSUE-872: celery scheduling commits a durable HTTP intent before 202."""
     from fastapi import BackgroundTasks
+    from unittest.mock import MagicMock
 
     from app.api.v1.events import _schedule_investigation
     from app.core.config import get_settings
@@ -1282,51 +1291,44 @@ async def test_schedule_investigation_analysis_only_celery_routes_to_dispatch(
     monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
     monkeypatch.setenv("TASK_MODE", "celery")
     get_settings.cache_clear()
-
-    captured: dict[str, object] = {}
-
-    class _TrackingLease:
-        async def acquire(self, _event_id: str, owner_id: str, ttl_s: int = 600) -> bool:
-            captured["owner_id"] = owner_id
-            return True
-
-        async def release(self, ev_id: str, owner_id: str) -> bool:
-            captured["released"] = (ev_id, owner_id)
-            return True
-
-    async def _dispatch(
-        event_id: str,
-        *,
-        generate_report: bool = True,
-        owner_id: str | None = None,
-        lease_acquired: bool = False,
-    ) -> str:
-        captured["event_id"] = event_id
-        captured["generate_report"] = generate_report
-        captured["dispatch_owner_id"] = owner_id
-        captured["lease_acquired"] = lease_acquired
-        return "task-analysis-only-schedule"
-
-    async def _noop_record(*_args: object, **_kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr("app.api.v1.events.get_event_lease", lambda: _TrackingLease())
     monkeypatch.setattr(
-        "app.tasks.investigation_tasks.dispatch_analysis_only_investigation",
-        _dispatch,
+        "app.tasks.investigation_intent_tasks.dispatch_pending_investigation_intents.delay",
+        lambda: None,
     )
-    monkeypatch.setattr(
-        "app.api.v1.events.record_investigation_workflow_path",
-        _noop_record,
-    )
+
+    event_id = f"evt-schedule-ao-{uuid4().hex[:8]}"
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="malicious_process",
+                    title="Schedule AO",
+                    description="",
+                    status=EventStatus.NEW.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict="none",
+                    creation_source_ref={"source_product": "mock_xdr"},
+                    source_reference_snapshots=[],
+                    disposition_policy="not_required",
+                    raw_alert_ids=[],
+                    source_type="mock_xdr",
+                )
+            )
 
     task_id = await _schedule_investigation(
-        event_id="evt-schedule-ao",
+        event_id=event_id,
         background=BackgroundTasks(),
         state_machine=MagicMock(),
+        generate_report=False,
     )
-    assert task_id == "task-analysis-only-schedule"
-    assert captured["event_id"] == "evt-schedule-ao"
-    assert captured["lease_acquired"] is True
-    assert captured["dispatch_owner_id"] == captured["owner_id"]
-    assert "released" not in captured
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(orm.InvestigationIntent).where(
+                orm.InvestigationIntent.event_id == event_id,
+            )
+        )
+        assert row is not None
+        assert row.orchestration_mode == "analysis_only"
+        assert row.generate_report is False
+        assert task_id == deterministic_investigation_task_id(row.intent_id, row.revision)

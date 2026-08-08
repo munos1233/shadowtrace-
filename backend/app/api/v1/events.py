@@ -11,7 +11,7 @@ import socket
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, status
 from sqlalchemy import exc as sa_exc
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -64,6 +64,7 @@ from app.models.enums import (
     FinalVerdict,
     Severity,
     SourceObjectKind,
+    TaskMode,
     WritebackReadiness,
     WritebackStatus,
 )
@@ -796,11 +797,12 @@ async def _schedule_investigation(
     state_machine: StateMachineService,
     include_response: bool = False,
     generate_report: bool = True,
+    idempotency_key: str | None = None,
 ) -> str:
-    """Acquire lease and schedule analysis (shared by investigate + reinvestigate)."""
+    """Acquire lease or durable intent and schedule analysis (investigate + reinvestigate)."""
     settings = get_settings()
     mode = (settings.orchestration_mode or "graph").strip().lower()
-    task_mode = (settings.task_mode or "background").strip().lower()
+    task_mode = settings.task_mode
 
     if mode == "analysis_only" and include_response:
         raise ValidationError(
@@ -808,6 +810,29 @@ async def _schedule_investigation(
             error_code="full_loop_unavailable",
             details={"orchestration_mode": mode},
         )
+
+    if task_mode is TaskMode.CELERY:
+        from app.services.investigation_intent_service import (
+            InvestigationIntentService,
+            default_http_investigate_idempotency_key,
+        )
+
+        intent_service = InvestigationIntentService(_get_session_factory())
+        resolved_key = (idempotency_key or default_http_investigate_idempotency_key(event_id)).strip()
+        if not resolved_key:
+            raise ValidationError(
+                "Idempotency-Key must not be blank",
+                error_code="validation_error",
+                details={"field": "Idempotency-Key"},
+            )
+        result = await intent_service.submit_http_investigate_intent(
+            event_id=event_id,
+            idempotency_key=resolved_key,
+            orchestration_mode=mode,
+            include_response_execution=include_response,
+            generate_report=generate_report,
+        )
+        return result.task_id
 
     workflow_path = workflow_path_from_request(
         include_response_execution=include_response,
@@ -828,22 +853,21 @@ async def _schedule_investigation(
                 exc_info=True,
             )
 
+    if task_mode is not TaskMode.BACKGROUND:
+        raise ValidationError(
+            f"unsupported TASK_MODE={task_mode.value}",
+            error_code="configuration_error",
+            details={"task_mode": task_mode.value},
+        )
+
+    logger.warning(
+        "volatile BackgroundTasks investigation dispatch event=%s mode=%s "
+        "(dev/test only; production requires TASK_MODE=celery)",
+        event_id,
+        mode,
+    )
+
     if mode == "analysis_only":
-        if task_mode == "celery":
-            from app.tasks.investigation_tasks import dispatch_analysis_only_investigation
-
-            lease, owner_id = await _acquire_investigation_lease(event_id)
-            try:
-                return await dispatch_analysis_only_investigation(
-                    event_id,
-                    generate_report=generate_report,
-                    owner_id=owner_id,
-                    lease_acquired=True,
-                )
-            except Exception:
-                await lease.release(event_id, owner_id)
-                raise
-
         lease, owner_id = await _acquire_investigation_lease(event_id)
 
         async def _run_pipeline() -> None:
@@ -884,23 +908,6 @@ async def _schedule_investigation(
 
         background.add_task(_run_pipeline)
         return event_id
-
-    if task_mode == "celery":
-        from app.tasks.investigation_tasks import dispatch_investigation
-
-        lease, owner_id = await _acquire_investigation_lease(event_id)
-
-        try:
-            return await dispatch_investigation(
-                event_id,
-                include_response_execution=include_response,
-                generate_report=generate_report,
-                owner_id=owner_id,
-                lease_acquired=True,
-            )
-        except Exception:
-            await lease.release(event_id, owner_id)
-            raise
 
     lease, owner_id = await _acquire_investigation_lease(event_id)
 
@@ -1069,6 +1076,7 @@ async def investigate_event(
     background: BackgroundTasks,
     principal: Annotated[Principal, require_roles(ROLE_ANALYST)],
     body: s.InvestigateRequest | None = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     event_service: EventService = Depends(get_event_service),
     state_machine: StateMachineService = Depends(get_state_machine),
 ) -> s.InvestigateResponse:
@@ -1094,6 +1102,7 @@ async def investigate_event(
         state_machine=state_machine,
         include_response=include_response,
         generate_report=generate_report,
+        idempotency_key=idempotency_key,
     )
 
     return s.InvestigateResponse(

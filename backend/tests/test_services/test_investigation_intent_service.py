@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import Settings
 from app.db import models as orm
 from app.models.enums import EventStatus, InvestigationIntentStatus, Severity, SourceObjectKind
+from app.core.errors import InvestigationIntentConflictError
 from app.models.investigation_intent import (
+    INTENT_KIND_HTTP_INVESTIGATE,
+    INTENT_VERSION_ISSUE276_V1,
     PRIMARY_LINK_ROLE,
     PROVISIONAL_LINK_ROLE,
     IntentDeliveryAdmission,
@@ -25,6 +28,7 @@ from app.services.context_service import EventContextStore
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.investigation_intent_service import (
     InvestigationIntentService,
+    compute_http_investigate_payload_hash,
     deterministic_investigation_task_id,
 )
 
@@ -1879,3 +1883,160 @@ async def test_auto_response_unexpected_publish_failure_sets_degraded_flag(
     assert any(
         flag.startswith("auto_response_dispatch_unavailable=") for flag in event.degraded_flags
     )
+
+
+@pytest.mark.asyncio
+async def test_submit_http_investigate_intent_creates_pending_row(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = Settings(SOURCE_MODE="mock_xdr")
+    service = InvestigationIntentService(session_factory, settings=settings)
+    event_id = f"evt-http-intent-{uuid4().hex[:8]}"
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="malicious_process",
+                    title="HTTP intent",
+                    description="",
+                    status=EventStatus.NEW.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict="none",
+                    creation_source_ref={"source_product": "mock_xdr"},
+                    source_reference_snapshots=[],
+                    disposition_policy="not_required",
+                    raw_alert_ids=[],
+                    source_type="mock_xdr",
+                )
+            )
+
+    result = await service.submit_http_investigate_intent(
+        event_id=event_id,
+        idempotency_key=f"http:{event_id}",
+        orchestration_mode="graph",
+        include_response_execution=False,
+        generate_report=True,
+    )
+    assert result.replayed is False
+    assert result.task_id == deterministic_investigation_task_id(result.intent_id, 1)
+
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(orm.InvestigationIntent).where(
+                orm.InvestigationIntent.intent_id == result.intent_id
+            )
+        )
+        assert row is not None
+        assert row.intent_kind == INTENT_KIND_HTTP_INVESTIGATE
+        assert row.intent_version == INTENT_VERSION_ISSUE276_V1
+        assert row.status == InvestigationIntentStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_submit_http_investigate_intent_replays_same_payload(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = Settings(SOURCE_MODE="mock_xdr")
+    service = InvestigationIntentService(session_factory, settings=settings)
+    event_id = f"evt-http-replay-{uuid4().hex[:8]}"
+    idem = f"http-replay:{event_id}"
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="malicious_process",
+                    title="HTTP replay",
+                    description="",
+                    status=EventStatus.NEW.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict="none",
+                    creation_source_ref={"source_product": "mock_xdr"},
+                    source_reference_snapshots=[],
+                    disposition_policy="not_required",
+                    raw_alert_ids=[],
+                    source_type="mock_xdr",
+                )
+            )
+
+    first = await service.submit_http_investigate_intent(
+        event_id=event_id,
+        idempotency_key=idem,
+        orchestration_mode="graph",
+        include_response_execution=False,
+        generate_report=True,
+    )
+    second = await service.submit_http_investigate_intent(
+        event_id=event_id,
+        idempotency_key=idem,
+        orchestration_mode="graph",
+        include_response_execution=False,
+        generate_report=True,
+    )
+    assert first.task_id == second.task_id
+    assert second.replayed is True
+
+
+@pytest.mark.asyncio
+async def test_submit_http_investigate_intent_payload_conflict(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = Settings(SOURCE_MODE="mock_xdr")
+    service = InvestigationIntentService(session_factory, settings=settings)
+    event_id = f"evt-http-conflict-{uuid4().hex[:8]}"
+    idem = f"http-conflict:{event_id}"
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="malicious_process",
+                    title="HTTP conflict",
+                    description="",
+                    status=EventStatus.NEW.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict="none",
+                    creation_source_ref={"source_product": "mock_xdr"},
+                    source_reference_snapshots=[],
+                    disposition_policy="not_required",
+                    raw_alert_ids=[],
+                    source_type="mock_xdr",
+                )
+            )
+
+    await service.submit_http_investigate_intent(
+        event_id=event_id,
+        idempotency_key=idem,
+        orchestration_mode="graph",
+        include_response_execution=False,
+        generate_report=True,
+    )
+    with pytest.raises(InvestigationIntentConflictError):
+        await service.submit_http_investigate_intent(
+            event_id=event_id,
+            idempotency_key=idem,
+            orchestration_mode="graph",
+            include_response_execution=False,
+            generate_report=False,
+        )
+
+
+def test_compute_http_investigate_payload_hash_stable() -> None:
+    first = compute_http_investigate_payload_hash(
+        orchestration_mode="graph",
+        include_response_execution=False,
+        generate_report=True,
+    )
+    second = compute_http_investigate_payload_hash(
+        orchestration_mode="GRAPH",
+        include_response_execution=False,
+        generate_report=True,
+    )
+    third = compute_http_investigate_payload_hash(
+        orchestration_mode="graph",
+        include_response_execution=False,
+        generate_report=False,
+    )
+    assert first == second
+    assert first != third

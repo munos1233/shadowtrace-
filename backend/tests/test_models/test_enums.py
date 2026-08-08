@@ -26,6 +26,7 @@ EXPECTED_ENUM_NAMES = {
     "ActionCategory",
     "ActionExecutionPhase",
     "Severity",
+    "TaskMode",
     "ActionLevel",
     "EvidenceSource",
     "ToolCategory",
@@ -104,6 +105,7 @@ EXPECTED_ENUM_VALUES: dict[str, set[str]] = {
     "ActionCategory": {"system", "response", "verification", "rollback"},
     "ActionExecutionPhase": {"immediate", "post_verify"},
     "Severity": {"low", "medium", "high", "critical"},
+    "TaskMode": {"celery", "background"},
     "ActionLevel": {"l0", "l1", "l2", "l3", "l4", "l5"},
     "EvidenceSource": {
         "identity",

@@ -106,6 +106,17 @@ class Severity(StrEnum):
     CRITICAL = "critical"
 
 
+class TaskMode(StrEnum):
+    """Investigation task dispatch mode (ISSUE-276 / #872).
+
+    ``celery`` is the production-durable path (PostgreSQL intent + broker worker).
+    ``background`` is an explicit dev/test volatile FastAPI BackgroundTasks path.
+    """
+
+    CELERY = "celery"
+    BACKGROUND = "background"
+
+
 class InvestigationIntentStatus(StrEnum):
     """Durable auto-investigate intent ledger (#612)."""
 
@@ -427,6 +438,7 @@ DECLARED_ENUMS: dict[str, type[Enum]] = {
     "ActionCategory": ActionCategory,
     "ActionExecutionPhase": ActionExecutionPhase,
     "Severity": Severity,
+    "TaskMode": TaskMode,
     "BusinessDisruption": BusinessDisruption,
     "ActionLevel": ActionLevel,
     "EvidenceSource": EvidenceSource,

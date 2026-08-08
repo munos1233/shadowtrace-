@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -13,12 +14,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
-from app.core.errors import DependencyUnavailableError
+from app.core.errors import (
+    DependencyUnavailableError,
+    EventNotFoundError,
+    InvestigationInProgressError,
+    InvestigationIntentConflictError,
+    InvalidStateTransitionError,
+)
 from app.db import models as orm
 from app.models.enums import EventStatus, InvestigationIntentStatus
 from app.models.investigation_intent import (
     INTENT_KIND_AUTO_INVESTIGATE,
+    INTENT_KIND_HTTP_INVESTIGATE,
     INTENT_VERSION_ISSUE108_V1,
+    INTENT_VERSION_ISSUE276_V1,
     PRIMARY_LINK_ROLE,
     PROVISIONAL_LINK_ROLE,
     TERMINAL_INTENT_STATUSES,
@@ -67,6 +76,34 @@ def deterministic_investigation_task_id(intent_id: str, revision: int) -> str:
     return hashlib.sha256(f"{intent_id}:{revision}".encode()).hexdigest()
 
 
+def default_http_investigate_idempotency_key(event_id: str) -> str:
+    return f"http_investigate:{event_id}"
+
+
+def compute_http_investigate_payload_hash(
+    *,
+    orchestration_mode: str,
+    include_response_execution: bool,
+    generate_report: bool,
+) -> str:
+    payload = json.dumps(
+        {
+            "orchestration_mode": orchestration_mode.strip().lower(),
+            "include_response_execution": bool(include_response_execution),
+            "generate_report": bool(generate_report),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+class HttpInvestigateIntentResult(NamedTuple):
+    intent_id: str
+    task_id: str
+    replayed: bool
+
+
 async def _resolve_response_link_role(
     session: AsyncSession,
     event_id: str,
@@ -96,6 +133,7 @@ class _EnqueuedPublishTarget(NamedTuple):
     intent_id: str
     include_response_execution: bool
     generate_report: bool
+    orchestration_mode: str
 
 
 class InvestigationIntentService:
@@ -125,6 +163,156 @@ class InvestigationIntentService:
     @property
     def auto_response_policy(self) -> AutoResponsePolicyService:
         return self._auto_response
+
+    def _http_intent_task_id(self, row: orm.InvestigationIntent) -> str:
+        return deterministic_investigation_task_id(row.intent_id, int(row.revision or 1))
+
+    def _resolve_http_intent_replay(
+        self,
+        row: orm.InvestigationIntent,
+        *,
+        payload_hash: str,
+        idempotency_key: str,
+        event_id: str,
+    ) -> HttpInvestigateIntentResult | None:
+        if row.payload_hash != payload_hash:
+            raise InvestigationIntentConflictError(
+                message="investigation idempotency key reused with different payload",
+                error_code="investigation_intent_conflict",
+                details={
+                    "event_id": event_id,
+                    "idempotency_key": idempotency_key,
+                    "intent_id": row.intent_id,
+                },
+            )
+        return HttpInvestigateIntentResult(
+            intent_id=row.intent_id,
+            task_id=self._http_intent_task_id(row),
+            replayed=True,
+        )
+
+    async def submit_http_investigate_intent(
+        self,
+        *,
+        event_id: str,
+        idempotency_key: str,
+        orchestration_mode: str,
+        include_response_execution: bool,
+        generate_report: bool,
+    ) -> HttpInvestigateIntentResult:
+        """Create or replay a durable HTTP investigation intent before returning 202."""
+        normalized_mode = orchestration_mode.strip().lower()
+        payload_hash = compute_http_investigate_payload_hash(
+            orchestration_mode=normalized_mode,
+            include_response_execution=include_response_execution,
+            generate_report=generate_report,
+        )
+        async with self._session_factory() as session:
+            async with session.begin():
+                event = await session.get(orm.SecurityEvent, event_id, with_for_update=True)
+                if event is None:
+                    raise EventNotFoundError(
+                        f"event {event_id} not found",
+                        details={"event_id": event_id},
+                    )
+                if event.status != EventStatus.NEW.value:
+                    raise InvalidStateTransitionError(
+                        (
+                            "event must be in NEW status to start investigation, "
+                            f"current: {event.status}"
+                        ),
+                        current=EventStatus(event.status),
+                        target=EventStatus.TRIAGING,
+                        details={"event_id": event_id},
+                    )
+
+                existing_by_key = await session.scalar(
+                    select(orm.InvestigationIntent).where(
+                        orm.InvestigationIntent.idempotency_key == idempotency_key
+                    )
+                )
+                if existing_by_key is not None:
+                    replay = self._resolve_http_intent_replay(
+                        existing_by_key,
+                        payload_hash=payload_hash,
+                        idempotency_key=idempotency_key,
+                        event_id=event_id,
+                    )
+                    if replay is not None:
+                        return replay
+
+                existing_by_event = await session.scalar(
+                    select(orm.InvestigationIntent).where(
+                        orm.InvestigationIntent.event_id == event_id,
+                        orm.InvestigationIntent.intent_kind == INTENT_KIND_HTTP_INVESTIGATE,
+                        orm.InvestigationIntent.intent_version == INTENT_VERSION_ISSUE276_V1,
+                    )
+                )
+                if existing_by_event is not None:
+                    status = InvestigationIntentStatus(existing_by_event.status)
+                    if existing_by_event.idempotency_key == idempotency_key:
+                        replay = self._resolve_http_intent_replay(
+                            existing_by_event,
+                            payload_hash=payload_hash,
+                            idempotency_key=idempotency_key,
+                            event_id=event_id,
+                        )
+                        if replay is not None:
+                            return replay
+                    if status not in TERMINAL_INTENT_STATUSES:
+                        raise InvestigationInProgressError(
+                            message="investigation already in progress for this event",
+                            error_code="investigation_in_progress",
+                            details={"event_id": event_id, "intent_id": existing_by_event.intent_id},
+                        )
+                    if existing_by_event.payload_hash != payload_hash:
+                        raise InvestigationIntentConflictError(
+                            message="investigation intent already exists with different payload",
+                            error_code="investigation_intent_conflict",
+                            details={
+                                "event_id": event_id,
+                                "idempotency_key": idempotency_key,
+                                "intent_id": existing_by_event.intent_id,
+                            },
+                        )
+                    return self._resolve_http_intent_replay(
+                        existing_by_event,
+                        payload_hash=payload_hash,
+                        idempotency_key=idempotency_key,
+                        event_id=event_id,
+                    )
+
+                intent_id = new_intent_id()
+                row = orm.InvestigationIntent(
+                    intent_id=intent_id,
+                    event_id=event_id,
+                    intent_kind=INTENT_KIND_HTTP_INVESTIGATE,
+                    intent_version=INTENT_VERSION_ISSUE276_V1,
+                    status=InvestigationIntentStatus.PENDING.value,
+                    revision=1,
+                    attempt=0,
+                    include_response_execution=include_response_execution,
+                    generate_report=generate_report,
+                    idempotency_key=idempotency_key,
+                    payload_hash=payload_hash,
+                    orchestration_mode=normalized_mode,
+                )
+                session.add(row)
+                try:
+                    await session.flush()
+                except IntegrityError as exc:
+                    raise InvestigationInProgressError(
+                        message="investigation already in progress for this event",
+                        error_code="investigation_in_progress",
+                        details={"event_id": event_id},
+                    ) from exc
+
+        self.schedule_dispatch()
+        return HttpInvestigateIntentResult(
+            intent_id=intent_id,
+            task_id=deterministic_investigation_task_id(intent_id, 1),
+            replayed=False,
+        )
 
     async def maybe_create_pending_in_session(
         self,
@@ -588,29 +776,33 @@ class InvestigationIntentService:
                         skip_reason="event_not_new",
                     )
                     return None
-                source_product = None
-                if event.creation_source_ref:
-                    raw = event.creation_source_ref.get("source_product")
-                    if isinstance(raw, str):
-                        source_product = raw
-                link_role = await _resolve_response_link_role(session, event.event_id)
-                response_decision = self._auto_response.evaluate(
-                    event,
-                    link_role=link_role,
-                    source_product=source_product,
-                )
-                include_response = response_decision.eligible
-                row.include_response_execution = include_response
-                if self._auto_response.enabled:
-                    session.add(
-                        orm.EventAuditLog(
-                            event_id=event.event_id,
-                            from_status=event.status,
-                            to_status=event.status,
-                            operator="AutoResponsePolicyService",
-                            reason=format_auto_response_audit_reason(response_decision),
-                        )
+                orchestration_mode = (row.orchestration_mode or "graph").strip().lower()
+                if row.intent_kind == INTENT_KIND_HTTP_INVESTIGATE:
+                    include_response = bool(row.include_response_execution)
+                else:
+                    source_product = None
+                    if event.creation_source_ref:
+                        raw = event.creation_source_ref.get("source_product")
+                        if isinstance(raw, str):
+                            source_product = raw
+                    link_role = await _resolve_response_link_role(session, event.event_id)
+                    response_decision = self._auto_response.evaluate(
+                        event,
+                        link_role=link_role,
+                        source_product=source_product,
                     )
+                    include_response = response_decision.eligible
+                    row.include_response_execution = include_response
+                    if self._auto_response.enabled:
+                        session.add(
+                            orm.EventAuditLog(
+                                event_id=event.event_id,
+                                from_status=event.status,
+                                to_status=event.status,
+                                operator="AutoResponsePolicyService",
+                                reason=format_auto_response_audit_reason(response_decision),
+                            )
+                        )
                 task_id = deterministic_investigation_task_id(row.intent_id, int(row.revision))
                 validate_intent_transition(
                     InvestigationIntentStatus.CLAIMED,
@@ -627,6 +819,7 @@ class InvestigationIntentService:
                     row.intent_id,
                     include_response,
                     bool(row.generate_report),
+                    orchestration_mode,
                 )
 
     async def _revert_enqueued_after_publish_failure(
@@ -672,19 +865,28 @@ class InvestigationIntentService:
 
         from app.tasks.investigation_tasks import (
             delete_task_metadata,
+            publish_analysis_only_for_intent,
             publish_investigation_for_intent,
             register_task_metadata,
         )
 
         try:
             await register_task_metadata(target.task_id, target.event_id)
-            publish_investigation_for_intent(
-                event_id=target.event_id,
-                task_id=target.task_id,
-                intent_id=target.intent_id,
-                include_response_execution=target.include_response_execution,
-                generate_report=target.generate_report,
-            )
+            if target.orchestration_mode == "analysis_only":
+                publish_analysis_only_for_intent(
+                    event_id=target.event_id,
+                    task_id=target.task_id,
+                    intent_id=target.intent_id,
+                    generate_report=target.generate_report,
+                )
+            else:
+                publish_investigation_for_intent(
+                    event_id=target.event_id,
+                    task_id=target.task_id,
+                    intent_id=target.intent_id,
+                    include_response_execution=target.include_response_execution,
+                    generate_report=target.generate_report,
+                )
         except DependencyUnavailableError as exc:
             await delete_task_metadata(target.task_id)
             logger.warning(
@@ -852,7 +1054,10 @@ class InvestigationIntentService:
 
 
 __all__ = [
+    "HttpInvestigateIntentResult",
     "InvestigationIntentService",
+    "compute_http_investigate_payload_hash",
+    "default_http_investigate_idempotency_key",
     "deterministic_investigation_task_id",
     "new_intent_id",
 ]
