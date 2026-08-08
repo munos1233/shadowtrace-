@@ -75,6 +75,9 @@ from app.orchestration.workflow_graph import (
     planner_node,
     rag_node,
 )
+from app.services.analysis_only_complete_persistence import (
+    persist_analysis_only_complete_authoritative,
+)
 from app.services.false_positive_matcher import build_fp_close_reason
 from app.services.report_input_builder import build_report_agent_input
 from app.services.working_memory import BoundWorkingMemory
@@ -1483,16 +1486,15 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         )
 
     async def _persist_analysis_only_complete(self, event_id: str) -> None:
-        if self.context_store is None:
-            return
-        try:
-            await self.context_store.set(event_id, "analysis_only_complete", True)
-        except Exception:
-            logger.warning(
-                "SuperAgent: failed to persist analysis_only_complete for event=%s",
-                event_id,
-                exc_info=True,
-            )
+        degraded = getattr(self, "_degraded_flags", None)
+        await persist_analysis_only_complete_authoritative(
+            event_id,
+            context_store=self.context_store,
+            event_service=self.event_service,
+            degraded_flags=degraded,
+            writer=_SUPER_AGENT_OPERATOR,
+            refresh_closed_snapshot=True,
+        )
 
     async def _schedule_memory_after_analysis(
         self,

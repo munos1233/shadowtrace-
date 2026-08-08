@@ -51,6 +51,9 @@ from app.models.enums import DispositionPolicy, EventStatus, FinalVerdict
 from app.models.report import InvestigationReport
 from app.models.workflow import TransitionContext
 from app.services.agent_task_coordinator import run_risk_score_with_ledger
+from app.services.analysis_only_complete_persistence import (
+    persist_analysis_only_complete_authoritative,
+)
 from app.services.event_service import EventService, StateMachinePort
 from app.services.false_positive_matcher import build_fp_close_reason
 from app.services.fp_adjudication_runner import run_post_evidence_fp_adjudication
@@ -816,29 +819,14 @@ class AnalysisOnlyPipeline:
 
     async def _persist_analysis_only_complete(self, event_id: str) -> None:
         await self._evaluate_quality_scores(event_id)
-        if self._context_store is not None:
-            try:
-                await self._context_store.set(event_id, "analysis_only_complete", True)
-            except Exception:
-                logger.warning(
-                    "Failed to persist analysis_only_complete for event=%s",
-                    event_id,
-                    exc_info=True,
-                )
-                if self._degraded_flags is not None:
-                    try:
-                        await self._degraded_flags.set_flag(
-                            event_id,
-                            "redis_context_unavailable",
-                            True,
-                            writer=_PIPELINE_OPERATOR,
-                        )
-                    except Exception:
-                        logger.error(
-                            "Failed to set redis_context_unavailable degraded flag for event=%s",
-                            event_id,
-                            exc_info=True,
-                        )
+        await persist_analysis_only_complete_authoritative(
+            event_id,
+            context_store=self._context_store,
+            event_service=self._event_service,
+            degraded_flags=self._degraded_flags,
+            writer=_PIPELINE_OPERATOR,
+            refresh_closed_snapshot=True,
+        )
 
     def _schedule_memory_after_analysis(self, event_id: str) -> asyncio.Task[Any] | None:
         """Fire-and-forget profile-only early enqueue after analysis completion.
@@ -971,6 +959,7 @@ class AnalysisOnlyPipeline:
         # ISSUE-204: optional report — skip ReportAgent and stay at REPORTING.
         if not generate_report:
             await self._persist_report_skipped(event_id)
+            await self._persist_analysis_only_complete(event_id)
             await self._transition(
                 event_id,
                 EventStatus.REPORTING,
@@ -983,7 +972,6 @@ class AnalysisOnlyPipeline:
                     default="analysis_pipeline:short_circuit_no_report",
                 ),
             )
-            await self._persist_analysis_only_complete(event_id)
             self._schedule_memory_after_analysis(event_id)
             return AnalysisOnlyPipelineResult(
                 event_id=event_id,
@@ -1010,6 +998,7 @@ class AnalysisOnlyPipeline:
             need_investigation=False,
             recommendation="low_risk_no_investigation",
         )
+        await self._persist_analysis_only_complete(event_id)
         await self._transition(
             event_id,
             EventStatus.CLOSED,
@@ -1020,7 +1009,6 @@ class AnalysisOnlyPipeline:
             ),
         )
 
-        await self._persist_analysis_only_complete(event_id)
         # ISSUE-208: short-circuit close — schedule full CLOSED consolidation.
         self._schedule_memory_after_close(event_id)
         return AnalysisOnlyPipelineResult(

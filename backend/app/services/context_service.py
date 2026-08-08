@@ -547,6 +547,16 @@ class EventContextStore:
             ctx: EventContext
             if EventStatus(se.status) is EventStatus.CLOSED and se.event_context_snapshot:
                 ctx = _assemble_event_context(dict(se.event_context_snapshot))
+                # ISSUE-266: journal may hold analysis_only_complete=true after a
+                # post-freeze write; never downgrade snapshot truth once true.
+                journal_ctx = await self._rebuild_from_journal(session, event_id)
+                if journal_ctx.analysis_only_complete and not ctx.analysis_only_complete:
+                    ctx = EventContext.model_validate(
+                        {
+                            **_context_as_dict(ctx),
+                            "analysis_only_complete": True,
+                        }
+                    )
             else:
                 ctx = await self._rebuild_from_journal(session, event_id)
 

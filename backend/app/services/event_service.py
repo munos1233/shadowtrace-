@@ -1304,6 +1304,45 @@ class EventService:
                 event_id, reason=f"report_generated:{type(exc).__name__}"
             )
 
+    async def merge_analysis_only_complete_context_snapshot(
+        self,
+        event_id: str,
+        complete: bool,
+    ) -> None:
+        """Persist ``analysis_only_complete`` onto the durable snapshot (ISSUE-266)."""
+        from app.services.event_context_snapshot_projection import (
+            merge_analysis_only_complete_into_snapshot,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    row = await session.get(
+                        orm.SecurityEvent,
+                        event_id,
+                        with_for_update=True,
+                    )
+                    if row is None:
+                        return
+                    row.event_context_snapshot = merge_analysis_only_complete_into_snapshot(
+                        (
+                            dict(row.event_context_snapshot)
+                            if isinstance(row.event_context_snapshot, dict)
+                            else None
+                        ),
+                        complete,
+                    )
+                    await session.flush()
+        except Exception as exc:
+            logger.warning(
+                "merge_analysis_only_complete_context_snapshot failed event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+            await self._mark_snapshot_merge_degraded(
+                event_id, reason=f"analysis_only_complete:{type(exc).__name__}"
+            )
+
     async def update_classification(
         self,
         event_id: str,

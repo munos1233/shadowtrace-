@@ -75,6 +75,22 @@ def _analysis_only_complete_from_snapshot(snapshot: dict[str, Any] | None) -> bo
     return bool(snapshot.get("analysis_only_complete"))
 
 
+def resolve_analysis_only_complete(
+    *,
+    context_snapshot: dict[str, Any] | None,
+    journal_value: bool | None = None,
+) -> bool:
+    """Project analysis-only completion from durable snapshot with journal overlay.
+
+    ISSUE-266: journal/redis may hold ``true`` while a CLOSED freeze snapshot still
+    shows ``false`` until refresh; never downgrade an established ``true``.
+    """
+    from_snapshot = _analysis_only_complete_from_snapshot(context_snapshot)
+    if journal_value is True:
+        return True
+    return from_snapshot
+
+
 def _report_generated_from_snapshot(snapshot: dict[str, Any] | None) -> bool:
     if not isinstance(snapshot, dict):
         return False
@@ -129,9 +145,13 @@ def derive_investigation_guidance(
     disposition_policy: DispositionPolicy,
     context_snapshot: dict[str, Any] | None,
     orchestration_mode: str | None,
+    journal_analysis_only_complete: bool | None = None,
 ) -> InvestigationGuidance:
     """Derive operator-facing phase hints from authoritative event + context."""
-    analysis_only_complete = _analysis_only_complete_from_snapshot(context_snapshot)
+    analysis_only_complete = resolve_analysis_only_complete(
+        context_snapshot=context_snapshot,
+        journal_value=journal_analysis_only_complete,
+    )
     report_generated = _report_generated_from_snapshot(context_snapshot)
     report_quality = _report_quality_from_snapshot(context_snapshot)
     execution_substate = _execution_substate_from_snapshot(context_snapshot)
@@ -338,6 +358,7 @@ __all__ = [
     "derive_investigation_guidance",
     "full_loop_available",
     "record_investigation_workflow_path",
+    "resolve_analysis_only_complete",
     "resolve_include_response_execution_for_resume",
     "workflow_path_from_request",
 ]

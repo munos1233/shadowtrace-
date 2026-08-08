@@ -1985,3 +1985,28 @@ async def test_merge_report_generated_snapshot_flag(
         assert row is not None
         snap = dict(row.event_context_snapshot or {})
     assert snap.get("report_generated") is True
+
+
+@pytest.mark.asyncio
+async def test_merge_analysis_only_complete_snapshot_flag(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ISSUE-266: analysis_only_complete is mirrored onto durable snapshot."""
+    sfx = _sfx()
+    created = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(kind=SourceObjectKind.INCIDENT, object_id=f"INC-aoc266-{sfx}"),
+            title="snapshot-analysis-only-flag",
+            event_type=EventType.MALICIOUS_PROCESS,
+            severity=Severity.LOW,
+            source_type="mock_xdr",
+        )
+    )
+    assert created.event_id
+    await event_service.merge_analysis_only_complete_context_snapshot(created.event_id, True)
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, created.event_id)
+        assert row is not None
+        snap = dict(row.event_context_snapshot or {})
+    assert snap.get("analysis_only_complete") is True

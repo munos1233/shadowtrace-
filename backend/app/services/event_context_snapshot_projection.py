@@ -282,6 +282,20 @@ def merge_report_generated_into_snapshot(
     return merged
 
 
+def merge_analysis_only_complete_into_snapshot(
+    snapshot: dict[str, Any] | None,
+    complete: bool,
+) -> dict[str, Any]:
+    """Mirror ``analysis_only_complete`` onto the durable snapshot (ISSUE-266).
+
+    Monotonic: once ``true``, later merges cannot downgrade to ``false``.
+    """
+    merged = dict(snapshot) if isinstance(snapshot, dict) else {}
+    if complete or not merged.get("analysis_only_complete"):
+        merged["analysis_only_complete"] = bool(complete)
+    return merged
+
+
 def project_snapshot_for_api(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
     """Hard-project ORM snapshot (thin merge or CLOSED full freeze) for API responses.
 
@@ -416,6 +430,7 @@ __all__ = [
     "SNAPSHOT_SUMMARY_KEYS",
     "build_evidence_snapshot_summary",
     "build_storyline_snapshot_summary",
+    "merge_analysis_only_complete_into_snapshot",
     "merge_evidence_summary_into_snapshot",
     "merge_report_generated_into_snapshot",
     "merge_storyline_summary_into_snapshot",

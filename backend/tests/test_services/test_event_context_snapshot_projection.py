@@ -136,6 +136,17 @@ def test_merge_report_generated_into_snapshot() -> None:
     assert "risk_assessment" in snapshot
 
 
+def test_merge_analysis_only_complete_into_snapshot() -> None:
+    from app.services.event_context_snapshot_projection import (
+        merge_analysis_only_complete_into_snapshot,
+    )
+
+    snapshot = merge_analysis_only_complete_into_snapshot({"risk_assessment": {}}, True)
+    assert snapshot["analysis_only_complete"] is True
+    downgraded = merge_analysis_only_complete_into_snapshot(snapshot, False)
+    assert downgraded["analysis_only_complete"] is True
+
+
 def test_project_closed_freeze_extracts_bounded_summary_without_dump() -> None:
     """CLOSED full EventContext freeze must project to whitelist summaries only."""
     projected = project_snapshot_for_api(

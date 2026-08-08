@@ -64,6 +64,9 @@ from app.services.agent_task_coordinator import (
     run_response_plan_with_ledger,
     run_risk_score_with_ledger,
 )
+from app.services.analysis_only_complete_persistence import (
+    persist_analysis_only_complete_authoritative,
+)
 from app.services.analysis_only_pipeline import run_rag_stage
 from app.services.context_service import EventContextStore
 from app.services.degraded_flag_service import DegradedFlagService, apply_flag_to_list
@@ -824,6 +827,24 @@ def build_investigation_graph(
         triage = TriageResult.model_validate(state["triage_result"])
         final_verdict = state.get("final_verdict")
         short_circuit = state.get("risk_assessment") is None
+        defer_response = bool(state.get("defer_response_execution"))
+        event_id = state["event_id"]
+        store = services.get("context_store")
+        snapshot_svc = services.get("event_service")
+        degraded = services.get("degraded_flags")
+
+        async def _persist_analysis_only_complete_flag() -> None:
+            if not defer_response:
+                return
+            await persist_analysis_only_complete_authoritative(
+                event_id,
+                context_store=store,
+                event_service=snapshot_svc,
+                degraded_flags=degraded,
+                writer=_GRAPH_OPERATOR,
+                refresh_closed_snapshot=False,
+            )
+
         if short_circuit and not final_verdict:
             await event_service.set_final_verdict(
                 state["event_id"],
@@ -872,28 +893,27 @@ def build_investigation_graph(
         # ISSUE-204: never attempt CLOSED without report bytes when the caller
         # opted out of generation — halt at REPORTING instead of failing the gate.
         if not report_generated and not generate_report:
-            store = services.get("context_store")
             if store is not None:
                 try:
-                    await store.set(state["event_id"], "report_generated", False)
+                    await store.set(event_id, "report_generated", False)
                 except Exception:
                     logger.warning(
                         "failed to persist report_generated=false event=%s",
-                        state["event_id"],
+                        event_id,
                         exc_info=True,
                     )
-            snapshot_svc = services.get("event_service")
             if snapshot_svc is not None:
                 try:
                     await snapshot_svc.merge_report_generated_context_snapshot(
-                        state["event_id"], False
+                        event_id, False
                     )
                 except Exception:
                     logger.warning(
                         "failed to merge report_generated=false snapshot event=%s",
-                        state["event_id"],
+                        event_id,
                         exc_info=True,
                     )
+            await _persist_analysis_only_complete_flag()
             current_event_status = EventStatus(
                 state.get("event_status", EventStatus.TRIAGING.value)
             )
@@ -932,6 +952,7 @@ def build_investigation_graph(
             state = _patch_state(state, report_status)
 
         escalated = bool(state.get("escalated", False))
+        await _persist_analysis_only_complete_flag()
         status = await _transition_status(
             services,
             state,
