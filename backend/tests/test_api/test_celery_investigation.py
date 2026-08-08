@@ -13,7 +13,6 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
-from app.core.redis_client import RedisClient
 from app.main import app
 from app.models.enums import (
     DispositionPolicy,
@@ -25,6 +24,7 @@ from app.models.enums import (
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.tasks.investigation_tasks import register_task_metadata
+from tests.support.fake_redis import InMemoryFakeRedis, patch_redis_client
 
 _DEV_TOKENS = json.dumps(
     {
@@ -44,37 +44,11 @@ def _celery_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """In-memory Redis stand-in for metadata registration tests."""
-    store: dict[str, str] = {}
-
-    class _FakeRedis:
-        async def set(self, key: str, value: str, ex: int | None = None) -> bool:
-            store[key] = value
-            return True
-
-        async def get(self, key: str) -> bytes | None:
-            raw = store.get(key)
-            return raw.encode() if raw is not None else None
-
-        async def delete(self, key: str) -> int:
-            return 1 if store.pop(key, None) is not None else 0
-
-    async def _ping(self: RedisClient) -> bool:
-        return True
-
-    def _get_client(self: RedisClient) -> _FakeRedis:
-        return _FakeRedis()
-
-    async def _aclose(self: RedisClient) -> None:
-        return None
-
-    monkeypatch.setattr(RedisClient, "ping", _ping)
-    monkeypatch.setattr(RedisClient, "get_client", _get_client)
-    monkeypatch.setattr(RedisClient, "aclose", _aclose)
+def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryFakeRedis:
+    fake = patch_redis_client(monkeypatch)
     celery_app.conf.result_backend = "cache+memory://"
     celery_app.conf.broker_url = "memory://"
-    return store
+    return fake
 
 
 def _hdr() -> dict[str, str]:
@@ -83,7 +57,7 @@ def _hdr() -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_get_task_returns_celery_state_without_resolve_mock(
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
 ) -> None:
     """Regression: GET /tasks must not call asyncio.run inside async handler."""
     task_id = "task-api-state-001"
@@ -104,7 +78,7 @@ async def test_get_task_returns_celery_state_without_resolve_mock(
 
 @pytest.mark.asyncio
 async def test_get_task_maps_retry_to_unknown(
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task_id = "task-api-retry-unknown"
@@ -130,7 +104,7 @@ async def test_get_task_maps_retry_to_unknown(
 
 @pytest.mark.asyncio
 async def test_get_task_maps_revoked_to_unknown(
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task_id = "task-api-revoked-unknown"
@@ -155,7 +129,7 @@ async def test_get_task_maps_revoked_to_unknown(
 
 
 @pytest.mark.asyncio
-async def test_get_task_unknown_id_returns_404(fake_redis_store: dict[str, str]) -> None:
+async def test_get_task_unknown_id_returns_404(fake_redis_store: InMemoryFakeRedis) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
@@ -168,7 +142,7 @@ async def test_get_task_unknown_id_returns_404(fake_redis_store: dict[str, str])
 
 @pytest.mark.asyncio
 async def test_investigate_celery_mode_returns_task_id(
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_id = "evt-celery-dispatch"
@@ -222,7 +196,7 @@ async def test_investigate_celery_mode_returns_task_id(
 
 @pytest.mark.asyncio
 async def test_investigate_celery_broker_unavailable_returns_503(
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kombu.exceptions import OperationalError
@@ -276,7 +250,7 @@ async def test_investigate_celery_broker_unavailable_returns_503(
 
 @pytest.mark.asyncio
 async def test_investigate_celery_zero_workers_still_returns_202(
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Dispatch must not inspect worker liveness before publish (#622)."""

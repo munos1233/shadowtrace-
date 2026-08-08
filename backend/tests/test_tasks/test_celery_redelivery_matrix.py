@@ -23,6 +23,12 @@ from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.orchestration.lease import EventLease, generate_owner_id
 from app.tasks import investigation_tasks as tasks
+from app.tasks.investigation_task_contract import build_investigation_dispatch_kwargs
+from app.tasks.investigation_tasks import TASK_QUEUE
+from tests.support.investigation_task_doubles import (
+    make_execute_investigation_double,
+    make_run_investigation_body_double,
+)
 
 
 def test_celery_app_rejects_lost_worker_tasks() -> None:
@@ -93,25 +99,18 @@ def test_run_investigation_uses_task_id_owner(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    async def _fake_execute(
-        event_id: str,
-        *,
-        include_response_execution: bool = False,
-        owner_id: str | None = None,
-        lease_acquired: bool = False,
-    ) -> dict[str, str]:
-        captured["event_id"] = event_id
-        captured["owner_id"] = owner_id
-        captured["include_response_execution"] = include_response_execution
-        return {"status": "completed", "event_id": event_id}
-
-    monkeypatch.setattr(tasks, "execute_investigation", _fake_execute)
+    monkeypatch.setattr(
+        tasks,
+        "execute_investigation",
+        make_execute_investigation_double(captured),
+    )
     async_result = tasks.run_investigation.apply(
         args=["evt-celery-owner"],
         task_id="task-fixed-owner-001",
     )
     assert async_result.result["status"] == "completed"
     assert captured["owner_id"] == celery_task_owner_id("task-fixed-owner-001")
+    assert captured["generate_report"] is True
 
 
 @pytest.mark.asyncio
@@ -250,19 +249,11 @@ def test_run_investigation_honors_delivery_info_redelivered_flag(
     """Exercise ``request.delivery_info['redelivered']`` without patching the body helper."""
     captured: dict[str, Any] = {}
 
-    async def _fake_body(
-        event_id: str,
-        *,
-        include_response_execution: bool,
-        owner_id: str,
-        redelivered: bool,
-        lease_acquired: bool = False,
-    ) -> dict[str, str]:
-        captured["redelivered"] = redelivered
-        captured["owner_id"] = owner_id
-        return {"status": "completed", "event_id": event_id}
-
-    monkeypatch.setattr(tasks, "_run_investigation_body", _fake_body)
+    monkeypatch.setattr(
+        tasks,
+        "_run_investigation_body",
+        make_run_investigation_body_double(captured),
+    )
 
     result = _run_with_redelivered_request(
         task_id="task-redelivery-flag",
@@ -272,6 +263,7 @@ def test_run_investigation_honors_delivery_info_redelivered_flag(
     assert result["status"] == "completed"
     assert captured["redelivered"] is True
     assert captured["owner_id"] == celery_task_owner_id("task-redelivery-flag")
+    assert captured["generate_report"] is True
 
 
 def test_redelivery_skips_when_event_terminal(
@@ -432,3 +424,89 @@ def _null_context() -> Any:
     from contextlib import nullcontext
 
     return nullcontext()
+
+
+def test_build_investigation_dispatch_kwargs_matches_production_defaults() -> None:
+    assert build_investigation_dispatch_kwargs() == {
+        "include_response_execution": False,
+        "generate_report": True,
+    }
+    assert build_investigation_dispatch_kwargs(
+        include_response_execution=True,
+        owner_id="owner-http-1",
+        lease_acquired=True,
+        generate_report=False,
+    ) == {
+        "include_response_execution": True,
+        "generate_report": False,
+        "owner_id": "owner-http-1",
+        "lease_acquired": True,
+    }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_real_redis_lease_acquire_conflict(redis_client: RedisClient) -> None:
+    """Two owners competing for the same event lease — second acquire must fail."""
+    lease = EventLease(redis_client)
+    event_id = "evt-real-redis-lease-conflict"
+    first_owner = celery_task_owner_id("task-lease-first")
+    second_owner = celery_task_owner_id("task-lease-second")
+
+    try:
+        assert await lease.acquire(event_id, first_owner, ttl_s=60) is True
+        assert await lease.acquire(event_id, second_owner, ttl_s=60) is False
+        assert await lease.get_owner(event_id) == first_owner
+        assert await lease.release(event_id, first_owner) is True
+        assert await lease.acquire(event_id, second_owner, ttl_s=60) is True
+        await lease.release(event_id, second_owner)
+    finally:
+        await lease.release(event_id, first_owner)
+        await lease.release(event_id, second_owner)
+
+
+@pytest.mark.integration
+def test_run_investigation_non_eager_worker_forwards_generate_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Smoke: non-eager worker path must forward ``generate_report`` to execute."""
+    from celery.contrib.testing.worker import start_worker
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_execute(event_id: str, **kwargs: Any) -> dict[str, str]:
+        captured.update(kwargs)
+        captured["event_id"] = event_id
+        return {"status": "completed", "event_id": event_id}
+
+    monkeypatch.setattr(tasks, "execute_investigation", _fake_execute)
+
+    previous = {
+        "task_always_eager": celery_app.conf.task_always_eager,
+        "task_eager_propagates": celery_app.conf.task_eager_propagates,
+        "result_backend": celery_app.conf.result_backend,
+        "broker_url": celery_app.conf.broker_url,
+    }
+    celery_app.conf.task_always_eager = False
+    celery_app.conf.task_eager_propagates = True
+    celery_app.conf.result_backend = "cache+memory://"
+    celery_app.conf.broker_url = "memory://"
+
+    try:
+        with start_worker(celery_app, perform_ping_check=False, pool="solo"):
+            async_result = tasks.run_investigation.apply_async(
+                args=["evt-non-eager-smoke"],
+                kwargs={"generate_report": False},
+                task_id="task-non-eager-smoke",
+                queue=TASK_QUEUE,
+            )
+            result = async_result.get(timeout=30)
+    finally:
+        celery_app.conf.task_always_eager = previous["task_always_eager"]
+        celery_app.conf.task_eager_propagates = previous["task_eager_propagates"]
+        celery_app.conf.result_backend = previous["result_backend"]
+        celery_app.conf.broker_url = previous["broker_url"]
+
+    assert result["status"] == "completed"
+    assert captured["generate_report"] is False
+    assert captured["event_id"] == "evt-non-eager-smoke"

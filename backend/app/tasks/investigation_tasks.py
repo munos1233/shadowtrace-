@@ -24,6 +24,10 @@ from app.core.errors import (
 )
 from app.core.redis_client import RedisClient
 from app.models.investigation_intent import IntentDeliveryAdmission
+from app.tasks.investigation_task_contract import (
+    build_analysis_only_dispatch_kwargs,
+    build_investigation_dispatch_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,14 +194,12 @@ async def dispatch_investigation(
     task_id = str(celery_uuid())
     await register_task_metadata(task_id, event_id)
     try:
-        kwargs: dict[str, object] = {
-            "include_response_execution": include_response_execution,
-            "generate_report": generate_report,
-        }
-        if owner_id is not None:
-            kwargs["owner_id"] = owner_id
-        if lease_acquired:
-            kwargs["lease_acquired"] = True
+        kwargs = build_investigation_dispatch_kwargs(
+            include_response_execution=include_response_execution,
+            generate_report=generate_report,
+            owner_id=owner_id,
+            lease_acquired=lease_acquired,
+        )
         run_investigation.apply_async(
             args=[event_id],
             kwargs=kwargs,
@@ -628,11 +630,11 @@ async def dispatch_analysis_only_investigation(
     task_id = str(celery_uuid())
     await register_task_metadata(task_id, event_id)
     try:
-        kwargs: dict[str, object] = {"generate_report": generate_report}
-        if owner_id is not None:
-            kwargs["owner_id"] = owner_id
-        if lease_acquired:
-            kwargs["lease_acquired"] = True
+        kwargs = build_analysis_only_dispatch_kwargs(
+            generate_report=generate_report,
+            owner_id=owner_id,
+            lease_acquired=lease_acquired,
+        )
         run_analysis_only_investigation.apply_async(
             args=[event_id],
             kwargs=kwargs,

@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.v1.deps import reset_deps
 from app.core.config import get_settings
-from app.core.redis_client import RedisClient
 from app.db import models as orm
 from app.main import app
 from app.models.enums import EventStatus, InvestigationIntentStatus, Severity
+from tests.support.fake_redis import InMemoryFakeRedis, patch_redis_client
 
 _DEV_TOKENS = json.dumps(
     {
@@ -39,34 +39,8 @@ def _api_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    store: dict[str, str] = {}
-
-    class _FakeRedis:
-        async def set(self, key: str, value: str, ex: int | None = None) -> bool:
-            store[key] = value
-            return True
-
-        async def get(self, key: str) -> bytes | None:
-            raw = store.get(key)
-            return raw.encode() if raw is not None else None
-
-        async def delete(self, key: str) -> int:
-            return 1 if store.pop(key, None) is not None else 0
-
-    async def _ping(self: RedisClient) -> bool:
-        return True
-
-    def _get_client(self: RedisClient) -> _FakeRedis:
-        return _FakeRedis()
-
-    async def _aclose(self: RedisClient) -> None:
-        return None
-
-    monkeypatch.setattr(RedisClient, "ping", _ping)
-    monkeypatch.setattr(RedisClient, "get_client", _get_client)
-    monkeypatch.setattr(RedisClient, "aclose", _aclose)
-    return store
+def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryFakeRedis:
+    return patch_redis_client(monkeypatch)
 
 
 def _hdr() -> dict[str, str]:
@@ -76,7 +50,7 @@ def _hdr() -> dict[str, str]:
 @pytest.mark.asyncio
 async def test_dispatch_api_returns_202_when_broker_accepts(
     session_factory: async_sessionmaker[AsyncSession],
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from uuid import uuid4
@@ -134,7 +108,7 @@ async def test_dispatch_api_returns_202_when_broker_accepts(
 @pytest.mark.asyncio
 async def test_dispatch_api_returns_503_when_broker_rejects(
     session_factory: async_sessionmaker[AsyncSession],
-    fake_redis_store: dict[str, str],
+    fake_redis_store: InMemoryFakeRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from uuid import uuid4
