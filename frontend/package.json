@@ -15,7 +15,8 @@
     "test:e2e": "playwright test -c e2e/playwright.config.ts",
     "test:e2e:mock": "playwright test -c e2e/playwright.mock.config.ts",
     "test:e2e:knowledge": "playwright test -c e2e/playwright.mock.config.ts",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:install": "node scripts/ensure-playwright-browser.mjs",
+    "test:e2e:platform-report": "node scripts/ensure-playwright-browser.mjs --report"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",

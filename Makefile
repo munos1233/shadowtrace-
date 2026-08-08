@@ -62,7 +62,7 @@ CI_BUILD_PROJECT_PREFIX ?= $(COMPOSE_PROJECT_NAME)-ci-build
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest eval-full-loop test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
+.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest eval-full-loop test-tools test-system test-regression update-baseline test-e2e-frontend test-e2e-mock platform-buildkit-smoke platform-playwright-report platform-matrix-report frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
 	$(COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
@@ -485,11 +485,35 @@ test-e2e-frontend:
 	cd "$(CURDIR)/frontend"; \
 	(corepack enable && corepack prepare pnpm@9.15.9 --activate || true); \
 	pnpm install --frozen-lockfile; \
-	pnpm exec playwright install chromium; \
+	pnpm run test:e2e:install; \
 	E2E_FRONTEND_URL="$(E2E_FRONTEND_URL)" \
 	E2E_BACKEND_URL="$(E2E_BACKEND_URL)" \
 	E2E_AUTH_TOKEN="$(E2E_AUTH_TOKEN)" \
 		pnpm test:e2e
+
+# --- ISSUE-286 platform matrix (Playwright mock + BuildKit path smoke) --- #
+test-e2e-mock:
+	@set -eu; \
+	cd "$(CURDIR)/frontend"; \
+	(corepack enable && corepack prepare pnpm@9.15.9 --activate || true); \
+	pnpm install --frozen-lockfile; \
+	pnpm run test:e2e:install; \
+	pnpm test:e2e:mock
+
+platform-playwright-report:
+	@set -eu; \
+	cd "$(CURDIR)/frontend"; \
+	(corepack enable && corepack prepare pnpm@9.15.9 --activate || true); \
+	pnpm install --frozen-lockfile; \
+	pnpm run test:e2e:platform-report
+
+platform-buildkit-smoke:
+	@set -eu; \
+	$(PYTHON) scripts/smoke_docker_buildkit_paths.py
+
+platform-matrix-report:
+	@set -eu; \
+	$(PYTHON) scripts/collect_platform_matrix_report.py
 
 # --- ISSUE-112 contract drift / frozen export -------------------------------- #
 update-contracts:

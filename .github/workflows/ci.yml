@@ -533,7 +533,8 @@ jobs:
         working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium
+          pnpm run test:e2e:install
+          pnpm run test:e2e:platform-report
           pnpm test:e2e
 
       - name: Upload Playwright artifacts
@@ -544,6 +545,7 @@ jobs:
           path: |
             frontend/e2e/test-results
             frontend/e2e/playwright-report
+            frontend/e2e/platform-artifacts
           if-no-files-found: warn
 
       - name: Tear down stack
@@ -553,3 +555,66 @@ jobs:
             --project-name "${COMPOSE_PROJECT_NAME}" \
             -f "${GITHUB_WORKSPACE}/infra/docker-compose.yml" \
             down --volumes --remove-orphans || true
+
+  # ISSUE-286: BuildKit ASCII vs non-ASCII checkout smoke — manual matrix evidence.
+  platform-buildkit-smoke:
+    name: platform-buildkit-smoke
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run BuildKit path smoke (never disables BuildKit)
+        run: python scripts/smoke_docker_buildkit_paths.py
+
+      - name: Upload BuildKit matrix artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-buildkit-smoke
+          path: reports/platform-matrix/buildkit-path-smoke.json
+          if-no-files-found: error
+
+  # ISSUE-286: mock UI e2e + platform report (issue verification command).
+  frontend-e2e-mock:
+    name: frontend-e2e-mock
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      E2E_FRONTEND_URL: http://127.0.0.1:5173
+      E2E_AUTH_TOKEN: e2e-token
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable pnpm via corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+
+      - name: Install, report platform, run mock e2e
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run test:e2e:install
+          pnpm run test:e2e:platform-report
+          pnpm test:e2e:mock
+
+      - name: Upload mock e2e artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-e2e-mock-artifacts
+          path: |
+            frontend/e2e/test-results
+            frontend/e2e/platform-artifacts
+          if-no-files-found: warn

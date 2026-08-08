@@ -25,7 +25,9 @@ frontend/.vite/
 frontend/e2e/.seed.json
 frontend/e2e/test-results/
 frontend/e2e/playwright-report/
+frontend/e2e/platform-artifacts/
 frontend/playwright-report/
+reports/platform-matrix/
 *.log
 
 # IDE / OS
