@@ -797,25 +797,61 @@ def build_investigation_graph(
         )
 
     async def manual_hold_node(state: InvestigationState) -> InvestigationState:
+        event_id = state["event_id"]
         readiness = state.get(
             "event_status_update_readiness",
             WritebackReadiness.CAPABILITY_UNKNOWN.value,
         )
+        if state.get("verify_need_manual_resolution"):
+            hold_reason = "verify_manual_resolution"
+        elif state.get("verify_need_writeback_recovery"):
+            hold_reason = "writeback_recovery_escalated"
+        else:
+            hold_reason = "manual_hold"
+
+        pending_action_ids = [str(x) for x in (state.get("verify_failed_actions") or [])]
+        pending_writeback_ids = [str(x) for x in (state.get("verify_failed_writebacks") or [])]
+
+        hold_generation = int(state.get("manual_hold_generation") or 0) + 1
+        session_factory = services.get("session_factory")
+        if session_factory is not None:
+            from app.services.manual_resolution_service import ManualResolutionService
+
+            manual_resolution = ManualResolutionService(
+                session_factory,
+                workflow_runtime=runtime,
+            )
+            hold_generation = await manual_resolution.establish_manual_hold(
+                event_id,
+                reason=hold_reason,
+                pending_action_ids=pending_action_ids,
+                pending_writeback_ids=pending_writeback_ids,
+                checkpoint_version=hold_generation,
+            )
+        else:
+            await runtime.set_execution_substate(
+                event_id,
+                ExecutionSubstate.MANUAL_RESOLUTION,
+                event_status=EventStatus.VERIFYING,
+            )
+
         flags = list(state.get("degraded_flags") or [])
-        entry = f"disposition_writeback_blocked={readiness}"
-        if entry not in flags:
-            flags.append(entry)
-        flags = await degraded_flags.set_flag(
-            state["event_id"],
-            "disposition_writeback_blocked",
-            readiness,
-            writer="DegradedFlagService",
-        )
+        if hold_reason == "verify_manual_resolution" or readiness != WritebackReadiness.READY.value:
+            entry = f"disposition_writeback_blocked={readiness}"
+            if entry not in flags:
+                flags.append(entry)
+            flags = await degraded_flags.set_flag(
+                event_id,
+                "disposition_writeback_blocked",
+                readiness,
+                writer="DegradedFlagService",
+            )
         return _patch_state(
             _trace(NODE_MANUAL_HOLD),
             {
                 "degraded_flags": flags,
-                "execution_substate": ExecutionSubstate.NONE.value,
+                "execution_substate": ExecutionSubstate.MANUAL_RESOLUTION.value,
+                "manual_hold_generation": hold_generation,
                 "halted": True,
             },
         )

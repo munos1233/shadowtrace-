@@ -107,6 +107,7 @@ class DispositionSyncService:
         outbound_guard: OutboundDispositionGuard | None = None,
         event_bus: EventBus | None = None,
         resume_investigation: ResumeInvestigationHook | None = None,
+        manual_resolution: Any | None = None,
         worker_id: str = "outbox-worker-1",
     ) -> None:
         self._session_factory = session_factory
@@ -116,6 +117,7 @@ class DispositionSyncService:
         self._guard = outbound_guard or OutboundDispositionGuard()
         self._bus = event_bus
         self._resume = resume_investigation or _NullResumeHook()
+        self._manual_resolution = manual_resolution
         self._worker_id = worker_id
 
     def _adapter_label(self, outbox: orm.DispositionOutbox) -> str:
@@ -541,7 +543,19 @@ class DispositionSyncService:
                 adapter_label = self._adapter_label(outbox)
         record_writeback(status=target.value, adapter=adapter_label)
         await self._sync_writeback_summary(event_id)
-        await self._maybe_resume(event_id)
+        resume_result = None
+        if self._manual_resolution is not None:
+            resume_result = await self._manual_resolution.create_resume_intent_after_resolution(
+                event_id=event_id,
+                resolution_kind="writeback",
+                subject_id=writeback_id,
+                operation_id=None,
+                resolution=resolution,
+                principal=principal,
+                comment=comment,
+            )
+        if resume_result is None:
+            await self._maybe_resume(event_id)
         if self._bus is not None:
             await self._bus.publish_event(
                 event_id,

@@ -203,6 +203,7 @@ class ActionExecutionService:
         command_factory: DispositionCommandFactory | None = None,
         event_bus: EventBus | None = None,
         workflow_runtime: Any | None = None,
+        manual_resolution: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._sync = disposition_sync
@@ -212,6 +213,7 @@ class ActionExecutionService:
         self._factory = command_factory or DispositionCommandFactory()
         self._bus = event_bus
         self._workflow_runtime = workflow_runtime
+        self._manual_resolution = manual_resolution
         self._job_store = DbExecutionJobStore(session_factory)
         if self._executor.job_store is None:
             self._executor.job_store = self._job_store
@@ -342,6 +344,18 @@ class ActionExecutionService:
                         reason=f"resolve_unknown:{resolution}:{comment}",
                     )
                 )
+                event_id = row.event_id
+                action_id = row.action_id
+        if self._manual_resolution is not None:
+            await self._manual_resolution.create_resume_intent_after_resolution(
+                event_id=event_id,
+                resolution_kind="action",
+                subject_id=action_id,
+                operation_id=None,
+                resolution=resolution,
+                principal=principal,
+                comment=comment,
+            )
         async with self._session_factory() as session:
             row = await session.get(orm.Action, action_id)
             assert row is not None

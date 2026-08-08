@@ -41,6 +41,7 @@ _behavior_observation_service: Any = None  # BehaviorObservationService
 _approval_engine: Any = None  # ApprovalEngine
 _impact_assessment_service: Any = None  # ImpactAssessmentService
 _disposition_sync: Any = None  # DispositionSyncService
+_manual_resolution: Any = None  # ManualResolutionService
 _action_execution: Any = None  # ActionExecutionService
 _rollback_service: Any = None  # RollbackService
 _adapter_registry: Any = None  # DispositionAdapterRegistry
@@ -411,6 +412,20 @@ async def _resume_investigation(event_id: str) -> None:
     )
 
 
+async def get_manual_resolution() -> Any:
+    """Return unified manual resolution + graph resume intent service (ISSUE-277)."""
+    global _manual_resolution
+    if _manual_resolution is None:
+        from app.services.manual_resolution_service import ManualResolutionService
+
+        _manual_resolution = ManualResolutionService(
+            _get_session_factory(),
+            workflow_runtime=await _get_workflow_runtime(),
+            resume_investigation=_resume_investigation,
+        )
+    return _manual_resolution
+
+
 async def get_disposition_sync() -> Any:
     global _disposition_sync
     if _disposition_sync is None:
@@ -424,6 +439,7 @@ async def get_disposition_sync() -> Any:
             outbound_guard=OutboundDispositionGuard(),
             event_bus=_get_event_bus(),
             resume_investigation=_resume_investigation,
+            manual_resolution=await get_manual_resolution(),
         )
     return _disposition_sync
 
@@ -548,6 +564,7 @@ async def get_action_execution() -> Any:
             context_store=_get_context_store(),
             event_bus=_get_event_bus(),
             workflow_runtime=await _get_workflow_runtime(),
+            manual_resolution=await get_manual_resolution(),
         )
     return _action_execution
 

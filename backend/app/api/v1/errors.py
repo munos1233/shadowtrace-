@@ -24,6 +24,7 @@ from app.core.errors import (
     InvalidStateTransitionError,
     InvalidVerdictStatusCombinationError,
     InvestigationInProgressError,
+    ManualResolutionConflictError,
     MemoryReviewConflictError,
     MemoryReviewNotFoundError,
     ResourceNotFoundError,
