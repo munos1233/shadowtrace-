@@ -1348,16 +1348,14 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
                 )
         # ISSUE-254: durable bounded summary for GET event / list observability.
         if self.event_service is not None:
-            merger = getattr(self.event_service, "merge_evidence_context_snapshot", None)
-            if merger is not None:
-                try:
-                    await merger(event_id, output)
-                except Exception:
-                    logger.warning(
-                        "failed to merge evidence snapshot summary event=%s",
-                        event_id,
-                        exc_info=True,
-                    )
+            try:
+                await self.event_service.merge_evidence_context_snapshot(event_id, output)
+            except Exception:
+                logger.warning(
+                    "failed to merge evidence snapshot summary event=%s",
+                    event_id,
+                    exc_info=True,
+                )
 
     async def _record_trace(
         self,

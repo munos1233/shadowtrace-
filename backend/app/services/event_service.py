@@ -673,6 +673,13 @@ class EventService:
     # ------------------------------------------------------------------ #
 
     async def get_event(self, event_id: str) -> SecurityEvent | None:
+        from app.services.event_context_snapshot_projection import (
+            merge_evidence_summary_into_snapshot,
+            merge_report_generated_into_snapshot,
+            merge_storyline_summary_into_snapshot,
+            project_snapshot_for_api,
+        )
+
         persisted_report_quality: str | None = None
         async with self._session_factory() as session:
             row = await session.get(orm.SecurityEvent, event_id)
@@ -687,41 +694,46 @@ class EventService:
                 .limit(1)
             )
 
-        if not event.event_context_snapshot:
+        snapshot = dict(event.event_context_snapshot or {})
+        # Backfill missing observability from WM when ORM is empty OR only has
+        # partial keys (e.g. risk_assessment) and merge writeback was skipped.
+        needs_evidence = (
+            "collection_status" not in snapshot
+            and not isinstance(snapshot.get("evidence_output"), dict)
+        )
+        needs_storyline = not isinstance(snapshot.get("storyline"), dict)
+        needs_flags = (
+            "analysis_only_complete" not in snapshot or "report_generated" not in snapshot
+        )
+        if needs_evidence or needs_storyline or needs_flags or not snapshot:
             try:
                 from app.services.context_service import _context_as_dict, _to_jsonable
-                from app.services.event_context_snapshot_projection import (
-                    merge_evidence_summary_into_snapshot,
-                    merge_report_generated_into_snapshot,
-                    merge_storyline_summary_into_snapshot,
-                )
 
                 ctx = await self._store.get_full_context(event_id)
                 raw = {key: _to_jsonable(value) for key, value in _context_as_dict(ctx).items()}
-                # ISSUE-254: do not return the full EventContext dump on GET.
-                # Project bounded observability fields; full state stays in WM/trace.
-                snapshot: dict[str, Any] = {}
-                if isinstance(raw.get("risk_assessment"), dict):
+                if (
+                    isinstance(raw.get("risk_assessment"), dict)
+                    and "risk_assessment" not in snapshot
+                ):
                     snapshot["risk_assessment"] = raw["risk_assessment"]
-                if raw.get("analysis_only_complete") is not None:
+                if needs_flags and raw.get("analysis_only_complete") is not None:
                     snapshot["analysis_only_complete"] = bool(raw["analysis_only_complete"])
-                if raw.get("report_generated") is not None:
+                if needs_flags and raw.get("report_generated") is not None:
                     snapshot = merge_report_generated_into_snapshot(
                         snapshot, bool(raw["report_generated"])
                     )
-                elif raw.get("report") is not None:
+                elif needs_flags and raw.get("report") is not None:
                     snapshot = merge_report_generated_into_snapshot(snapshot, True)
-                if isinstance(raw.get("evidence_output"), dict):
+                if needs_evidence and isinstance(raw.get("evidence_output"), dict):
                     snapshot = merge_evidence_summary_into_snapshot(
                         snapshot, raw["evidence_output"]
                     )
-                if isinstance(raw.get("storyline"), dict):
+                if needs_storyline and isinstance(raw.get("storyline"), dict):
                     snapshot = merge_storyline_summary_into_snapshot(snapshot, raw["storyline"])
                 if isinstance(raw.get("classification_override"), dict):
                     snapshot["classification_override"] = raw["classification_override"]
                 if raw.get("execution_substate") is not None:
                     snapshot["execution_substate"] = raw["execution_substate"]
-                event = event.model_copy(update={"event_context_snapshot": snapshot})
             except Exception:
                 logger.debug(
                     "hydrate event_context_snapshot failed event_id=%s",
@@ -729,14 +741,10 @@ class EventService:
                     exc_info=True,
                 )
 
-        snapshot = dict(event.event_context_snapshot or {})
-        changed = False
-
         try:
             aoc = await self._store.get(event_id, "analysis_only_complete")
             if aoc is not None and snapshot.get("analysis_only_complete") != bool(aoc):
                 snapshot["analysis_only_complete"] = bool(aoc)
-                changed = True
         except Exception:
             logger.debug(
                 "overlay analysis_only_complete failed event_id=%s",
@@ -750,7 +758,6 @@ class EventService:
                 report_generated
             ):
                 snapshot["report_generated"] = bool(report_generated)
-                changed = True
         except Exception:
             logger.debug(
                 "overlay report_generated failed event_id=%s",
@@ -762,19 +769,17 @@ class EventService:
             # Readable report exists even when Redis/snapshot flags lag behind.
             if snapshot.get("report_generated") is not True:
                 snapshot["report_generated"] = True
-                changed = True
             if snapshot.get("report_quality") != persisted_report_quality:
                 snapshot["report_quality"] = persisted_report_quality
-                changed = True
-        elif snapshot.get("report_generated") is True and snapshot.get("report") is None:
-            # DB has no report row: do not let a stale Redis/snapshot flag claim
-            # readability while GET /report would 404 (ISSUE-250 review).
+        elif snapshot.get("report_generated") is True:
+            # DB has no report row: do not claim readability (ISSUE-250).
+            # Ignore embedded ``report`` blobs in CLOSED freezes — GET /report
+            # is driven by the report table, not the context freeze.
             snapshot["report_generated"] = False
-            changed = True
 
-        if changed:
-            event = event.model_copy(update={"event_context_snapshot": snapshot})
-        return event
+        # ISSUE-254: always return a hard-projected API snapshot (never CLOSED dump).
+        projected = project_snapshot_for_api(snapshot)
+        return event.model_copy(update={"event_context_snapshot": projected})
 
     async def get_evidence_query_scope(self, event_id: str) -> EvidenceQueryScope:
         """Derive the only permitted evidence tenant/connectors from trusted event state."""
@@ -928,7 +933,23 @@ class EventService:
             rows = (
                 await session.scalars(list_stmt.offset((page - 1) * page_size).limit(page_size))
             ).all()
-            items = [_security_event_from_row(r) for r in rows]
+            from app.services.event_context_snapshot_projection import project_snapshot_for_api
+
+            items: list[SecurityEvent] = []
+            for row in rows:
+                event = _security_event_from_row(row)
+                # ISSUE-254: list must not return CLOSED full EventContext freezes.
+                items.append(
+                    event.model_copy(
+                        update={
+                            "event_context_snapshot": project_snapshot_for_api(
+                                event.event_context_snapshot
+                                if isinstance(event.event_context_snapshot, dict)
+                                else None
+                            )
+                        }
+                    )
+                )
         return EventListResult(items=items, total=total, page=page, page_size=page_size)
 
     # ------------------------------------------------------------------ #
@@ -1139,6 +1160,22 @@ class EventService:
             await self._bus.publish_event(event_id, "risk_updated", payload)
         return result
 
+    async def _mark_snapshot_merge_degraded(self, event_id: str, *, reason: str) -> None:
+        """Surface durable snapshot merge failures (ISSUE-254 observability)."""
+        try:
+            await self._degraded.set_flag(
+                event_id,
+                "event_context_snapshot_merge_failed",
+                reason[:240],
+                writer="EventService",
+            )
+        except Exception:
+            logger.debug(
+                "failed to set snapshot merge degraded flag event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+
     async def merge_evidence_context_snapshot(
         self,
         event_id: str,
@@ -1175,11 +1212,14 @@ class EventService:
                         payload,
                     )
                     await session.flush()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "merge_evidence_context_snapshot failed event_id=%s",
                 event_id,
                 exc_info=True,
+            )
+            await self._mark_snapshot_merge_degraded(
+                event_id, reason=f"evidence:{type(exc).__name__}"
             )
 
     async def merge_storyline_context_snapshot(
@@ -1218,11 +1258,14 @@ class EventService:
                         payload,
                     )
                     await session.flush()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "merge_storyline_context_snapshot failed event_id=%s",
                 event_id,
                 exc_info=True,
+            )
+            await self._mark_snapshot_merge_degraded(
+                event_id, reason=f"storyline:{type(exc).__name__}"
             )
 
     async def merge_report_generated_context_snapshot(
@@ -1254,11 +1297,14 @@ class EventService:
                         generated,
                     )
                     await session.flush()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "merge_report_generated_context_snapshot failed event_id=%s",
                 event_id,
                 exc_info=True,
+            )
+            await self._mark_snapshot_merge_degraded(
+                event_id, reason=f"report_generated:{type(exc).__name__}"
             )
 
     async def update_classification(

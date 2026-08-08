@@ -3,8 +3,11 @@
 API list/detail snapshots keep a **whitelist + size-capped** summary of evidence
 and storyline so operators can triage without opening decision-trace. The full
 EventContext remains in WorkingMemory / journal / decision-trace — this module
-must never dump raw CoT, prompts, or the entire WM aggregate into the ORM
-snapshot used by GET event.
+must never dump raw CoT, prompts, or the entire WM aggregate into the API-facing
+snapshot returned by GET/list event.
+
+CLOSED rows may still persist a full freeze in ORM for ``rebuild_context``;
+``project_snapshot_for_api`` is the mandatory read-path filter for API responses.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import orjson
 from app.models.agent_io import AttackStoryline, EvidenceOutput
 from app.models.evidence import EvidenceGap
 
-# Top-level keys this module may introduce / refresh on the durable snapshot.
+# Keys allowed on API-facing snapshots (hard whitelist).
 SNAPSHOT_SUMMARY_KEYS = frozenset(
     {
         "evidence_count",
@@ -25,8 +28,11 @@ SNAPSHOT_SUMMARY_KEYS = frozenset(
         "evidence_summary",
         "storyline",
         "report_generated",
+        "report_quality",
         "analysis_only_complete",
         "risk_assessment",
+        "classification_override",
+        "execution_substate",
     }
 )
 
@@ -55,7 +61,8 @@ _MAX_REASON_CHARS = 240
 _MAX_NARRATIVE_CHARS = 480
 _MAX_STORYLINE_SUMMARY_BYTES = 4_096
 _MAX_EVIDENCE_SUMMARY_BYTES = 4_096
-_MAX_SNAPSHOT_BYTES = 64_096
+_MAX_RISK_ASSESSMENT_BYTES = 8_192
+_MAX_SNAPSHOT_BYTES = 65_536
 
 
 def _strip_forbidden(value: Any) -> Any:
@@ -114,6 +121,9 @@ def _fit_bytes(payload: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
             "storyline_id",
             "phase_count",
             "claim_ref_count",
+            "risk_score",
+            "evidence_limited",
+            "scoring_mode",
         )
         if k in shrunk
     }
@@ -211,25 +221,46 @@ def build_storyline_snapshot_summary(
     return _fit_bytes(payload, max_bytes=_MAX_STORYLINE_SUMMARY_BYTES)
 
 
+def _bound_risk_assessment(risk: dict[str, Any]) -> dict[str, Any]:
+    cleaned = _strip_forbidden(risk)
+    if not isinstance(cleaned, dict):
+        return {}
+    return _fit_bytes(cleaned, max_bytes=_MAX_RISK_ASSESSMENT_BYTES)
+
+
+def _storyline_needs_reproject(storyline: dict[str, Any]) -> bool:
+    heavy = ("phases", "entries", "claim_refs", "prompt", "messages")
+    return any(key in storyline for key in heavy)
+
+
 def merge_evidence_summary_into_snapshot(
     snapshot: dict[str, Any] | None,
     evidence: EvidenceOutput | dict[str, Any],
 ) -> dict[str, Any]:
-    """Merge bounded evidence observability fields into the durable ORM snapshot."""
+    """Merge bounded evidence observability fields into the durable ORM snapshot.
+
+    Preserves unrelated keys (including CLOSED full-freeze fields used by
+    ``rebuild_context``). API responses must still pass ``project_snapshot_for_api``.
+    """
     merged = dict(snapshot) if isinstance(snapshot, dict) else {}
     summary = build_evidence_snapshot_summary(evidence)
     merged["evidence_count"] = summary["evidence_count"]
     merged["collection_status"] = summary["collection_status"]
     merged["evidence_gaps"] = list(summary.get("top_gaps") or [])
     merged["evidence_summary"] = summary
-    return _cap_snapshot(merged)
+    return _shrink_summary_sections(merged)
 
 
 def merge_storyline_summary_into_snapshot(
     snapshot: dict[str, Any] | None,
     storyline: AttackStoryline | dict[str, Any],
 ) -> dict[str, Any]:
-    """Merge bounded storyline summary (incl. grounding_status) into the snapshot."""
+    """Merge bounded storyline summary (incl. grounding_status) into the snapshot.
+
+    Replaces only the ``storyline`` key with a bounded object. Do not call this on
+    a CLOSED freeze if full ``storyline.phases`` must remain for rebuild — use
+    ``project_snapshot_for_api`` on the read path instead.
+    """
     merged = dict(snapshot) if isinstance(snapshot, dict) else {}
     existing = merged.get("storyline")
     base = dict(existing) if isinstance(existing, dict) else {}
@@ -238,7 +269,7 @@ def merge_storyline_summary_into_snapshot(
         base.pop(heavy, None)
     base.update(build_storyline_snapshot_summary(storyline))
     merged["storyline"] = base
-    return _cap_snapshot(merged)
+    return _shrink_summary_sections(merged)
 
 
 def merge_report_generated_into_snapshot(
@@ -251,26 +282,135 @@ def merge_report_generated_into_snapshot(
     return merged
 
 
-def _cap_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Soft size guard: shrink summary sections if the snapshot ballooned.
+def project_snapshot_for_api(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Hard-project ORM snapshot (thin merge or CLOSED full freeze) for API responses.
 
-    Does **not** rewrite unrelated existing keys (e.g. risk factor ``reasoning``);
-    CoT/prompt stripping applies only to evidence/storyline summary payloads.
+    Derives evidence/storyline summaries from full ``evidence_output`` / ``storyline``
+    when present (CLOSED freeze), otherwise keeps already-merged summary keys.
+    Never returns full EventContext fields.
     """
+    if snapshot is None:
+        return None
+    if not isinstance(snapshot, dict):
+        return {}
+
+    projected: dict[str, Any] = {}
+
+    evidence_output = snapshot.get("evidence_output")
+    if isinstance(evidence_output, dict):
+        summary = build_evidence_snapshot_summary(evidence_output)
+        projected["evidence_count"] = summary["evidence_count"]
+        projected["collection_status"] = summary["collection_status"]
+        projected["evidence_gaps"] = list(summary.get("top_gaps") or [])
+        projected["evidence_summary"] = summary
+    else:
+        for key in ("evidence_count", "collection_status", "evidence_gaps", "evidence_summary"):
+            if key in snapshot:
+                projected[key] = snapshot[key]
+
+    storyline = snapshot.get("storyline")
+    if isinstance(storyline, dict):
+        projected["storyline"] = build_storyline_snapshot_summary(storyline)
+
+    risk = snapshot.get("risk_assessment")
+    if isinstance(risk, dict):
+        projected["risk_assessment"] = _bound_risk_assessment(risk)
+
+    if "analysis_only_complete" in snapshot:
+        projected["analysis_only_complete"] = bool(snapshot.get("analysis_only_complete"))
+    if "report_generated" in snapshot:
+        projected["report_generated"] = bool(snapshot.get("report_generated"))
+    if snapshot.get("report_quality") is not None:
+        projected["report_quality"] = str(snapshot.get("report_quality"))[:64]
+    override = snapshot.get("classification_override")
+    if isinstance(override, dict):
+        projected["classification_override"] = _strip_forbidden(override)
+    if snapshot.get("execution_substate") is not None:
+        raw_sub = snapshot.get("execution_substate")
+        projected["execution_substate"] = (
+            raw_sub.value if hasattr(raw_sub, "value") else str(raw_sub)
+        )[:64]
+
+    return _hard_project_api_snapshot(projected)
+
+
+def _shrink_summary_sections(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Soft size guard for durable merges: shrink summary blobs, keep other keys."""
     if len(_canonical_bytes(snapshot)) <= _MAX_SNAPSHOT_BYTES:
         return snapshot
     cleaned = dict(snapshot)
-    # Prefer keeping counters; drop narrative / gap reasons.
     if isinstance(cleaned.get("evidence_summary"), dict):
         cleaned["evidence_summary"] = _fit_bytes(
             cleaned["evidence_summary"],
             max_bytes=1024,
         )
-    if isinstance(cleaned.get("storyline"), dict):
+    if isinstance(cleaned.get("storyline"), dict) and not _storyline_needs_reproject(
+        cleaned["storyline"]
+    ):
         cleaned["storyline"] = _fit_bytes(cleaned["storyline"], max_bytes=1024)
     if isinstance(cleaned.get("evidence_gaps"), list):
         cleaned["evidence_gaps"] = cleaned["evidence_gaps"][:3]
     return cleaned
+
+
+def _hard_project_api_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Hard whitelist + size guard for API responses only."""
+    cleaned = {k: snapshot[k] for k in SNAPSHOT_SUMMARY_KEYS if k in snapshot}
+    if isinstance(cleaned.get("risk_assessment"), dict):
+        cleaned["risk_assessment"] = _bound_risk_assessment(cleaned["risk_assessment"])
+    if isinstance(cleaned.get("evidence_summary"), dict):
+        cleaned["evidence_summary"] = _fit_bytes(
+            cleaned["evidence_summary"],
+            max_bytes=_MAX_EVIDENCE_SUMMARY_BYTES,
+        )
+    if isinstance(cleaned.get("storyline"), dict):
+        cleaned["storyline"] = build_storyline_snapshot_summary(cleaned["storyline"])
+    if isinstance(cleaned.get("evidence_gaps"), list):
+        cleaned["evidence_gaps"] = [
+            _strip_forbidden(g)
+            for g in cleaned["evidence_gaps"][:_MAX_TOP_GAPS]
+            if isinstance(g, dict)
+        ]
+    if isinstance(cleaned.get("classification_override"), dict):
+        cleaned["classification_override"] = _strip_forbidden(cleaned["classification_override"])
+
+    if len(_canonical_bytes(cleaned)) <= _MAX_SNAPSHOT_BYTES:
+        return cleaned
+
+    if isinstance(cleaned.get("evidence_summary"), dict):
+        cleaned["evidence_summary"] = _fit_bytes(cleaned["evidence_summary"], max_bytes=1024)
+    if isinstance(cleaned.get("storyline"), dict):
+        cleaned["storyline"] = _fit_bytes(cleaned["storyline"], max_bytes=1024)
+    if isinstance(cleaned.get("evidence_gaps"), list):
+        cleaned["evidence_gaps"] = cleaned["evidence_gaps"][:3]
+    if isinstance(cleaned.get("risk_assessment"), dict):
+        cleaned["risk_assessment"] = _fit_bytes(cleaned["risk_assessment"], max_bytes=1024)
+    if len(_canonical_bytes(cleaned)) <= _MAX_SNAPSHOT_BYTES:
+        return cleaned
+
+    floor_keys = (
+        "evidence_count",
+        "collection_status",
+        "report_generated",
+        "report_quality",
+        "analysis_only_complete",
+        "execution_substate",
+    )
+    floor = {k: cleaned[k] for k in floor_keys if k in cleaned}
+    if isinstance(cleaned.get("storyline"), dict) and "grounding_status" in cleaned["storyline"]:
+        floor["storyline"] = {
+            "grounding_status": str(cleaned["storyline"]["grounding_status"])[:64]
+        }
+    if isinstance(cleaned.get("risk_assessment"), dict):
+        risk_floor = {
+            k: cleaned["risk_assessment"][k]
+            for k in ("risk_score", "evidence_limited", "scoring_mode")
+            if k in cleaned["risk_assessment"]
+        }
+        if risk_floor:
+            floor["risk_assessment"] = risk_floor
+    return floor
+
 
 
 __all__ = [
@@ -280,4 +420,5 @@ __all__ = [
     "merge_evidence_summary_into_snapshot",
     "merge_report_generated_into_snapshot",
     "merge_storyline_summary_into_snapshot",
+    "project_snapshot_for_api",
 ]

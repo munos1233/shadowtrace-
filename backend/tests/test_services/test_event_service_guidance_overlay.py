@@ -71,6 +71,8 @@ def _service_with_row(
         return store_values.get(key)
 
     store.get = AsyncMock(side_effect=_store_get)
+    # get_event may backfill from WM; keep overlay tests focused on store.get overlays.
+    store.get_full_context = AsyncMock(side_effect=RuntimeError("wm-skip"))
     return EventService(session_factory, store, degraded_flags=AsyncMock())
 
 
@@ -168,3 +170,91 @@ async def test_get_event_overlays_report_presence_from_report_table() -> None:
     assert event.event_context_snapshot is not None
     assert event.event_context_snapshot.get("report_generated") is True
     assert event.event_context_snapshot.get("report_quality") == "degraded_template"
+
+
+@pytest.mark.asyncio
+async def test_get_event_projects_closed_freeze_to_bounded_summary() -> None:
+    """ISSUE-254: CLOSED ORM freeze must not leak full EventContext on GET."""
+    event_id = "evt-overlay-254-closed"
+    row = _reporting_row(
+        event_id,
+        snapshot={
+            "evidence_output": {
+                "evidence_list": [],
+                "gaps": [{"missing_source": "dns", "reason": "timeout"}],
+                "conflicts": [],
+                "success_sources": [],
+                "failed_sources": ["dns"],
+                "overall_confidence": 0.0,
+                "collection_status": "failed",
+            },
+            "storyline": {
+                "storyline_id": "stl-closed",
+                "grounding_status": "ungrounded",
+                "generated_by": "rule",
+                "phases": [{"phase_order": 1}],
+                "claim_refs": [],
+                "narrative_summary": "n/a",
+            },
+            "report": {"report_id": "rpt-embedded"},
+            "risk_assessment": {"risk_score": 12, "risk_factors": [{"reasoning": "leak"}]},
+            "analysis_only_complete": True,
+            "report_generated": True,
+        },
+    )
+    row.status = EventStatus.CLOSED.value
+    service = _service_with_row(
+        row,
+        store_values={
+            "analysis_only_complete": True,
+            "report_generated": True,
+        },
+        persisted_report_quality=None,
+    )
+
+    event = await service.get_event(event_id)
+
+    assert event is not None
+    snap = event.event_context_snapshot or {}
+    assert snap.get("collection_status") == "failed"
+    assert snap.get("evidence_gaps")
+    assert snap["storyline"]["grounding_status"] == "ungrounded"
+    assert "phases" not in snap["storyline"]
+    assert "evidence_output" not in snap
+    assert "report" not in snap
+    assert "leak" not in str(snap.get("risk_assessment"))
+    # No DB report row → do not claim readable report despite freeze blob.
+    assert snap.get("report_generated") is False
+
+
+@pytest.mark.asyncio
+async def test_get_event_backfills_evidence_when_orm_has_only_risk() -> None:
+    """ISSUE-254: partial ORM snapshot still hydrates evidence summary from WM."""
+    from app.models.context import EventContext
+
+    event_id = "evt-overlay-254-backfill"
+    row = _reporting_row(event_id, snapshot={"risk_assessment": {"risk_score": 55}})
+    service = _service_with_row(row, store_values={"analysis_only_complete": True})
+    service._store.get_full_context = AsyncMock(
+        return_value=EventContext(
+            evidence_output={
+                "evidence_list": [],
+                "gaps": [{"missing_source": "endpoint", "reason": "empty"}],
+                "conflicts": [],
+                "success_sources": [],
+                "failed_sources": ["endpoint"],
+                "overall_confidence": 0.0,
+                "collection_status": "failed",
+            },
+            analysis_only_complete=True,
+        )
+    )
+
+    event = await service.get_event(event_id)
+
+    assert event is not None
+    snap = event.event_context_snapshot or {}
+    assert snap.get("risk_assessment", {}).get("risk_score") == 55
+    assert snap.get("collection_status") == "failed"
+    assert snap.get("evidence_count") == 0
+    assert snap.get("analysis_only_complete") is True

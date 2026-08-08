@@ -883,10 +883,11 @@ def build_investigation_graph(
                         exc_info=True,
                     )
             snapshot_svc = services.get("event_service")
-            merger = getattr(snapshot_svc, "merge_report_generated_context_snapshot", None)
-            if merger is not None:
+            if snapshot_svc is not None:
                 try:
-                    await merger(state["event_id"], False)
+                    await snapshot_svc.merge_report_generated_context_snapshot(
+                        state["event_id"], False
+                    )
                 except Exception:
                     logger.warning(
                         "failed to merge report_generated=false snapshot event=%s",
@@ -1773,10 +1774,11 @@ def build_investigation_graph(
                     )
             # ISSUE-254: durable snapshot overlay for GET event / guidance.
             snapshot_svc = services.get("event_service")
-            merger = getattr(snapshot_svc, "merge_report_generated_context_snapshot", None)
-            if merger is not None:
+            if snapshot_svc is not None:
                 try:
-                    await merger(event_id, generated)
+                    await snapshot_svc.merge_report_generated_context_snapshot(
+                        event_id, generated
+                    )
                 except Exception:
                     logger.warning(
                         "failed to merge report_generated snapshot event=%s",

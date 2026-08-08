@@ -430,16 +430,14 @@ class StorylineService:
                 )
         # ISSUE-254: durable bounded storyline summary (grounding_status, …).
         if self._event_service is not None:
-            merger = getattr(self._event_service, "merge_storyline_context_snapshot", None)
-            if merger is not None:
-                try:
-                    await merger(event_id, storyline)
-                except Exception:
-                    logger.warning(
-                        "failed to merge storyline snapshot summary event=%s",
-                        event_id,
-                        exc_info=True,
-                    )
+            try:
+                await self._event_service.merge_storyline_context_snapshot(event_id, storyline)
+            except Exception:
+                logger.warning(
+                    "failed to merge storyline snapshot summary event=%s",
+                    event_id,
+                    exc_info=True,
+                )
 
     async def _mark_degraded(self, event_id: str, *, reason: str) -> None:
         """Best-effort degraded marker when storyline WM write fails."""

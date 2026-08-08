@@ -727,16 +727,16 @@ class AnalysisOnlyPipeline:
                 )
         # ISSUE-254: keep durable API snapshot aligned with WM flag (assists ISSUE-250).
         if self._event_service is not None:
-            merger = getattr(self._event_service, "merge_report_generated_context_snapshot", None)
-            if merger is not None:
-                try:
-                    await merger(event_id, generated)
-                except Exception:
-                    logger.warning(
-                        "Failed to merge report_generated snapshot for event=%s",
-                        event_id,
-                        exc_info=True,
-                    )
+            try:
+                await self._event_service.merge_report_generated_context_snapshot(
+                    event_id, generated
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to merge report_generated snapshot for event=%s",
+                    event_id,
+                    exc_info=True,
+                )
 
     async def _mark_report_generation_failed(self, event_id: str, exc: Exception) -> None:
         """Make generate_report=true failures observable (never silent REPORTING)."""

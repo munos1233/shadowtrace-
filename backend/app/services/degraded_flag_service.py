@@ -46,6 +46,8 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "triage_risk_inconsistency",
         # ISSUE-242 report persistence contract / generation failure observability
         "report_generation_failed",
+        # ISSUE-254 durable event_context_snapshot merge failures
+        "event_context_snapshot_merge_failed",
     }
 )
 

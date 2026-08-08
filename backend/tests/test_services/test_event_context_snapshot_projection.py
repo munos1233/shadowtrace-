@@ -14,11 +14,13 @@ from app.models.agent_io import (
 from app.models.enums import EvidenceSource
 from app.models.evidence import EvidenceGap
 from app.services.event_context_snapshot_projection import (
+    SNAPSHOT_SUMMARY_KEYS,
     build_evidence_snapshot_summary,
     build_storyline_snapshot_summary,
     merge_evidence_summary_into_snapshot,
     merge_report_generated_into_snapshot,
     merge_storyline_summary_into_snapshot,
+    project_snapshot_for_api,
 )
 
 
@@ -132,3 +134,76 @@ def test_merge_report_generated_into_snapshot() -> None:
     snapshot = merge_report_generated_into_snapshot({"risk_assessment": {}}, True)
     assert snapshot["report_generated"] is True
     assert "risk_assessment" in snapshot
+
+
+def test_project_closed_freeze_extracts_bounded_summary_without_dump() -> None:
+    """CLOSED full EventContext freeze must project to whitelist summaries only."""
+    projected = project_snapshot_for_api(
+        {
+            "evidence_output": {
+                "evidence_list": [{"evidence_id": "e1", "raw_prompt": "LEAK"}],
+                "gaps": [
+                    {
+                        "missing_source": "endpoint",
+                        "reason": "all_sources_failed",
+                        "thought": "nope",
+                    }
+                ],
+                "conflicts": [],
+                "success_sources": [],
+                "failed_sources": ["endpoint"],
+                "overall_confidence": 0.0,
+                "collection_status": "failed",
+                "chain_of_thought": "SECRET",
+            },
+            "storyline": {
+                "storyline_id": "stl-1",
+                "grounding_status": "ungrounded",
+                "generated_by": "rule",
+                "phases": [{"phase_order": 1, "entries": [{"description": "big"}]}],
+                "claim_refs": [{"claim_id": "c1"}],
+                "narrative_summary": "empty",
+                "prompt": "SYSTEM",
+            },
+            "report": {"sections": ["huge"]},
+            "rag_output": {"chunks": ["x" * 1000]},
+            "risk_assessment": {
+                "risk_score": 40,
+                "evidence_limited": True,
+                "risk_factors": [{"name": "f1", "reasoning": "hidden"}],
+            },
+            "analysis_only_complete": True,
+            "report_generated": True,
+        }
+    )
+    assert projected is not None
+    assert projected["collection_status"] == "failed"
+    assert projected["evidence_count"] == 1
+    assert projected["evidence_gaps"][0]["missing_source"] == "endpoint"
+    assert projected["storyline"]["grounding_status"] == "ungrounded"
+    assert "phases" not in projected["storyline"]
+    assert "evidence_output" not in projected
+    assert "report" not in projected
+    assert "rag_output" not in projected
+    assert set(projected) <= SNAPSHOT_SUMMARY_KEYS
+    blob = orjson.dumps(projected).decode()
+    assert "LEAK" not in blob
+    assert "SECRET" not in blob
+    assert "hidden" not in blob
+    assert "SYSTEM" not in blob
+
+
+def test_project_hard_whitelist_drops_unknown_heavy_keys() -> None:
+    projected = project_snapshot_for_api(
+        {
+            "collection_status": "partial",
+            "evidence_count": 0,
+            "scratchpad": [{"note": "x" * 5000}],
+            "execution_plan": {"steps": list(range(200))},
+        }
+    )
+    assert projected is not None
+    assert projected["collection_status"] == "partial"
+    assert "scratchpad" not in projected
+    assert "execution_plan" not in projected
+    assert len(orjson.dumps(projected)) <= 65_536
