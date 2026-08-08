@@ -48,6 +48,17 @@ _GRAPH_NEVER_STARTED_STATUSES = frozenset(
     }
 )
 
+# DB statuses that imply approval wait checkpoint flags must be cleared (ISSUE-282).
+_POST_APPROVAL_RESUME_DB_STATUSES = frozenset(
+    {
+        EventStatus.EXECUTING_RESPONSE.value,
+        EventStatus.VERIFYING.value,
+        EventStatus.REPORTING.value,
+        EventStatus.REPLANNING.value,
+        EventStatus.CLOSED.value,
+    }
+)
+
 # Post-analysis / terminal statuses: never restart from triage (ISSUE-247).
 _NO_FULL_GRAPH_RESTART_STATUSES = frozenset(
     {
@@ -333,6 +344,43 @@ async def prepare_graph_resume_state(
     return True
 
 
+async def _reconcile_stale_approval_wait_flags(
+    session_factory: async_sessionmaker[AsyncSession],
+    graph: Any,
+    event_id: str,
+) -> None:
+    """Drop stale approval-wait checkpoint flags once DB has left WAITING_APPROVAL.
+
+    ISSUE-282 / ID-REL-001: production resume can advance execute/verify while the
+    saved checkpoint still carries ``needs_approval_wait=true`` from the pre-resume
+    halt at ``approval_wait_node``. Downstream readers must not treat that as an
+    active approval pause.
+    """
+    status_value = await _read_event_status(session_factory, event_id)
+    if status_value not in _POST_APPROVAL_RESUME_DB_STATUSES:
+        return
+
+    config: RunnableConfig = {"configurable": {"thread_id": event_id}}
+    snapshot = await graph.aget_state(config)
+    if snapshot is None or not snapshot.values:
+        return
+
+    values = snapshot.values
+    patch: dict[str, Any] = {}
+    if values.get("needs_approval_wait"):
+        patch["needs_approval_wait"] = False
+    if values.get("execution_substate") == ExecutionSubstate.WAITING_APPROVAL.value:
+        patch["execution_substate"] = ExecutionSubstate.NONE.value
+    if not patch:
+        return
+
+    await graph.aupdate_state(
+        config,
+        patch,
+        as_node=NODE_APPROVAL,
+    )
+
+
 async def _persist_context_flag(store: Any, event_id: str, field: str, value: Any) -> None:
     if store is None:
         return
@@ -522,6 +570,7 @@ async def resume_investigation_from_checkpoint(
         projection = EvidenceProjection(session_factory)
         with bind_evidence_projection(projection):
             await invoke_investigation_graph(graph, None, reporting_config)
+        await _reconcile_stale_approval_wait_flags(session_factory, graph, event_id)
         return
 
     if graph is None:
@@ -550,9 +599,11 @@ async def resume_investigation_from_checkpoint(
     projection = EvidenceProjection(session_factory)
     with bind_evidence_projection(projection):
         await invoke_investigation_graph(graph, None, config)
+    await _reconcile_stale_approval_wait_flags(session_factory, graph, event_id)
 
 
 __all__ = [
     "prepare_graph_resume_state",
     "resume_investigation_from_checkpoint",
+    "_reconcile_stale_approval_wait_flags",
 ]

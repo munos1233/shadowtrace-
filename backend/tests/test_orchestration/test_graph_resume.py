@@ -623,3 +623,33 @@ async def test_resume_executing_without_graph_still_delegates_execute() -> None:
         "evt-247-executing-fallback",
         include_response_execution=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stale_approval_wait_flags_clears_checkpoint() -> None:
+    """ISSUE-282: post-resume checkpoint must not keep needs_approval_wait=true."""
+    from app.orchestration.graph_resume import _reconcile_stale_approval_wait_flags
+
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(
+        return_value=MagicMock(
+            values={
+                "needs_approval_wait": True,
+                "execution_substate": ExecutionSubstate.WAITING_APPROVAL.value,
+                "halted": True,
+            }
+        )
+    )
+    graph.aupdate_state = AsyncMock()
+
+    await _reconcile_stale_approval_wait_flags(
+        _SessionFactory(EventStatus.VERIFYING.value),
+        graph,
+        "evt-282-stale-wait",
+    )
+
+    graph.aupdate_state.assert_awaited_once()
+    call = graph.aupdate_state.await_args
+    assert call is not None
+    assert call.args[1]["needs_approval_wait"] is False
+    assert call.args[1]["execution_substate"] == ExecutionSubstate.NONE.value

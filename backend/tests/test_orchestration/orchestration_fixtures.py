@@ -315,11 +315,13 @@ async def seed_graph_event(
     state_machine_service: StateMachineService,
     *,
     disposition_policy: DispositionPolicy = DispositionPolicy.NOT_REQUIRED,
+    title_suffix: str = "",
 ) -> str:
+    title = f"orchestration checkpoint{title_suffix}"
     event = await event_service.create_event(
-        {"title": "orchestration checkpoint", "description": "graph resume test"},
+        {"title": title, "description": "graph resume test"},
         source_type="manual",
-        title="orchestration checkpoint",
+        title=title,
         event_type=EventType.DATA_EXFILTRATION,
         severity=Severity.HIGH,
     )
