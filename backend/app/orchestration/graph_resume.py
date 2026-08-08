@@ -504,7 +504,7 @@ async def resume_investigation_from_checkpoint(
             await _resume_report_only_from_analysis(session_factory, event_id, agent)
             return
 
-        config: RunnableConfig = {"configurable": {"thread_id": event_id}}
+        reporting_config: RunnableConfig = {"configurable": {"thread_id": event_id}}
         runtime = await get_workflow_runtime()
         has_checkpoint = await prepare_graph_resume_state(
             session_factory,
@@ -521,7 +521,7 @@ async def resume_investigation_from_checkpoint(
 
         projection = EvidenceProjection(session_factory)
         with bind_evidence_projection(projection):
-            await invoke_investigation_graph(graph, None, config)
+            await invoke_investigation_graph(graph, None, reporting_config)
         return
 
     if graph is None:

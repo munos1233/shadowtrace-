@@ -103,6 +103,8 @@ async def test_get_event_overlays_report_generated_from_context_store() -> None:
             "analysis_only_complete": True,
             "report_generated": True,
         },
+        # DB row present so Redis True is consistent with GET /report.
+        persisted_report_quality="complete",
     )
 
     event = await service.get_event(event_id)
@@ -111,6 +113,33 @@ async def test_get_event_overlays_report_generated_from_context_store() -> None:
     assert event.event_context_snapshot is not None
     assert event.event_context_snapshot.get("report_generated") is True
     service._store.get.assert_any_await(event_id, "report_generated")
+
+
+@pytest.mark.asyncio
+async def test_get_event_clears_stale_report_generated_without_db_report() -> None:
+    """ISSUE-250: Redis True without report table must not claim readable report."""
+    event_id = "evt-overlay-250-stale"
+    row = _reporting_row(
+        event_id,
+        snapshot={
+            "analysis_only_complete": True,
+            "report_generated": True,
+        },
+    )
+    service = _service_with_row(
+        row,
+        store_values={
+            "analysis_only_complete": True,
+            "report_generated": True,
+        },
+        persisted_report_quality=None,
+    )
+
+    event = await service.get_event(event_id)
+
+    assert event is not None
+    assert event.event_context_snapshot is not None
+    assert event.event_context_snapshot.get("report_generated") is False
 
 
 @pytest.mark.asyncio

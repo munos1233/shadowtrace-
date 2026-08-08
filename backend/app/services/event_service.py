@@ -740,6 +740,11 @@ class EventService:
             if snapshot.get("report_quality") != persisted_report_quality:
                 snapshot["report_quality"] = persisted_report_quality
                 changed = True
+        elif snapshot.get("report_generated") is True and snapshot.get("report") is None:
+            # DB has no report row: do not let a stale Redis/snapshot flag claim
+            # readability while GET /report would 404 (ISSUE-250 review).
+            snapshot["report_generated"] = False
+            changed = True
 
         if changed:
             event = event.model_copy(update={"event_context_snapshot": snapshot})
