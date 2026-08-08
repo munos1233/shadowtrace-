@@ -56,6 +56,10 @@ EXPECTED_CONTEXT_FIELDS = {
     "graph_degraded",
     "storyline_degraded",
     "analysis_only_complete",
+    "classification_override",
+    "detection_context_snapshot",
+    "memory_output_early",
+    "report_generated",
 }
 
 

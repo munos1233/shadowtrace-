@@ -63,6 +63,8 @@ def _graph_base_state(event_id: str) -> dict[str, Any]:
         "disposition_only_intent": False,
         "report_generated": False,
         "needs_approval_wait": False,
+        "defer_response_execution": True,
+        "generate_report": True,
     }
 
 

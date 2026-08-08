@@ -285,24 +285,28 @@ class DetectionScopeService:
                     {"lock_key": _integration_advisory_lock_key(row)},
                 )
 
-                active_rows = await session.scalars(
-                    select(orm.DetectionScopeRevision)
-                    .where(
-                        and_(
-                            *_integration_boundary_filters(row),
-                            orm.DetectionScopeRevision.lifecycle_state
-                            == DetectionScopeLifecycleState.ACTIVE.value,
-                            orm.DetectionScopeRevision.scope_revision_id != scope_revision_id,
+                prior_active = list(
+                    await session.scalars(
+                        select(orm.DetectionScopeRevision)
+                        .where(
+                            and_(
+                                *_integration_boundary_filters(row),
+                                orm.DetectionScopeRevision.lifecycle_state
+                                == DetectionScopeLifecycleState.ACTIVE.value,
+                                orm.DetectionScopeRevision.scope_revision_id != scope_revision_id,
+                            )
                         )
+                        .with_for_update()
                     )
-                    .with_for_update()
                 )
-                for active in active_rows:
+                for active in prior_active:
                     _apply_lifecycle_state(
                         active,
                         lifecycle_state=DetectionScopeLifecycleState.RETIRED,
                         now=now,
                     )
+                if prior_active:
+                    await session.flush()
                 _apply_lifecycle_state(
                     row,
                     lifecycle_state=DetectionScopeLifecycleState.ACTIVE,

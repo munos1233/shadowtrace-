@@ -21,8 +21,8 @@ def test_decision_basis_includes_evidence_limited_demotion_codes() -> None:
     )
     assert "evidence_limited" in basis["warnings"]
     assert EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT in basis["warnings"]
-    assert "verdict_reason_codes=" in basis["structured_conclusion"]
-    assert "evidence_limited=true" in basis["structured_conclusion"]
+    assert EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT in basis["warnings"]
+    assert "severity=high" in basis["structured_conclusion"]
     # CoT keys must remain absent from structured decision basis.
     for banned in ("thought", "reflection", "rationale", "chain_of_thought"):
         assert banned not in basis

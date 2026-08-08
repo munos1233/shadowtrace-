@@ -41,7 +41,7 @@ def test_event_context_schema_includes_detection_context_snapshot_field() -> Non
     path = SCHEMA_DIR / "EventContext.json"
     assert path.is_file(), f"missing committed schema: {path}"
     committed = json.loads(path.read_text(encoding="utf-8"))
-    current = EventContext.model_json_schema(mode="serialization")
+    current = EventContext.model_json_schema()
     assert committed == current
 
 

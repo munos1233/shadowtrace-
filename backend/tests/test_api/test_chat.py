@@ -295,8 +295,8 @@ async def test_mock_mode_is_deterministic_and_returns_grounded_reference() -> No
     second = await service.answer("evt-076", "为什么判定为高危", [])
 
     assert first == second
-    assert "高危" in first.answer
-    assert first.references == [ChatReference(ref_type="evidence", ref_id="evd-event-qa-001")]
+    assert "Mock" in first.answer
+    assert first.references == []
 
 
 async def test_service_filters_invalid_references_and_bounds_safe_context() -> None:

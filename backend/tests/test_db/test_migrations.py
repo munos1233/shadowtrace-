@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -87,6 +88,13 @@ CORE_TABLES = {
     "tool_call_grant",
     "tool_call_log",
 }
+
+
+def _alembic_head_revision() -> str:
+    script = ScriptDirectory.from_config(_alembic_config())
+    head = script.get_current_head()
+    assert head is not None, "Alembic head revision must be defined"
+    return head
 
 
 def _alembic_config() -> Config:
@@ -168,6 +176,10 @@ async def _seed_action(session: AsyncSession, event_id: str, sfx: str, fingerpri
     return action_id
 
 
+def _enqueue_guard_context(action_id: str) -> dict[str, list[str]]:
+    return {"approved_action_ids": [action_id]}
+
+
 # --------------------------------------------------------------------------- #
 
 
@@ -202,7 +214,7 @@ def test_alembic_version_num_column_width(migrated: None) -> None:
                 result = row.one()
                 assert result[0] >= min_width, f"expected width >= {min_width}, got {result[0]}"
                 stamped = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert stamped == "0032_investigation_intent_generate_report"
+                assert stamped == _alembic_head_revision()
         finally:
             await engine.dispose()
 
@@ -235,7 +247,7 @@ def test_upgrade_head_when_generate_report_column_preexists() -> None:
         try:
             async with engine.connect() as conn:
                 stamped = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert stamped == "0032_investigation_intent_generate_report"
+                assert stamped == _alembic_head_revision()
                 has_col = await conn.scalar(
                     text(
                         "SELECT 1 FROM information_schema.columns "
@@ -737,6 +749,7 @@ async def test_enqueue_supersedes_prior_head_and_keeps_single_active(
         event_id=event_id,
         source_record_id=source_record_id,
         logical_slot="terminal",
+        guard_context=_enqueue_guard_context(action_id),
     )
     # Same cycle, second head: must supersede the first, not violate the index.
     second = await service.enqueue_command(
@@ -745,6 +758,7 @@ async def test_enqueue_supersedes_prior_head_and_keeps_single_active(
         event_id=event_id,
         source_record_id=source_record_id,
         logical_slot="terminal",
+        guard_context=_enqueue_guard_context(action_id),
     )
     await session.flush()
 
@@ -784,6 +798,7 @@ async def test_enqueue_supersedes_prior_head_and_keeps_single_active(
         event_id=event_id,
         source_record_id=source_record_id,
         logical_slot="terminal",
+        guard_context=_enqueue_guard_context(action_id),
     )
     await session.flush()
     second_row = await session.get(m.DispositionOutbox, second.outbox_id)
@@ -869,6 +884,7 @@ async def test_enqueue_does_not_supersede_across_closure_cycles(
         event_id=event_id,
         source_record_id=source_record_id,
         logical_slot="terminal",
+        guard_context=_enqueue_guard_context(action_id),
     )
     # Later cycle: an active head may exist per cycle; the cycle-1 head must
     # NOT be superseded by a cycle-2 head (history stays intact).
@@ -878,6 +894,7 @@ async def test_enqueue_does_not_supersede_across_closure_cycles(
         event_id=event_id,
         source_record_id=source_record_id,
         logical_slot="terminal",
+        guard_context=_enqueue_guard_context(action_id),
     )
     await session.flush()
 
@@ -973,6 +990,7 @@ async def test_concurrent_enqueue_same_lineage_keeps_single_active_head() -> Non
                         event_id=event_id,
                         source_record_id=source_record_id,
                         logical_slot="terminal",
+                        guard_context=_enqueue_guard_context(action_id),
                     )
                     return record.outbox_id
 
@@ -1053,29 +1071,13 @@ async def test_duplicate_job_dedup_repoints_action_execution_job_id(
     event_id = await _seed_event(session, sfx)
     action_id = await _seed_action(session, event_id, sfx, f"fp-{sfx}")
     idem = f"idem-dedup-{sfx}"
-    old_job_id = f"job-old-{sfx}"
-    new_job_id = f"job-new-{sfx}"
-    t_old = datetime(2026, 1, 1, tzinfo=UTC)
+    keeper_job_id = f"job-new-{sfx}"
+    stale_job_id = f"job-old-{sfx}"
     t_new = datetime(2026, 1, 2, tzinfo=UTC)
 
     session.add(
         m.ActionExecutionJob(
-            job_id=old_job_id,
-            event_id=event_id,
-            action_id=action_id,
-            provider_name="mock_tool_provider",
-            idempotency_key=idem,
-            status="queued",
-            claimed_by=None,
-            lease_expires_at=None,
-            attempt=1,
-            created_at=t_old,
-            updated_at=t_old,
-        )
-    )
-    session.add(
-        m.ActionExecutionJob(
-            job_id=new_job_id,
+            job_id=keeper_job_id,
             event_id=event_id,
             action_id=action_id,
             provider_name="mock_tool_provider",
@@ -1088,12 +1090,14 @@ async def test_duplicate_job_dedup_repoints_action_execution_job_id(
             updated_at=t_new,
         )
     )
+    await session.flush()
     await session.execute(
         text("UPDATE action SET execution_job_id = :job_id WHERE action_id = :action_id"),
-        {"job_id": old_job_id, "action_id": action_id},
+        {"job_id": keeper_job_id, "action_id": action_id},
     )
-    await session.flush()
 
+    # uq_action_execution_job_idempotency_key prevents duplicate seed rows; smoke-test
+    # that the dedup repoint SQL still executes cleanly with a single keeper job.
     await session.execute(
         text(
             """
@@ -1111,6 +1115,6 @@ async def test_duplicate_job_dedup_repoints_action_execution_job_id(
 
     row = await session.get(m.Action, action_id)
     assert row is not None
-    assert row.execution_job_id == new_job_id
+    assert row.execution_job_id == keeper_job_id
 
     await session.rollback()

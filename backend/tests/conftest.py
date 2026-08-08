@@ -24,6 +24,7 @@ fixture names (``event_service``, ``source_ingester``) under ingestion plugins.
 pytest_plugins = [
     "tests.test_tools.tool_system_fixtures",
     "tests.test_orchestration.orchestration_fixtures",
+    "tests.test_support.db_isolation",
     "tests.integration.integration_fixtures",
     "tests.test_ingestion.ingestion_fixtures",
 ]

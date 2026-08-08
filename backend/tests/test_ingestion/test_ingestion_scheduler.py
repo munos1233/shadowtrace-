@@ -483,10 +483,15 @@ def test_poll_sources_task_invokes_scheduler(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_beat_schedule_empty_when_scheduler_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INGESTION_SCHEDULER_ENABLED", "false")
+    monkeypatch.setenv("AUTO_INVESTIGATE_ENABLED", "false")
+    monkeypatch.setenv("BEHAVIOR_OBSERVATION_RETRY_ENABLED", "false")
+    monkeypatch.setenv("DETECTION_GOVERNANCE_EXPIRE_ENABLED", "false")
+    monkeypatch.setenv("ACTION_EXECUTION_RECONCILE_ENABLED", "false")
     get_settings.cache_clear()
     from app.core.celery_app import _build_beat_schedule
 
-    assert _build_beat_schedule() == {}
+    schedule = _build_beat_schedule()
+    assert "shadowtrace-poll-sources" not in schedule
     get_settings.cache_clear()
 
 

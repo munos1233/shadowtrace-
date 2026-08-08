@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,6 +29,7 @@ from app.models.enums import (
     WritebackReadiness,
     WritebackStatus,
 )
+from app.services.context_service import EventContextStore
 from app.services.event_service import EventService
 
 pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("clean_state")]
@@ -60,6 +62,31 @@ def _dev_auth(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _hdr(role: str = "analyst") -> dict[str, str]:
     return {"Authorization": f"Bearer {role}-token"}
+
+
+def _patch_background_create_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _add_task(_self: BackgroundTasks, func: Any, *args: Any, **kwargs: Any) -> None:
+        coro = func(*args, **kwargs)
+        if asyncio.iscoroutine(coro):
+            asyncio.create_task(coro)
+
+    monkeypatch.setattr(BackgroundTasks, "add_task", _add_task)
+
+
+def _patch_immediate_background(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    pending: list[Any] = []
+
+    def _add_task(_self: BackgroundTasks, func: Any, *args: Any, **kwargs: Any) -> None:
+        pending.append(func(*args, **kwargs))
+
+    monkeypatch.setattr(BackgroundTasks, "add_task", _add_task)
+    return pending
+
+
+async def _await_background_tasks(tasks: list[Any]) -> None:
+    for task in tasks:
+        if asyncio.iscoroutine(task):
+            await task
 
 
 async def _poll_event_status(
@@ -365,7 +392,9 @@ async def _seed_reporting_required_event(
                                 logical_slot="terminal",
                                 idempotency_key=f"idem-term-{sfx}",
                                 command_payload={
-                                    "target_disposition": SourceDisposition.CONTAINED.value
+                                    "operation_params": {
+                                        "target_disposition": SourceDisposition.CONTAINED.value,
+                                    },
                                 },
                                 command_payload_sha256="b" * 64,
                                 delivery_status="delivered",
@@ -2021,11 +2050,14 @@ async def test_analysis_only_concurrent_investigate_second_request_returns_409(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ISSUE-183: while the first analysis_only run holds the lease, the second gets 409."""
+    from app.api.v1 import deps
     from app.api.v1 import events as events_module
     from app.core.config import get_settings
 
     monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
+    monkeypatch.setenv("TASK_MODE", "background")
     get_settings.cache_clear()
+    deps.reset_deps()
 
     event_id = await _create_test_event(event_service, title="Analysis-only concurrent 409")
     release_pipeline = asyncio.Event()
@@ -2048,22 +2080,36 @@ async def test_analysis_only_concurrent_investigate_second_request_returns_409(
             released.append((_event_id, owner_id))
             return True
 
+    shared_lease = _SingleHolderLease()
+
     class _SlowPipeline:
-        async def run(self, _event_id: str) -> None:
+        async def run(
+            self,
+            _event_id: str,
+            *,
+            generate_report: bool = True,
+            **kwargs: Any,
+        ) -> None:
+            del generate_report, kwargs
             pipeline_started.set()
             await release_pipeline.wait()
 
     async def _pipeline_factory() -> _SlowPipeline:
         return _SlowPipeline()
 
-    monkeypatch.setattr(events_module, "get_event_lease", lambda: _SingleHolderLease())
+    monkeypatch.setattr(events_module, "get_event_lease", lambda: shared_lease)
+    monkeypatch.setattr(deps, "get_event_lease", lambda: shared_lease)
     monkeypatch.setattr(events_module, "get_pipeline", _pipeline_factory)
+    monkeypatch.setattr(deps, "get_pipeline", _pipeline_factory)
+    pending_bg = _patch_immediate_background(monkeypatch)
 
     resp_first = client.post(
         f"/api/v1/events/{event_id}/investigate",
         headers=_hdr(),
     )
     assert resp_first.status_code == 202, resp_first.text
+    assert len(pending_bg) == 1
+    asyncio.create_task(pending_bg[0])
 
     deadline = time.time() + 5.0
     while time.time() < deadline and not pipeline_started.is_set():
@@ -2097,18 +2143,28 @@ async def test_analysis_only_investigate_invalid_transition_does_not_mark_failed
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ISSUE-183: concurrent/stale InvalidStateTransition must not poison event to FAILED."""
+    from app.api.v1 import deps
     from app.api.v1 import events as events_module
     from app.api.v1.errors import InvalidStateTransitionError
     from app.core.config import get_settings
 
     monkeypatch.setenv("ORCHESTRATION_MODE", "analysis_only")
+    monkeypatch.setenv("TASK_MODE", "background")
     get_settings.cache_clear()
+    deps.reset_deps()
 
     event_id = await _create_test_event(event_service, title="Analysis-only ISTE guard")
     released: list[tuple[str, str]] = []
 
     class _ConcurrentLoserPipeline:
-        async def run(self, _event_id: str) -> None:
+        async def run(
+            self,
+            _event_id: str,
+            *,
+            generate_report: bool = True,
+            **kwargs: Any,
+        ) -> None:
+            del generate_report, kwargs
             raise InvalidStateTransitionError(
                 "AnalysisOnlyPipeline requires event in NEW status, got triaging",
                 current=EventStatus.TRIAGING,
@@ -2129,12 +2185,15 @@ async def test_analysis_only_investigate_invalid_transition_does_not_mark_failed
 
     monkeypatch.setattr(events_module, "get_event_lease", lambda: _TrackingLease())
     monkeypatch.setattr(events_module, "get_pipeline", _pipeline_factory)
+    monkeypatch.setattr(deps, "get_pipeline", _pipeline_factory)
+    pending = _patch_immediate_background(monkeypatch)
 
     resp = client.post(
         f"/api/v1/events/{event_id}/investigate",
         headers=_hdr(),
     )
     assert resp.status_code == 202, resp.text
+    await _await_background_tasks(pending)
 
     deadline = time.time() + 5.0
     while time.time() < deadline and not released:
@@ -2392,6 +2451,7 @@ async def test_investigate_full_loop_unavailable_in_analysis_only_mode(
 async def test_event_get_projects_deferred_analysis_guidance(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
+    context_store: EventContextStore,
 ) -> None:
     """ISSUE-103: deferred REPORTING exposes phase guidance without resume CTA."""
     event_id = await _seed_reporting_required_event(
@@ -2406,6 +2466,8 @@ async def test_event_get_projects_deferred_analysis_guidance(
             assert row is not None
             row.event_context_snapshot = {"analysis_only_complete": True}
             await session.flush()
+
+    await context_store.set(event_id, "analysis_only_complete", True)
 
     resp = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
     assert resp.status_code == 200, resp.text

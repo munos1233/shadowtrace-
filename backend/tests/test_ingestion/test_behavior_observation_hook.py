@@ -32,17 +32,42 @@ from tests.test_ingestion.test_source_ingester import FakePagedAdapter
 from tests.test_services.behavior_observation_fixtures import ambiguous_scope_binding_error
 
 
+async def _persist_connector(
+    session_factory: async_sessionmaker[AsyncSession],
+    connector_id: str,
+    *,
+    tenant_id: str | None = None,
+) -> None:
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SourceConnector(
+                    connector_id=connector_id,
+                    source_product="mock_xdr",
+                    display_name=f"Test {connector_id}",
+                    status="online",
+                    schema_version="1",
+                    connector_metadata={
+                        "source_tenant_id": tenant_id or f"tenant-{connector_id}",
+                        "integration_instance_id": f"inst-{connector_id}",
+                        "connector_set_version": 1,
+                    },
+                )
+            )
+
+
 async def _delete_hook_tables(session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with session_factory() as session:
         async with session.begin():
             await session.execute(delete(orm.ActionExecutionJob))
             await session.execute(delete(orm.ActionTargetResult))
+            await session.execute(delete(orm.DispositionOutbox))
             await session.execute(delete(orm.Action))
             await session.execute(delete(orm.BehaviorObservationProjectionFailure))
             await session.execute(delete(orm.BehaviorObservation))
             await session.execute(delete(orm.DetectionScopeRevision))
-            await session.execute(delete(orm.DispositionOutbox))
             await session.execute(delete(orm.SourceEventLink))
+            await session.execute(delete(orm.SourceCheckpoint))
             await session.execute(delete(orm.SourceObject))
             await session.execute(delete(orm.SourceConnector))
             await session.execute(delete(orm.DataQualityError))
@@ -125,6 +150,7 @@ async def test_source_ingester_projects_behavior_observation_for_supporting_obje
     suffix = _suffix()
     tenant_id = f"tenant-{suffix}"
     connector_id = f"conn-{suffix}"
+    await _persist_connector(session_factory, connector_id, tenant_id=tenant_id)
     connector = _connector(connector_id)
     adapter = HookAdapter(
         "mock_xdr",
@@ -228,11 +254,13 @@ async def test_poll_uses_registered_detection_scope_when_available(
 
 @pytest.mark.asyncio
 async def test_poll_marks_degraded_when_behavior_projection_fails(
+    session_factory: async_sessionmaker[AsyncSession],
     ingestion_source_ingester: SourceIngester,
 ) -> None:
     suffix = _suffix()
     tenant_id = f"tenant-{suffix}"
     connector_id = f"conn-{suffix}"
+    await _persist_connector(session_factory, connector_id, tenant_id=tenant_id)
     connector = _connector(connector_id)
     adapter = HookAdapter(
         "mock_xdr",
@@ -346,9 +374,13 @@ async def test_hook_records_failure_without_rolling_back_source(
 
 @pytest.mark.asyncio
 async def test_ingest_telemetry_reports_behavior_projection_degraded(
+    session_factory: async_sessionmaker[AsyncSession],
     ingestion_source_ingester: SourceIngester,
 ) -> None:
     suffix = _suffix()
+    connector_id = f"conn-telemetry-{suffix}"
+    tenant_id = f"tenant-telemetry-{suffix}"
+    await _persist_connector(session_factory, connector_id, tenant_id=tenant_id)
     assert ingestion_source_ingester._behavior_observation is not None
 
     async def _projection_failed(_record_id: str) -> bool:
@@ -371,8 +403,8 @@ async def test_ingest_telemetry_reports_behavior_projection_degraded(
                 ],
             },
             source_type="mock_xdr",
-            connector_id=f"conn-telemetry-{suffix}",
-            source_tenant_id=f"tenant-telemetry-{suffix}",
+            connector_id=connector_id,
+            source_tenant_id=tenant_id,
         )
     assert inserted >= 1
     assert degraded is True

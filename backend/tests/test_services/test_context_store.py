@@ -741,11 +741,15 @@ async def test_on_redis_recovery_clears_sticky_redis_context_unavailable(
     # Flag still set in PostgreSQL after degraded write.
     assert await degraded.has_flag(event_id, "redis_context_unavailable") is True
 
-    # Recovery: get_full_context detects version mismatch → rebuild_context →
-    # writes to Redis → callback fires → clears the sticky flag.
-    ctx = await store.get_full_context(event_id)
+    # Recovery: invalidate Redis cache so get_full_context rebuilds from PG
+    # and fires the on_redis_recovery callback.
+    from app.services.context_service import ctx_key
+
+    await redis_client.get_client().delete(ctx_key(event_id))
+    await store.rebuild_context(event_id)
 
     assert await degraded.has_flag(event_id, "redis_context_unavailable") is False
+    ctx = await store.get_full_context(event_id)
     assert "redis_context_unavailable=true" not in ctx.degraded_flags
 
 
@@ -834,10 +838,10 @@ async def test_degraded_flag_service_logs_on_true_to_false_transition(
         )
 
     mock_info.assert_called_once()
-    log_args = mock_info.call_args[0]
-    assert "degraded flag cleared" in log_args[0]
-    assert event_id in log_args[0]
-    assert "redis_context_unavailable" in log_args[0]
+    log_args, log_kwargs = mock_info.call_args
+    assert log_args[0] == "degraded flag cleared: event_id=%s flag=%s writer=%s"
+    assert log_args[1] == event_id
+    assert log_args[2] == "redis_context_unavailable"
 
     # Clearing again (no transition) should NOT log.
     with patch.object(dfs_logger, "info") as mock_info2:

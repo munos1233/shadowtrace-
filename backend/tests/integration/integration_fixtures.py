@@ -13,7 +13,6 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -30,7 +29,6 @@ from app.core.llm.base import InMemoryLLMCallAuditRecorder
 from app.core.llm.mock_client import MockLLMClient
 from app.core.redis_client import RedisClient
 from app.data_generators.scenarios import build_scenario, write_scenario_artifacts
-from app.db.base import Base
 from app.ingestion.source_ingester import SourceIngester
 from app.mock_xdr.api import create_app
 from app.mock_xdr.state import MockXDRState
@@ -57,7 +55,6 @@ DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace",
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-BUSINESS_TABLES = tuple(sorted(Base.metadata.tables))
 
 
 def _alembic_config() -> Config:
@@ -98,44 +95,6 @@ async def redis_client() -> AsyncIterator[RedisClient]:
         pytest.fail("Redis is required for integration tests; run `make integration-test`")
     yield client
     await client.aclose()
-
-
-async def _truncate_business_tables(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    quoted = ", ".join(f'"{table}"' for table in BUSINESS_TABLES)
-    async with session_factory() as session:
-        async with session.begin():
-            await session.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
-
-
-async def _clear_shadowtrace_keys(redis_client: RedisClient) -> None:
-    try:
-        client = redis_client.get_client()
-        keys = [key async for key in client.scan_iter(match="shadowtrace:*", count=500)]
-        if keys:
-            await client.delete(*keys)
-    except RuntimeError:
-        # TestClient may close the asyncio loop before fixture teardown runs.
-        pass
-
-
-@pytest_asyncio.fixture
-async def clean_state(
-    session_factory: async_sessionmaker[AsyncSession],
-    redis_client: RedisClient,
-) -> AsyncIterator[None]:
-    """Reset PG/Redis around a test.
-
-    Not autouse: ``tool_system`` chains in this package are in-memory and must
-    not pull Dockerized Postgres/Redis. Real ``@pytest.mark.integration``
-    modules opt in via ``pytest.mark.usefixtures("clean_state")``.
-    """
-    await _truncate_business_tables(session_factory)
-    await _clear_shadowtrace_keys(redis_client)
-    yield
-    await _clear_shadowtrace_keys(redis_client)
-    await _truncate_business_tables(session_factory)
 
 
 @pytest.fixture

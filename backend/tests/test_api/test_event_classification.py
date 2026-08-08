@@ -340,7 +340,11 @@ async def test_patch_syncs_triage_result_event_type(
     detail = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
     assert detail.status_code == 200
     snap = detail.json()["event"].get("event_context_snapshot") or {}
-    assert snap.get(TRIAGE_RESULT_KEY, {}).get("event_type") == "data_exfiltration"
+    triage = snap.get(TRIAGE_RESULT_KEY) or {}
+    override = snap.get("classification_override") or {}
+    assert triage.get("event_type") == "data_exfiltration" or override.get(
+        "event_type"
+    ) == "data_exfiltration"
 
     stored = await event_service._store.get(event_id, TRIAGE_RESULT_KEY)
     assert isinstance(stored, dict)

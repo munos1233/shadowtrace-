@@ -43,8 +43,17 @@ def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     store: dict[str, str] = {}
 
     class _FakeRedis:
-        async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        async def set(
+            self,
+            key: str,
+            value: str,
+            ex: int | None = None,
+            nx: bool = False,
+        ) -> bool:
+            if nx and key in store:
+                return False
             store[key] = value
+            return True
             return True
 
         async def get(self, key: str) -> bytes | None:

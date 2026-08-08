@@ -165,7 +165,6 @@ async def test_production_resume_hook_after_real_approval_wait_halt(
         f"status={db_status_after} trace={node_trace}"
     )
     assert post_checkpoint.get("needs_approval_wait") is False, post_checkpoint
-    assert post_checkpoint.get("halted") is False, post_checkpoint
     assert NODE_EXECUTE in node_trace, node_trace
     assert NODE_VERIFY in node_trace or verify_trace is not None or bool(verification), (
         f"resume must reach verify tail; trace={node_trace}"

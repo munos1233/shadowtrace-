@@ -1899,7 +1899,7 @@ async def test_event_sequence_max_observation_scan_raises(
         detection_scope_id=scope_id,
         window_kind=FeatureWindowKind.ONE_HOUR.value,
         group_key_fields=["entity_type", "entity_id"],
-        threshold=1.0,
+        threshold=sequence_match_threshold(IDENTITY_EXFIL_SEQUENCE_V1),
         severity="high",
         match_criteria=IDENTITY_EXFIL_SEQUENCE_V1.as_match_criteria(),
         max_observation_scan=3,

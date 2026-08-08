@@ -478,7 +478,10 @@ async def test_expired_task_requeue_claim_complete_cycle(
             lease_seconds=60,
         )
     )
-    assert claim.status is AgentTaskStatus.CLAIMED
+    async with session_factory() as session:
+        row = await session.get(orm.AgentTaskORM, task.task_id)
+        assert row is not None
+        assert AgentTaskStatus(row.status) is AgentTaskStatus.CLAIMED
     async with session_factory() as session:
         async with session.begin():
             row = await session.get(orm.AgentTaskORM, task.task_id)

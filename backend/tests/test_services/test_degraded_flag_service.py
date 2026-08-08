@@ -188,7 +188,7 @@ async def test_set_flag_rejects_untrusted_caller(
             event_id,
             "redis_context_unavailable",
             True,
-            writer="TriageAgent",
+            writer="UntrustedFixtureWriter",
         )
 
 

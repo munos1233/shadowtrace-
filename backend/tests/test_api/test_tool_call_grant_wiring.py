@@ -72,6 +72,10 @@ async def test_build_investigation_agents_wires_evidence_compat_path(
         "app.services.memory_governance.MemoryGovernance",
         lambda *_a, **_k: MagicMock(),
     )
+    monkeypatch.setattr(
+        "app.services.knowledge_release_service.KnowledgeReleaseService.get_active_release",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr("app.agents.memory_agent.MemoryAgent", lambda **_k: MagicMock())
 
     reset_loaded_retrieval_resources()

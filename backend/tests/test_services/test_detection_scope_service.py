@@ -6,6 +6,7 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -54,19 +55,6 @@ async def session_factory(
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     yield factory
     await engine.dispose()
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def clean_detection_scope(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[None]:
-    async with session_factory() as session:
-        async with session.begin():
-            await session.execute(delete(orm.DetectionScopeRevision))
-    yield
-    async with session_factory() as session:
-        async with session.begin():
-            await session.execute(delete(orm.DetectionScopeRevision))
 
 
 def _service(session_factory: async_sessionmaker[AsyncSession]) -> DetectionScopeService:
@@ -192,6 +180,23 @@ async def test_concurrent_activate_only_one_active_per_instance(
             )
         )
         assert len(list(active_rows)) == 1
+
+    async with session_factory() as session:
+        async with session.begin():
+            extras = await session.scalars(
+                select(orm.DetectionScopeRevision).where(
+                    orm.DetectionScopeRevision.source_tenant_id == identity.source_tenant_id,
+                    orm.DetectionScopeRevision.source_product == identity.source_product,
+                    orm.DetectionScopeRevision.integration_instance_id
+                    == identity.integration_instance_id,
+                    orm.DetectionScopeRevision.lifecycle_state
+                    == DetectionScopeLifecycleState.ACTIVE.value,
+                )
+            )
+            now = datetime.now(UTC)
+            for row in list(extras)[1:]:
+                row.lifecycle_state = DetectionScopeLifecycleState.RETIRED.value
+                row.retired_at = now
 
 
 @pytest.mark.asyncio

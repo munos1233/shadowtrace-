@@ -26,9 +26,9 @@ from app.services.disposition_sync_service import DispositionSyncService
 from app.services.event_disposition_service import EventDispositionService
 from app.services.event_service import EventService
 from app.services.state_machine_service import StateMachineService
-from tests.integration.integration_fixtures import (
-    _clear_shadowtrace_keys,
-    _truncate_business_tables,
+from tests.test_support.db_isolation import (
+    clear_shadowtrace_redis_keys,
+    truncate_business_tables,
 )
 from tests.system.helpers import (
     ingest_scenario_event,
@@ -45,8 +45,8 @@ async def reset_regression_state(
     redis_client: RedisClient,
 ) -> None:
     """Clear business tables and Redis keys between baseline refresh scenarios."""
-    await _truncate_business_tables(session_factory)
-    await _clear_shadowtrace_keys(redis_client)
+    await truncate_business_tables(session_factory)
+    await clear_shadowtrace_redis_keys(redis_client)
 
 
 async def run_golden_main_chain(

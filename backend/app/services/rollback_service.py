@@ -808,6 +808,9 @@ class RollbackService:
                             event_id=rollback_action.event_id,
                             source_record_id=source_record_id,
                             logical_slot=f"compensation:{original_action.action_id}",
+                            guard_context={
+                                "approved_action_ids": [rollback_action.action_id],
+                            },
                         )
                         writebacks.append(
                             CompensationWritebackItem(

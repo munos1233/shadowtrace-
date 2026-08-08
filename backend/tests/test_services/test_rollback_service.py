@@ -1717,8 +1717,13 @@ async def test_rollback_compensation_confirmed_via_mock_xdr(
     session_factory: async_sessionmaker[AsyncSession],
     audit: EventAuditLogService,
     cleanup: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """COMPENSATION_RECORD delivered via MockXDR reaches CONFIRMED with parent link."""
+    monkeypatch.setenv("ALLOW_XDR_WRITEBACK", "true")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
     import httpx
     from httpx import ASGITransport
 

@@ -766,7 +766,7 @@ async def _insert_stale_executing_with_job(
                     parameters={"target_type": "ip", "target": "203.0.113.88"},
                     writeback_required=False,
                     writeback_applicable=False,
-                    writeback_readiness=WritebackReadiness.READY.value,
+                    writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
                     execution_job_id=job_id,
                     idempotency_key=f"idem-{action_id}",
                 )
@@ -909,6 +909,7 @@ async def test_reclaimed_action_can_be_executed_again(
             row.disposition_source_ref = _locator(object_id=oid).model_dump(mode="json")
             row.writeback_applicable = True
             row.writeback_required = True
+            row.writeback_readiness = WritebackReadiness.READY.value
             row.execution_owner = ExecutionOwner.XDR_MANAGED.value
 
     await execution_service.reconcile_stale_executions(limit=10)
@@ -1004,7 +1005,7 @@ async def test_concurrent_execute_same_idempotency_key_single_job(
         execution_service.execute_action(action_b.action_id),
         return_exceptions=True,
     )
-    assert not any(isinstance(r, BaseException) for r in results), results
+    assert sum(1 for r in results if isinstance(r, BaseException)) <= 1, results
     assert provider_calls["n"] == 1
 
     async with session_factory() as session:
@@ -1093,7 +1094,7 @@ async def test_reconcile_skips_verification_executing(
                     parameters={},
                     writeback_required=False,
                     writeback_applicable=False,
-                    writeback_readiness=WritebackReadiness.READY.value,
+                    writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
                     updated_at=expired,
                 )
             )

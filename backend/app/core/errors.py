@@ -140,6 +140,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "report_quality_conflict": ErrorCategory.PERMANENT,
     "report_prerequisites_missing": ErrorCategory.USER_INPUT,
     "report_prerequisites_invalid": ErrorCategory.USER_INPUT,
+    "report_generation_failed": ErrorCategory.GUARDRAIL,
     # Generic dependency / domain defaults used by subclasses
     "dependency_unavailable": ErrorCategory.TRANSIENT,
     "task_unavailable": ErrorCategory.TRANSIENT,

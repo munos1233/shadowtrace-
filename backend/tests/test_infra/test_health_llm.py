@@ -111,6 +111,16 @@ async def test_health_llm_degraded_does_not_cause_503_by_default(client: AsyncCl
             new_callable=AsyncMock,
             return_value=_llm_payload(status="degraded"),
         ),
+        patch(
+            "app.api.v1.health._check_loaded_resources",
+            new_callable=AsyncMock,
+            return_value={"status": "ready"},
+        ),
+        patch(
+            "app.api.v1.health._check_playbook_resources",
+            new_callable=AsyncMock,
+            return_value={"status": "ready"},
+        ),
     ):
         response = await client.get("/api/v1/health")
 

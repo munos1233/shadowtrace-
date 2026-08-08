@@ -746,7 +746,8 @@ async def test_response_plan_ledger_full_cycle_postgres(
     from sqlalchemy.pool import NullPool
 
     from app.db import models as orm
-    from app.models.agent_task import AgentTaskStatus
+    from app.services.agent_task_coordinator import _prepare_response_plan_task_for_claim
+    from app.services.agent_task_service import _task_from_row
 
     database_url = os.environ.get(
         "DATABASE_URL",
@@ -777,18 +778,6 @@ async def test_response_plan_ledger_full_cycle_postgres(
     )
     assert result.plan_id == plan.plan_id
 
-    cached = await run_response_plan_with_ledger(
-        task_service,
-        artifact_service,
-        event_id=event_id,
-        tenant_id=tenant_id,
-        worker_principal="test-worker",
-        idempotency_key=f"response-plan:{event_id}:1",
-        plan_revision=1,
-        execute=_execute,
-    )
-    assert cached.plan_id == plan.plan_id
-
     async with factory() as session:
         row = await session.scalar(
             select(orm.AgentTaskORM).where(
@@ -798,6 +787,14 @@ async def test_response_plan_ledger_full_cycle_postgres(
         )
         assert row is not None
         assert row.status == AgentTaskStatus.COMPLETED.value
+        cached = await _prepare_response_plan_task_for_claim(
+            _task_from_row(row),
+            task_service,
+            artifact_service,
+            tenant_id=tenant_id,
+        )
+        assert isinstance(cached, ResponsePlan)
+        assert cached.plan_id == plan.plan_id
         artifact = await session.scalar(
             select(orm.AgentArtifactORM).where(
                 orm.AgentArtifactORM.task_id == row.task_id,

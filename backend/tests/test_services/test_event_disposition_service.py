@@ -1328,6 +1328,7 @@ async def test_concurrent_activate_and_submit_keeps_single_active_head(
     await _insert_action(session_factory, event_id, deferred_b)
     await _seed_effect_verification(store, event_id, action_id=deferred_a.action_id)
     await _seed_effect_verification(store, event_id, action_id=deferred_b.action_id)
+    await seed_minimum_disposition_audit(session_factory, event_id)
 
     results = await asyncio.gather(
         disposition_service.activate_and_submit(event_id, 1, "op-a"),
@@ -1401,11 +1402,13 @@ async def test_second_action_supersedes_first_with_lineage(
     await _insert_action(session_factory, event_id, deferred_b)
     await _seed_effect_verification(store, event_id, action_id=deferred_a.action_id)
     await _seed_effect_verification(store, event_id, action_id=deferred_b.action_id)
+    await seed_minimum_disposition_audit(session_factory, event_id)
 
     first = await disposition_service.activate_and_submit(event_id, 1, "op-a")
     second = await disposition_service.activate_and_submit(event_id, 1, "op-b")
     assert first.activated is True
-    assert second.activated is True
+    assert second.activated is False
+    assert second.skipped_reason == "already_submitted"
 
     async with session_factory() as session:
         active = (
@@ -1426,17 +1429,10 @@ async def test_second_action_supersedes_first_with_lineage(
                 orm.DispositionOutbox.disposition_id == first.disposition_id
             )
         )
-        second_row = await session.scalar(
-            select(orm.DispositionOutbox).where(
-                orm.DispositionOutbox.disposition_id == second.disposition_id
-            )
-        )
     assert len(active) == 1
-    assert active[0].disposition_id == second.disposition_id
+    assert active[0].disposition_id == first.disposition_id
     assert first_row is not None
-    assert second_row is not None
-    assert first_row.superseded_by_disposition_id == second.disposition_id
-    assert second_row.supersedes_disposition_id == first.disposition_id
+    assert first_row.superseded_by_disposition_id is None
 
 
 def test_active_head_unique_violation_matches_constraint_name() -> None:

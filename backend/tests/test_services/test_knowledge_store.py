@@ -62,7 +62,7 @@ async def clean_knowledge(session_factory: async_sessionmaker[AsyncSession]) -> 
 
 @pytest_asyncio.fixture
 def embed_service() -> EmbeddingService:
-    return EmbeddingService(Settings(embedding_mode="mock"))
+    return EmbeddingService(Settings(embedding_mode="mock", embedding_max_batch_size=128))
 
 
 @pytest_asyncio.fixture

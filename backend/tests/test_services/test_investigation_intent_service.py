@@ -1488,6 +1488,7 @@ async def test_commit_enqueued_skips_response_for_provisional_link(
                     source_type="mock_xdr",
                 )
             )
+            await session.flush()
             session.add(
                 orm.SourceEventLink(
                     source_record_id=source_record_id,
