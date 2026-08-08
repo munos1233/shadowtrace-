@@ -2384,11 +2384,51 @@
         "operationId": "list_knowledge_api_v1_knowledge_get",
         "parameters": [
           {
+            "name": "kb_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional knowledge base filter.",
+              "title": "Kb Name"
+            },
+            "description": "Optional knowledge base filter."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional full-text query against chunk content.",
+              "title": "Q"
+            },
+            "description": "Optional full-text query against chunk content."
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
               "default": 1,
               "title": "Page"
             }
@@ -2399,6 +2439,8 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
               "default": 20,
               "title": "Page Size"
             }

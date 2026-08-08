@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.api.v1 import schemas as s
 from app.api.v1.deps import _get_context_store as _real_get_context_store
 from app.api.v1.deps import _get_session_factory as _real_get_session_factory
+from app.api.v1.deps import get_knowledge_query_service as _real_get_knowledge_query_service
 from app.api.v1.deps import get_disposition_sync as _real_get_disposition_sync
 from app.api.v1.deps import get_event_service as _real_get_event_service
 from app.api.v1.deps import get_state_machine as _real_get_state_machine
@@ -135,6 +136,9 @@ def client() -> TestClient:
 
     app.dependency_overrides[_real_get_disposition_sync] = _mock_disposition_sync
     app.dependency_overrides[_real_get_context_store] = lambda: _MockContextStore()
+    app.dependency_overrides[_real_get_knowledge_query_service] = (
+        lambda: _MockKnowledgeQueryService()
+    )
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -154,6 +158,20 @@ class _EmptyAsyncSession:
 
 def _empty_session_factory() -> _EmptyAsyncSession:
     return _EmptyAsyncSession()
+
+
+class _MockKnowledgeQueryService:
+    async def list_knowledge(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        kb_name: str | None = None,
+        q: str | None = None,
+        tenant_id: str | None = None,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        _ = (page, page_size, kb_name, q, tenant_id)
+        return 0, []
 
 
 def _hdr(role: str = "analyst") -> dict[str, str]:

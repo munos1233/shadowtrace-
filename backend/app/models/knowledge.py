@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 # Shared corpus chunks (e.g. playbook_soar) are visible to all tenants in strict mode.
 GLOBAL_KB_TENANT_ID = "__global__"
+
+KnowledgeKbName = Literal["attack_kb", "fp_case_kb", "history_case_kb", "playbook_kb"]
+
+KNOWLEDGE_KB_NAMES: frozenset[str] = frozenset(
+    {"attack_kb", "fp_case_kb", "history_case_kb", "playbook_kb"}
+)
 
 
 class KnowledgeChunk(BaseModel):
@@ -17,6 +24,16 @@ class KnowledgeChunk(BaseModel):
     kb_name: str = Field(..., description="attack_kb | fp_case_kb | history_case_kb | playbook_kb")
     content: str = Field(..., description="Plain-text chunk body")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Arbitrary metadata")
+
+
+class ListedKnowledgeChunk(BaseModel):
+    """One row from paginated ``GET /knowledge`` catalog listing."""
+
+    chunk_id: str
+    kb_name: str
+    content: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
 
 
 class RetrievedChunk(BaseModel):

@@ -52,6 +52,7 @@ _tool_call_log: Any = None  # ToolCallLogService
 _graph_sync_service: Any = None  # GraphSyncService (ISSUE-082)
 _neo4j_client: Any = None  # Neo4jClient (ISSUE-082)
 _memory_governance: Any = None  # MemoryGovernance (ISSUE-081)
+_knowledge_query_service: Any = None  # KnowledgeQueryService (ISSUE-279)
 _detection_governance: Any = None  # DetectionGovernanceService (ISSUE-125)
 _detection_promotion: Any = None  # DetectionPromotionService (ISSUE-124)
 _detection_context_projector: Any = None  # DetectionContextProjector (ISSUE-127)
@@ -296,6 +297,29 @@ def get_memory_governance() -> Any:
 
 
 MemoryGovernanceDep = Annotated[Any, Depends(get_memory_governance)]
+
+
+def get_knowledge_query_service() -> Any:
+    """Return the shared knowledge catalog query service (ISSUE-279)."""
+    global _knowledge_query_service
+    if _knowledge_query_service is None:
+        from app.core.config import get_settings
+        from app.core.embedding.factory import get_embedding_client
+        from app.services.knowledge_query_service import KnowledgeQueryService
+        from app.services.knowledge_store import KnowledgeStore
+
+        settings = get_settings()
+        tenant_isolation_strict = settings.app_env.strip().lower() == "production"
+        store = KnowledgeStore(
+            _get_session_factory(),
+            get_embedding_client(settings=settings),
+            tenant_isolation_strict=tenant_isolation_strict,
+        )
+        _knowledge_query_service = KnowledgeQueryService(store)
+    return _knowledge_query_service
+
+
+KnowledgeQueryDep = Annotated[Any, Depends(get_knowledge_query_service)]
 
 
 def get_detection_governance_service() -> Any:
@@ -1102,6 +1126,7 @@ def reset_loop_bound_redis_resources() -> None:
     _tool_call_grant_service = None
     _agent_task_service = None
     _memory_governance = None
+    _knowledge_query_service = None
     _detection_governance = None
     _detection_promotion = None
     _detection_context_projector = None
@@ -1135,6 +1160,7 @@ def reset_deps() -> None:
     global _graph_sync_service, _neo4j_client
     global \
         _memory_governance, \
+        _knowledge_query_service, \
         _detection_governance, \
         _detection_promotion, \
         _detection_context_projector, \

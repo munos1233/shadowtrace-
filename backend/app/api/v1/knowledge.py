@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.v1 import schemas as s
-from app.api.v1.deps import MemoryGovernanceDep
+from app.api.v1.deps import KnowledgeQueryDep, MemoryGovernanceDep
 from app.core.auth import ROLE_ANALYST, ROLE_APPROVER, CurrentPrincipal, Principal, require_roles
 
 router = APIRouter(tags=["knowledge"])
@@ -15,9 +15,31 @@ router = APIRouter(tags=["knowledge"])
 
 @router.get("/knowledge", response_model=s.KnowledgeResponse)
 async def list_knowledge(
-    principal: CurrentPrincipal, page: int = 1, page_size: int = 20
+    principal: CurrentPrincipal,
+    knowledge_query: KnowledgeQueryDep,
+    kb_name: Annotated[
+        str | None,
+        Query(description="Optional knowledge base filter."),
+    ] = None,
+    q: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            max_length=500,
+            description="Optional full-text query against chunk content.",
+        ),
+    ] = None,
+    page: Annotated[int, Query(ge=1, le=10_000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> s.KnowledgeResponse:
-    return s.KnowledgeResponse(total=0, page=page, page_size=page_size, items=[])
+    total, items = await knowledge_query.list_knowledge(
+        page=page,
+        page_size=page_size,
+        kb_name=kb_name,
+        q=q,
+        tenant_id=principal.tenant_id,
+    )
+    return s.KnowledgeResponse(total=total, page=page, page_size=page_size, items=items)
 
 
 @router.get("/knowledge/reviews", response_model=s.MemoryReviewListResponse)

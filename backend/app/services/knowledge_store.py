@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.embedding.service import EmbeddingService
 from app.db.orm.knowledge import KnowledgeChunkORM
-from app.models.knowledge import GLOBAL_KB_TENANT_ID, KnowledgeChunk, RetrievedChunk
+from app.models.knowledge import (
+    GLOBAL_KB_TENANT_ID,
+    KnowledgeChunk,
+    ListedKnowledgeChunk,
+    RetrievedChunk,
+)
 from app.models.knowledge_release import KnowledgeTypedFilter
 from app.services.knowledge_store_prefilter import (
     assert_knowledge_chunk_keyword_prefilter_in_sql,
@@ -372,6 +377,136 @@ class KnowledgeStore:
             release_id=release_id,
         )
         return _merge_hybrid_results(vector_hits, keyword_hits, top_k)
+
+    async def count_chunks(
+        self,
+        *,
+        kb_name: str | None = None,
+        tenant_id: str | None = None,
+    ) -> int:
+        """Count chunks, optionally scoped to *kb_name* and tenant metadata."""
+        tenant_clause, tenant_params = self._tenant_filter_clause(
+            tenant_id,
+            tenant_isolation_strict=self._tenant_isolation_strict,
+        )
+        kb_clause = " AND kb_name = :kb_name" if kb_name is not None else ""
+        params: dict[str, object] = {**tenant_params}
+        if kb_name is not None:
+            params["kb_name"] = kb_name
+        sql = text(
+            f"SELECT COUNT(*) AS cnt FROM knowledge_chunk WHERE 1=1{kb_clause}{tenant_clause}"
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(sql, params)
+            row = result.fetchone()
+            return int(row.cnt) if row else 0
+
+    async def list_chunks(
+        self,
+        *,
+        kb_name: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        tenant_id: str | None = None,
+    ) -> list[ListedKnowledgeChunk]:
+        """Paginated catalog listing with stable ``kb_name``, ``chunk_id`` ordering."""
+        tenant_clause, tenant_params = self._tenant_filter_clause(
+            tenant_id,
+            tenant_isolation_strict=self._tenant_isolation_strict,
+        )
+        kb_clause = " AND kb_name = :kb_name" if kb_name is not None else ""
+        offset = max(page - 1, 0) * page_size
+        params: dict[str, object] = {
+            "limit": page_size,
+            "offset": offset,
+            **tenant_params,
+        }
+        if kb_name is not None:
+            params["kb_name"] = kb_name
+        sql = text(
+            f"""
+            SELECT chunk_id, kb_name, content, metadata, created_at
+            FROM knowledge_chunk
+            WHERE 1=1{kb_clause}{tenant_clause}
+            ORDER BY kb_name ASC, chunk_id ASC
+            LIMIT :limit OFFSET :offset
+            """
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(sql, params)
+            return [
+                ListedKnowledgeChunk(
+                    chunk_id=row.chunk_id,
+                    kb_name=row.kb_name,
+                    content=row.content,
+                    metadata=row.metadata or {},
+                    created_at=row.created_at,
+                )
+                for row in result.fetchall()
+            ]
+
+    async def keyword_search_paginated(
+        self,
+        query_text: str,
+        *,
+        kb_name: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        tenant_id: str | None = None,
+    ) -> tuple[int, list[RetrievedChunk]]:
+        """Full-text search with total hit count and stable score ordering."""
+        tenant_clause, tenant_params = self._tenant_filter_clause(
+            tenant_id,
+            tenant_isolation_strict=self._tenant_isolation_strict,
+        )
+        kb_clause = " AND kb_name = :kb_name" if kb_name is not None else ""
+        params: dict[str, object] = {
+            "q": query_text,
+            **tenant_params,
+        }
+        if kb_name is not None:
+            params["kb_name"] = kb_name
+        count_sql = text(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM knowledge_chunk
+            WHERE to_tsvector('simple', content) @@ plainto_tsquery('simple', :q)
+              {kb_clause}{tenant_clause}
+            """
+        )
+        offset = max(page - 1, 0) * page_size
+        search_params = {**params, "limit": page_size, "offset": offset}
+        search_sql = text(
+            f"""
+            SELECT chunk_id, kb_name, content, metadata,
+                   GREATEST(
+                       ts_rank(to_tsvector('simple', content),
+                               plainto_tsquery('simple', :q)),
+                       0.5
+                   ) AS score
+            FROM knowledge_chunk
+            WHERE to_tsvector('simple', content) @@ plainto_tsquery('simple', :q)
+              {kb_clause}{tenant_clause}
+            ORDER BY score DESC, kb_name ASC, chunk_id ASC
+            LIMIT :limit OFFSET :offset
+            """
+        )
+        async with self._session_factory() as session:
+            count_row = (await session.execute(count_sql, params)).fetchone()
+            total = int(count_row.cnt) if count_row else 0
+            rows = (await session.execute(search_sql, search_params)).fetchall()
+            hits = [
+                RetrievedChunk(
+                    chunk_id=row.chunk_id,
+                    kb_name=row.kb_name,
+                    content=row.content,
+                    metadata=row.metadata or {},
+                    score=float(row.score),
+                    retrieval_method="keyword",
+                )
+                for row in rows
+            ]
+            return total, hits
 
     async def count(self, kb_name: str) -> int:
         """Return the number of chunks stored in *kb_name*."""
