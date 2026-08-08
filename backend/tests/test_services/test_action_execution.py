@@ -13,6 +13,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -44,14 +45,21 @@ from app.models.enums import (
     EventType,
     ExecutionJobStatus,
     ExecutionOwner,
+    ExecutionSubstate,
     FinalVerdict,
+    InvestigationIntentStatus,
     Severity,
     SourceObjectKind,
     WritebackReadiness,
 )
 from app.models.source import SourceReference
 from app.services.action_execution_service import ActionExecutionService
-from app.services.context_service import EventContextStore, event_summary_from_security_event
+from app.services.context_service import (
+    EventContextStore,
+    append_context_journal_in_session,
+    event_summary_from_security_event,
+)
+from app.services.manual_resolution_service import ManualResolutionService
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.disposition_sync_service import DispositionSyncService
 from app.services.event_audit_log_service import EventAuditLogService
@@ -235,6 +243,7 @@ async def cleanup(
                 orm.ActionExecutionJob,
                 orm.DispositionReceipt,
                 orm.DispositionOutbox,
+                orm.GraphResumeIntent,
                 orm.Action,
                 orm.Evidence,
                 orm.Report,
@@ -1328,3 +1337,135 @@ async def test_direct_tool_replan_execution_result_enqueues_with_snapshot(
         assert outboxes[0].closure_cycle == 2
         assert outboxes[0].action_id == action.action_id
     assert summary.writeback_ids
+
+
+async def _seed_manual_hold(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_id: str,
+    *,
+    generation: int = 1,
+) -> None:
+    async with session_factory() as session:
+        async with session.begin():
+            await append_context_journal_in_session(
+                session,
+                event_id,
+                "manual_hold_generation",
+                generation,
+            )
+            await append_context_journal_in_session(
+                session,
+                event_id,
+                "manual_hold_detail",
+                {
+                    "reason": "verify_manual_resolution",
+                    "pending_action_ids": [],
+                    "pending_writeback_ids": [],
+                    "checkpoint_version": generation,
+                },
+            )
+            await append_context_journal_in_session(
+                session,
+                event_id,
+                "execution_substate",
+                ExecutionSubstate.MANUAL_RESOLUTION.value,
+            )
+
+
+@pytest.mark.asyncio
+async def test_resolve_unknown_creates_graph_resume_intent_on_manual_hold(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    disposition_sync: DispositionSyncService,
+    tool_executor: ToolExecutor,
+    state_machine: StateMachineService,
+    cleanup: None,
+) -> None:
+    resume = AsyncMock()
+    manual_resolution = ManualResolutionService(
+        session_factory,
+        resume_investigation=resume,
+    )
+    execution_service = ActionExecutionService(
+        session_factory,
+        disposition_sync=disposition_sync,
+        tool_executor=tool_executor,
+        state_machine=state_machine,
+        context_store=store,
+        manual_resolution=manual_resolution,
+    )
+    event_id = await _create_event(session_factory, store)
+    await _seed_manual_hold(session_factory, event_id)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, status=ActionStatus.UNKNOWN),
+    )
+    await execution_service.resolve_unknown(
+        action.action_id,
+        "mark_success",
+        principal="admin-1",
+        comment="verified offline",
+    )
+    async with session_factory() as session:
+        intent = await session.scalar(
+            select(orm.GraphResumeIntent).where(orm.GraphResumeIntent.event_id == event_id)
+        )
+        assert intent is not None
+        assert intent.resolution_kind == "action"
+        assert intent.subject_id == action.action_id
+        assert intent.hold_generation == 1
+        assert intent.status == InvestigationIntentStatus.PENDING.value
+    await manual_resolution.dispatch_sync_batch(limit=5)
+    resume.assert_awaited_once_with(event_id)
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(orm.GraphResumeIntent).where(orm.GraphResumeIntent.event_id == event_id)
+        )
+        assert row is not None
+        assert row.status == InvestigationIntentStatus.TERMINAL.value
+
+
+@pytest.mark.asyncio
+async def test_resolve_unknown_resume_intent_idempotent_by_operation(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    cleanup: None,
+) -> None:
+    manual_resolution = ManualResolutionService(session_factory, resume_investigation=AsyncMock())
+    event_id = await _create_event(session_factory, store)
+    await _seed_manual_hold(session_factory, event_id)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, status=ActionStatus.UNKNOWN),
+    )
+    first = await manual_resolution.create_resume_intent_after_resolution(
+        event_id=event_id,
+        resolution_kind="action",
+        subject_id=action.action_id,
+        operation_id="op-fixed-1",
+        resolution="mark_success",
+        principal="admin-1",
+        comment="same",
+    )
+    assert first is not None
+    assert first.idempotent_replay is False
+    second = await manual_resolution.create_resume_intent_after_resolution(
+        event_id=event_id,
+        resolution_kind="action",
+        subject_id=action.action_id,
+        operation_id="op-fixed-1",
+        resolution="mark_success",
+        principal="admin-1",
+        comment="same",
+    )
+    assert second is not None
+    assert second.idempotent_replay is True
+    async with session_factory() as session:
+        count = await session.scalar(
+            select(func.count()).select_from(orm.GraphResumeIntent).where(
+                orm.GraphResumeIntent.event_id == event_id
+            )
+        )
+        assert count == 1

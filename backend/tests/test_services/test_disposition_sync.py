@@ -67,6 +67,7 @@ from app.services.context_service import (
 )
 from app.services.disposition_command_factory import DispositionCommandFactory
 from app.services.disposition_sync_service import DispositionSyncService
+from app.services.manual_resolution_service import ManualResolutionService
 from tests.test_services._mock_xdr_test_helpers import (
     SCENARIO_INCIDENT_ID,
     fetch_mock_concurrency_token,
@@ -170,6 +171,7 @@ async def cleanup(
                 orm.ActionExecutionJob,
                 orm.DispositionReceipt,
                 orm.DispositionOutbox,
+                orm.GraphResumeIntent,
                 orm.Action,
                 orm.Evidence,
                 orm.Report,
@@ -2406,3 +2408,106 @@ async def test_deliver_execution_result_rejected_after_supersede(
         assert row is not None
         assert row.delivery_status == OutboxDeliveryStatus.DEAD_LETTER.value
         assert row.last_error_code == WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+
+async def _seed_manual_hold(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_id: str,
+    *,
+    generation: int = 1,
+) -> None:
+    async with session_factory() as session:
+        async with session.begin():
+            await append_context_journal_in_session(
+                session,
+                event_id,
+                "manual_hold_generation",
+                generation,
+            )
+            await append_context_journal_in_session(
+                session,
+                event_id,
+                "manual_hold_detail",
+                {
+                    "reason": "verify_manual_resolution",
+                    "pending_action_ids": [],
+                    "pending_writeback_ids": [],
+                    "checkpoint_version": generation,
+                },
+            )
+            await append_context_journal_in_session(
+                session,
+                event_id,
+                "execution_substate",
+                ExecutionSubstate.MANUAL_RESOLUTION.value,
+            )
+
+
+@pytest.mark.asyncio
+async def test_resolve_writeback_creates_graph_resume_intent_on_manual_hold(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+    cleanup: None,
+) -> None:
+    from app.models.enums import InvestigationIntentStatus
+
+    (
+        event_id,
+        action_id,
+        source_record_id,
+        locator,
+        concurrency_token,
+    ) = await _seed_event_action_source(session_factory, store, mock_xdr_client)
+    await _seed_manual_hold(session_factory, event_id)
+    resume = AsyncMock()
+    manual_resolution = ManualResolutionService(
+        session_factory,
+        resume_investigation=resume,
+    )
+    sync = _sync_service(
+        session_factory,
+        store,
+        mock_xdr_client,
+        resume=resume,
+    )
+    sync._manual_resolution = manual_resolution
+    async with session_factory() as session:
+        async with session.begin():
+            writeback_id = f"wbk-{_sfx()}"
+            session.add(
+                orm.DispositionOutbox(
+                    outbox_id=f"obx-{_sfx()}",
+                    writeback_id=writeback_id,
+                    disposition_id=f"disp-{_sfx()}",
+                    action_id=action_id,
+                    event_id=event_id,
+                    closure_cycle=1,
+                    source_record_id=source_record_id,
+                    source_locator_hash="hash",
+                    source_sequence=1,
+                    intent_kind="entity_action_submit",
+                    logical_slot="default",
+                    idempotency_key=f"idem-{_sfx()}",
+                    command_payload={"source_locator": locator.model_dump(mode="json")},
+                    command_payload_sha256="deadbeef",
+                    delivery_status="delivered",
+                    latest_writeback_status=WritebackStatus.UNKNOWN.value,
+                )
+            )
+    await sync.resolve_writeback(
+        writeback_id,
+        "manual_confirmed",
+        principal="admin-1",
+        comment="done",
+        evidence_ref="evidence://ok",
+    )
+    async with session_factory() as session:
+        intent = await session.scalar(
+            select(orm.GraphResumeIntent).where(orm.GraphResumeIntent.event_id == event_id)
+        )
+        assert intent is not None
+        assert intent.resolution_kind == "writeback"
+        assert intent.status == InvestigationIntentStatus.PENDING.value
+    await manual_resolution.dispatch_sync_batch(limit=5)
+    resume.assert_awaited_once_with(event_id)
