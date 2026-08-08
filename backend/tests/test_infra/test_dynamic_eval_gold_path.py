@@ -67,6 +67,14 @@ def test_select_pending_actions_prefers_l2(approve_mod) -> None:
             "plan_revision": 1,
         },
         {
+            "action_id": "act-l1",
+            "action_level": "l1",
+            "status": "waiting_approval",
+            "tool_name": "create_ticket",
+            "action_category": "response",
+            "plan_revision": 1,
+        },
+        {
             "action_id": "act-sys",
             "action_level": "l0",
             "status": "waiting_approval",
@@ -84,7 +92,8 @@ def test_select_pending_actions_prefers_l2(approve_mod) -> None:
         },
     ]
     pending = approve_mod.select_pending_actions(actions)
-    assert [a["action_id"] for a in pending] == ["act-l2", "act-l3"]
+    # L2 first, then remaining waiting non-system (including L1/L3).
+    assert [a["action_id"] for a in pending] == ["act-l2", "act-l1", "act-l3"]
 
 
 def test_event_outcome_ok_rejects_failed(full_loop_mod) -> None:
@@ -152,3 +161,111 @@ def test_full_loop_documents_seed_fixture_not_post_events() -> None:
     assert "POST /api/v1/events" in text or "POST /events" in text
     assert "include_response_execution" in text
     assert "APPROVAL_TIMEOUT" in text
+
+
+def test_parse_seed_stdout_multiline_json(full_loop_mod) -> None:
+    stdout = """
+[seed] starting
+{
+  "scenario_id": "insider_data_exfiltration",
+  "object_counts": {"incident": 1}
+}
+[seed] ingesting
+{
+  "accepted": 2,
+  "duplicate": 0,
+  "rejected": 0,
+  "degraded": false
+}
+"""
+    summary = full_loop_mod.parse_seed_stdout(stdout)
+    assert summary["accepted"] == 2
+    assert summary["rejected"] == 0
+
+
+def test_select_gold_event_ids_prefers_fresh_over_stale(full_loop_mod) -> None:
+    events = [
+        {
+            "event_id": "evt-stale",
+            "status": "new",
+            "title": "old leftover",
+            "created_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "event_id": "evt-fresh",
+            "status": "new",
+            "title": "insider data exfiltration finance",
+            "created_at": "2026-08-08T00:00:00Z",
+        },
+        {
+            "event_id": "evt-running",
+            "status": "analyzing",
+            "title": "insider data exfiltration",
+            "created_at": "2026-08-08T00:01:00Z",
+        },
+    ]
+    ids = full_loop_mod.select_gold_event_ids(
+        events,
+        max_events=1,
+        scenario="insider_data_exfiltration",
+        before_ids={"evt-stale"},
+    )
+    assert ids == ["evt-fresh"]
+
+
+def test_assert_evidence_ok_requires_non_failed(full_loop_mod) -> None:
+    ok = full_loop_mod.assert_evidence_ok(
+        {"event_context_snapshot": {"collection_status": "partial_done"}},
+        event_id="evt-1",
+    )
+    assert ok == "partial_done"
+    with pytest.raises(RuntimeError, match="collection_status='failed'"):
+        full_loop_mod.assert_evidence_ok(
+            {"event_context_snapshot": {"collection_status": "failed"}},
+            event_id="evt-1",
+        )
+    with pytest.raises(RuntimeError, match="evidence missing"):
+        full_loop_mod.assert_evidence_ok(
+            {"event_context_snapshot": {"risk_assessment": {}}},
+            event_id="evt-1",
+        )
+
+
+def test_run_gold_loop_fails_fast_when_waiting_without_actions(full_loop_mod) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_json(self, path: str):
+            if path.startswith("/api/v1/events/") and path.endswith("/actions"):
+                return {"items": []}
+            if "/actions?" in path:
+                return {"items": []}
+            return {
+                "event_id": "evt-stall",
+                "status": "waiting_approval",
+                "event_context_snapshot": {"collection_status": "completed"},
+            }
+
+        def post_json(self, path: str, body=None):
+            from dynamic_eval_approve import ApiResponse
+
+            if path.endswith("/investigate"):
+                return ApiResponse(
+                    status=202,
+                    data={"include_response_execution": True},
+                )
+            raise AssertionError(f"unexpected POST {path}")
+
+    client = _Client()
+    # Monkeypatch action list helper used by run_gold_loop.
+    full_loop_mod._WAITING_STALL_POLLS = 2
+    with pytest.raises(RuntimeError, match="no selectable human-gated actions"):
+        full_loop_mod.run_gold_loop(
+            client,
+            event_ids=["evt-stall"],
+            decision="approve",
+            generate_report=True,
+            poll_interval_s=0.01,
+            max_wait_s=5,
+        )

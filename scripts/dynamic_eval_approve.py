@@ -26,8 +26,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
-# Action levels that typically require a human gate (L2+).
-_HUMAN_GATED_LEVELS = frozenset({"l2", "l3", "L2", "L3"})
 _SKIP_TOOL_NAMES = frozenset({"generate_report"})
 
 TERMINAL_EVENT_STATUSES = frozenset(
@@ -135,20 +133,20 @@ class DynamicEvalClient:
 
 
 def is_human_gated_action(action: dict[str, Any]) -> bool:
-    """True when *action* is a response action waiting on a human decision."""
+    """True when *action* is waiting on a human decision (eval gold path).
+
+    Selects any non-system ``waiting_approval`` row so the gold path cannot stall
+    on unexpected levels; ``generate_report`` remains skipped.
+    """
     if action.get("tool_name") in _SKIP_TOOL_NAMES:
         return False
     if action.get("action_category") == "system":
         return False
-    level = str(action.get("action_level") or "")
-    status = str(action.get("status") or "")
-    if status != "waiting_approval":
-        return False
-    return level in _HUMAN_GATED_LEVELS or level.lower() in {"l2", "l3"}
+    return str(action.get("status") or "") == "waiting_approval"
 
 
 def select_pending_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Deterministic pending human-gated actions (L2+ preferred, then by id)."""
+    """Deterministic pending human-gated actions (L2 preferred, then by id)."""
     pending = [a for a in actions if is_human_gated_action(a)]
     return sorted(
         pending,
@@ -284,7 +282,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         if not outcomes:
-            print(f"[dynamic-eval-approve] no waiting_approval human-gated actions on {args.event_id}")
+            print(
+                "[dynamic-eval-approve] no waiting_approval human-gated actions "
+                f"on {args.event_id}"
+            )
         for row in outcomes:
             print(
                 f"[dynamic-eval-approve] {args.decision} {row['action_id']} "
