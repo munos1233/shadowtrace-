@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     llm_primary_model: str = Field(default="mock-model", alias="LLM_PRIMARY_MODEL")
     llm_fallback_models: str = Field(default="", alias="LLM_FALLBACK_MODELS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
+    structured_prompt_fast_fail: bool = Field(
+        default=False,
+        alias="STRUCTURED_PROMPT_FAST_FAIL",
+        description=(
+            "ISSUE-251: when true, all structured prompt_keys use the short "
+            "demo/eval timeout (15s). When false, only triage_extract / "
+            "query_rewrite keep 15s; plan/risk/response/storyline inherit "
+            "LLM_TIMEOUT_SECONDS."
+        ),
+    )
     llm_probe_enabled: bool = Field(default=False, alias="LLM_PROBE_ENABLED")
     llm_probe_ttl_seconds: int = Field(default=60, alias="LLM_PROBE_TTL_SECONDS")
     llm_probe_method: str = Field(default="chat", alias="LLM_PROBE_METHOD")

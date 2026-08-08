@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.agents.prompts.planner_prompt import (
     PLAN_GENERATE_SYSTEM,
     PlanGenerateLLMResponse,
+    PlanStepLLM,
     build_plan_generate_messages,
 )
 from app.agents.prompts.response_prompt import (
@@ -19,6 +23,7 @@ from app.agents.prompts.storyline_prompt import (
 from app.agents.prompts.triage_prompt import (
     TRIAGE_SYSTEM_PROMPT,
     TriageLLMResponse,
+    _slug_entity_id,
     build_triage_messages,
 )
 from app.core.llm.prompt_quality import (
@@ -26,6 +31,7 @@ from app.core.llm.prompt_quality import (
     STRUCTURED_PROMPT_TIMEOUT_SECONDS,
     compute_prompt_key_invalid_rates,
     is_invalid_json_failure,
+    resolve_structured_prompt_timeout,
 )
 from app.models.agent_io import (
     CollectionStatus,
@@ -41,6 +47,26 @@ def test_structured_timeout_is_short_demo_profile() -> None:
     assert STRUCTURED_PROMPT_TIMEOUT_SECONDS == 15.0
 
 
+def test_resolve_structured_prompt_timeout_preserves_short_keys_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.delenv("STRUCTURED_PROMPT_FAST_FAIL", raising=False)
+    assert resolve_structured_prompt_timeout("triage_extract") == 15.0
+    assert resolve_structured_prompt_timeout("query_rewrite") == 15.0
+    assert resolve_structured_prompt_timeout("plan_generate") is None
+    assert resolve_structured_prompt_timeout("risk_score") is None
+    assert resolve_structured_prompt_timeout("response_plan") is None
+    assert resolve_structured_prompt_timeout("storyline_generate") is None
+
+    monkeypatch.setenv("STRUCTURED_PROMPT_FAST_FAIL", "1")
+    get_settings.cache_clear()
+    assert resolve_structured_prompt_timeout("plan_generate") == 15.0
+    get_settings.cache_clear()
+
+
 def test_is_invalid_json_failure_prefers_error_class() -> None:
     assert is_invalid_json_failure(status="llm_invalid_json", error_class="empty_content")
     assert is_invalid_json_failure(status="llm_invalid_json", error_class="invalid_json")
@@ -48,6 +74,8 @@ def test_is_invalid_json_failure_prefers_error_class() -> None:
     assert is_invalid_json_failure(status="llm_invalid_json", error_class=None)
     assert not is_invalid_json_failure(status="llm_timeout", error_class="timeout")
     assert not is_invalid_json_failure(status="success", error_class=None)
+    # Spurious error_class on success must not inflate invalid rate.
+    assert not is_invalid_json_failure(status="success", error_class="empty_content")
 
 
 def test_compute_prompt_key_invalid_rates_demo_gate() -> None:
@@ -100,7 +128,7 @@ def test_triage_wire_model_fills_missing_entity_id_and_ignores_extras() -> None:
             "entities": {
                 "accounts": [{"username": "svc-backup", "extra_field": "drop-me"}],
                 "hosts": [{"hostname": "PC-OPS-01"}],
-                "ips": [],
+                "ips": [{"address": "1.2.3.4", "scope": "public"}],
                 "domains": [],
                 "processes": [],
                 "files": [],
@@ -111,6 +139,7 @@ def test_triage_wire_model_fills_missing_entity_id_and_ignores_extras() -> None:
     assert parsed.event_type == EventType.OTHER
     assert parsed.entities.accounts[0].entity_id.startswith("acct-")
     assert parsed.entities.hosts[0].entity_id.startswith("host-")
+    assert parsed.entities.ips[0].scope == "unknown"
     assert "JSON" in TRIAGE_SYSTEM_PROMPT.upper() or "json" in TRIAGE_SYSTEM_PROMPT
     messages = build_triage_messages("Account svc-backup failed login")
     assert "JSON only" in messages[1].content
@@ -127,6 +156,34 @@ def test_triage_wire_model_fills_missing_entity_id_and_ignores_extras() -> None:
     )
     assert preserved.entities.accounts[0].username == "alice"
     assert preserved.entities.hosts[0].hostname == "pc-1"
+
+
+def test_slug_entity_id_disambiguates_punctuation_variants() -> None:
+    a = _slug_entity_id("acct", "svc-backup")
+    b = _slug_entity_id("acct", "svc_backup")
+    c = _slug_entity_id("acct", "svc.backup")
+    assert a != b != c
+    assert a.startswith("acct-")
+    assert b.startswith("acct-")
+    assert c.startswith("acct-")
+
+
+def test_required_tools_string_wrapped_as_list() -> None:
+    step = PlanStepLLM.model_validate(
+        {"assigned_agent": "evidence_agent", "required_tools": "query_threat_intel"}
+    )
+    assert step.required_tools == ["query_threat_intel"]
+
+
+def test_empty_wire_models_reject_incomplete_payloads() -> None:
+    with pytest.raises(ValidationError):
+        PlanGenerateLLMResponse.model_validate({"steps": []})
+    with pytest.raises(ValidationError):
+        RiskScoreLLMResponse.model_validate({"factors": {}})
+    with pytest.raises(ValidationError):
+        ResponsePlanLLMResponse.model_validate({"actions": []})
+    with pytest.raises(ValidationError):
+        StorylineLLMResponse.model_validate({})
 
 
 def test_plan_wire_model_ignores_server_owned_fields() -> None:
@@ -171,7 +228,7 @@ def test_risk_storyline_response_wire_models_and_prompts() -> None:
                 "behavior_anomaly": {"score": 70, "reason": "anomaly"},
                 "evidence_confidence": {"score": 60},
                 "attack_stage": {"score": 50},
-                "data_sensitivity": {"bad": True},
+                "data_sensitivity": {"score": 55, "reason": "data"},
                 "threat_intel": {"score": 40, "reason": "ti"},
             },
             "raw_confidence": "0.7",
@@ -179,7 +236,21 @@ def test_risk_storyline_response_wire_models_and_prompts() -> None:
     )
     assert "asset_impact" in risk.factors
     assert risk.factors["asset_impact"].reason == "asset critical"
-    assert "data_sensitivity" not in risk.factors
+    assert "data_sensitivity" in risk.factors
+
+    with pytest.raises(ValidationError):
+        RiskScoreLLMResponse.model_validate(
+            {
+                "factors": {
+                    "asset_impact": {"score": "80"},
+                    "behavior_anomaly": {"score": 70},
+                    "evidence_confidence": {"score": 60},
+                    "attack_stage": {"score": 50},
+                    "data_sensitivity": {"bad": True},
+                    "threat_intel": {"score": 40},
+                }
+            }
+        )
 
     story = StorylineLLMResponse.model_validate(
         {
@@ -206,6 +277,7 @@ def test_risk_storyline_response_wire_models_and_prompts() -> None:
         }
     )
     assert len(response.actions) == 1
+    assert response.strategy_summary == "s"
 
     triage = TriageResult(
         event_type=EventType.OTHER,

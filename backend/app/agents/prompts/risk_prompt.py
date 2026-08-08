@@ -98,6 +98,13 @@ class RiskScoreLLMResponse(BaseModel):
             return value.strip().lower() in {"1", "true", "yes"}
         return bool(value)
 
+    @model_validator(mode="after")
+    def _require_all_factors(self) -> RiskScoreLLMResponse:
+        missing = [name for name in FACTOR_NAMES if name not in self.factors]
+        if missing:
+            raise ValueError(f"risk_score missing required factors: {missing}")
+        return self
+
 
 def build_risk_messages(
     *,

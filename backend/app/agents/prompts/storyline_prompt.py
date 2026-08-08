@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.llm.base import LLMMessage
 
@@ -88,6 +88,14 @@ class StorylineLLMResponse(BaseModel):
         if not isinstance(value, list):
             return []
         return [item for item in value if isinstance(item, dict)]
+
+    @model_validator(mode="after")
+    def _require_content(self) -> StorylineLLMResponse:
+        if str(self.narrative_summary or "").strip():
+            return self
+        if any(str(phase.phase_name or "").strip() or phase.entries for phase in self.phases):
+            return self
+        raise ValueError("storyline requires narrative_summary or at least one phase")
 
 
 def build_storyline_messages(

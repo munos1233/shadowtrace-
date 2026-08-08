@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.agents.evidence_agent import EVIDENCE_QUERY_ORDER
 from app.models.agent_io import ExecutionPlan, PlanBudget, TriageResult
@@ -37,6 +37,9 @@ class PlanStepLLM(BaseModel):
     @field_validator("required_tools", mode="before")
     @classmethod
     def _coerce_tools(cls, value: Any) -> list[str]:
+        if isinstance(value, str):
+            text = value.strip()
+            return [text] if text else []
         if not isinstance(value, list):
             return []
         return [str(item) for item in value if str(item).strip()]
@@ -81,6 +84,14 @@ class PlanGenerateLLMResponse(BaseModel):
             return PlanBudget.model_validate(value)
         except Exception:
             return None
+
+    @model_validator(mode="after")
+    def _require_usable_steps(self) -> PlanGenerateLLMResponse:
+        if not self.steps:
+            raise ValueError("plan steps must be non-empty")
+        if not any(str(step.assigned_agent or "").strip() for step in self.steps):
+            raise ValueError("plan requires at least one step with assigned_agent")
+        return self
 
 
 # --------------------------------------------------------------------------- #

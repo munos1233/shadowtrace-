@@ -94,6 +94,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional overall baseline invalid rate (e.g. 0.37 from round-2)",
     )
     parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Exit 0 when the input has no measurable structured calls",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON report",
@@ -121,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
             "improved_vs_baseline": (
                 None
                 if args.baseline_invalid_rate is None or overall_total == 0
-                else overall_rate < float(args.baseline_invalid_rate)
+                else overall_rate <= float(args.baseline_invalid_rate)
             ),
         },
         "report": report.model_dump(mode="json"),
@@ -131,20 +136,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         print("prompt_key invalid-rate report (ISSUE-251)")
-        print(
-            f"overall: invalid={overall_invalid}/{overall_total} "
-            f"rate={overall_rate:.3f}"
-        )
+        print(f"overall: invalid={overall_invalid}/{overall_total} rate={overall_rate:.3f}")
         if args.baseline_invalid_rate is not None:
             delta = overall_rate - float(args.baseline_invalid_rate)
-            print(
-                f"baseline: {float(args.baseline_invalid_rate):.3f} "
-                f"delta={delta:+.3f}"
-            )
+            print(f"baseline: {float(args.baseline_invalid_rate):.3f} delta={delta:+.3f}")
         for item in report.keys:
-            threshold = (
-                f"{item.demo_threshold:.2f}" if item.demo_threshold is not None else "-"
-            )
+            threshold = f"{item.demo_threshold:.2f}" if item.demo_threshold is not None else "-"
             gate = (
                 "ok"
                 if item.within_demo_threshold is True
@@ -157,10 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if overall_total == 0:
-        return 0
-    if args.baseline_invalid_rate is not None and overall_rate >= float(
-        args.baseline_invalid_rate
-    ):
+        return 0 if args.allow_empty else 2
+    if args.baseline_invalid_rate is not None and overall_rate > float(args.baseline_invalid_rate):
         return 2
     return 0 if report.all_within_demo_threshold else 1
 

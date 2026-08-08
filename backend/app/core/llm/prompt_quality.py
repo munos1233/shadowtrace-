@@ -35,8 +35,42 @@ STRUCTURED_PROMPT_KEYS: frozenset[str] = frozenset(
     }
 )
 
-# Short demo/eval timeout for structured JSON keys (fast fail vs LLM_TIMEOUT=30).
-STRUCTURED_PROMPT_TIMEOUT_SECONDS: float = 15.0
+# Short demo/eval timeout (fast fail). Applied to triage/query_rewrite by
+# default; other structured keys inherit client LLM_TIMEOUT unless
+# STRUCTURED_PROMPT_FAST_FAIL=1.
+STRUCTURED_PROMPT_FAST_FAIL_TIMEOUT_SECONDS: float = 15.0
+# Back-compat alias for callers/tests that still import the old name.
+STRUCTURED_PROMPT_TIMEOUT_SECONDS: float = STRUCTURED_PROMPT_FAST_FAIL_TIMEOUT_SECONDS
+
+# Keys that historically used an explicit 15s timeout on main.
+_SHORT_STRUCTURED_PROMPT_KEYS: frozenset[str] = frozenset(
+    {
+        "triage_extract",
+        "query_rewrite",
+    }
+)
+
+
+def resolve_structured_prompt_timeout(prompt_key: str) -> float | None:
+    """Return explicit chat timeout, or ``None`` to use the LLM client default.
+
+    Production keeps plan/risk/response/storyline on ``LLM_TIMEOUT_SECONDS``.
+    Demo/eval may set ``STRUCTURED_PROMPT_FAST_FAIL=1`` to force 15s on all
+    structured keys for quick failure.
+    """
+
+    key = (prompt_key or "").strip()
+    try:
+        from app.core.config import get_settings
+
+        if bool(get_settings().structured_prompt_fast_fail):
+            return STRUCTURED_PROMPT_FAST_FAIL_TIMEOUT_SECONDS
+    except Exception:
+        pass
+    if key in _SHORT_STRUCTURED_PROMPT_KEYS:
+        return STRUCTURED_PROMPT_FAST_FAIL_TIMEOUT_SECONDS
+    return None
+
 
 # Round-2 dynamic-eval baseline (ID-R2-005): overall success 27 / invalid 16.
 # Per-key rates were not published; use conservative demo ceilings below that
@@ -109,14 +143,18 @@ def _as_call_row(row: Mapping[str, Any] | object) -> _CallRow:
 def is_invalid_json_failure(*, status: str, error_class: str | None) -> bool:
     """True when a call should count toward prompt_key invalid rate.
 
-    Prefers ISSUE-240 ``error_class`` when present so empty_content vs
+    Successful rows never count, even if ``error_class`` is spuriously set.
+    Among failures, prefers ISSUE-240 ``error_class`` so empty_content vs
     invalid_json vs schema_validation stay distinguishable; falls back to
     status == llm_invalid_json for legacy rows.
     """
 
+    normalized_status = (status or "").strip().lower()
+    if normalized_status == "success":
+        return False
     if error_class and error_class in _INVALID_JSON_ERROR_CLASSES:
         return True
-    return status == "llm_invalid_json"
+    return normalized_status == "llm_invalid_json"
 
 
 def compute_prompt_key_invalid_rates(
@@ -217,6 +255,7 @@ async def aggregate_prompt_key_invalid_rates(
 
 __all__ = [
     "PROMPT_INVALID_RATE_DEMO_THRESHOLDS",
+    "STRUCTURED_PROMPT_FAST_FAIL_TIMEOUT_SECONDS",
     "STRUCTURED_PROMPT_KEYS",
     "STRUCTURED_PROMPT_TIMEOUT_SECONDS",
     "PromptKeyInvalidRate",
@@ -224,4 +263,5 @@ __all__ = [
     "aggregate_prompt_key_invalid_rates",
     "compute_prompt_key_invalid_rates",
     "is_invalid_json_failure",
+    "resolve_structured_prompt_timeout",
 ]

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.core.errors import LLMError
 from app.core.llm.base import BaseLLMClient, LLMMessage
-from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
+from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 from app.rag.context import RetrievalContext
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class QueryRewriter:
                 max_tokens=_QUERY_REWRITE_MAX_TOKENS,
                 json_mode=True,
                 response_model=QueryRewriteOutput,
-                timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+                timeout=resolve_structured_prompt_timeout("query_rewrite"),
             )
             parsed = response.parsed
             if isinstance(parsed, QueryRewriteOutput) and parsed.rewrites:

@@ -36,7 +36,7 @@ from app.agents.rules.default_plans import (
     get_revised_default_plan,
 )
 from app.core.llm.base import LLMMessage
-from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
+from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 from app.models.agent_io import (
     AGENT_INPUT_BY_NAME as _AGENT_INPUT_BY_NAME,
 )
@@ -405,7 +405,7 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             prompt_key="plan_generate",
             json_mode=True,
             response_model=PlanGenerateLLMResponse,
-            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            timeout=resolve_structured_prompt_timeout("plan_generate"),
         )
 
         if response.parsed is not None and isinstance(response.parsed, PlanGenerateLLMResponse):
@@ -446,7 +446,7 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             prompt_key="plan_revise",
             json_mode=True,
             response_model=PlanGenerateLLMResponse,
-            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            timeout=resolve_structured_prompt_timeout("plan_revise"),
         )
 
         if response.parsed is not None and isinstance(response.parsed, PlanGenerateLLMResponse):

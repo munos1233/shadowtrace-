@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.llm.base import LLMMessage
 from app.models.agent_io import EvidenceOutput, RiskAssessment, TriageResult
@@ -60,6 +60,14 @@ class ResponsePlanLLMResponse(BaseModel):
     @classmethod
     def _coerce_summary(cls, value: Any) -> str:
         return "" if value is None else str(value)
+
+    @model_validator(mode="after")
+    def _require_actions(self) -> ResponsePlanLLMResponse:
+        usable = [action for action in self.actions if str(action.tool_name or "").strip()]
+        if not usable:
+            raise ValueError("response_plan requires at least one action with tool_name")
+        self.actions = usable
+        return self
 
 
 def build_response_plan_messages(

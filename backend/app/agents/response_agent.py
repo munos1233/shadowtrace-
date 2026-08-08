@@ -28,7 +28,7 @@ from app.agents.rules.response_plan_quality_gate import (
 )
 from app.core.errors import LLMError
 from app.core.errors import ValidationError as ShadowValidationError
-from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
+from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 from app.core.llm.scenario_context import resolve_llm_scenario_id
 from app.db import models as orm
 from app.models.action import Action
@@ -944,16 +944,17 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
 
         if self.llm_client is not None and triage is not None:
             try:
-                llm_candidates = await self._generate_with_llm(
+                llm_candidates, strategy_summary = await self._generate_with_llm(
                     input=input,
                     triage=triage,
                     entities=entities,
                 )
                 if llm_candidates:
+                    summary = (strategy_summary or "").strip() or "LLM proposed candidate actions"
                     return (
                         llm_candidates,
                         ResponsePlanGeneratedBy.LLM,
-                        "LLM proposed candidate actions",
+                        summary[:500],
                     )
             except Exception as exc:
                 logger.warning(
@@ -975,7 +976,7 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
         input: ResponseAgentInput,
         triage: TriageResult,
         entities: EntitySet,
-    ) -> list[ActionCandidate]:
+    ) -> tuple[list[ActionCandidate], str]:
         assert self.llm_client is not None
         source_snapshot: dict[str, Any] | None = None
         if self.working_memory is not None:
@@ -1038,7 +1039,7 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             ),
             json_mode=True,
             response_model=ResponsePlanLLMResponse,
-            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            timeout=resolve_structured_prompt_timeout("response_plan"),
             max_tokens=2048,
         )
         if isinstance(response.parsed, ResponsePlanLLMResponse):
@@ -1064,7 +1065,7 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
                     step_order=idx + 1,
                 )
             )
-        return candidates
+        return candidates, wire.strategy_summary or ""
 
     def _build_deferred_candidate(
         self,

@@ -27,7 +27,7 @@ from app.agents.triage_risk_consistency import (
 )
 from app.agents.verdict_resolver import VerdictResolver
 from app.core.errors import LLMError
-from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
+from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 from app.core.llm.scenario_context import resolve_llm_scenario_id
 from app.models.agent_io import (
     LlmAdmissibility,
@@ -275,7 +275,7 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
             ),
             json_mode=True,
             response_model=RiskScoreLLMResponse,
-            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            timeout=resolve_structured_prompt_timeout("risk_score"),
             max_tokens=2048,
         )
         if isinstance(response.parsed, RiskScoreLLMResponse):

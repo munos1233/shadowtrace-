@@ -8,6 +8,7 @@ materializes a domain ``EntitySet`` for downstream validation.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -19,11 +20,16 @@ from app.models.enums import EventType
 
 _MAX_TRIAGE_SUMMARY_CHARS = 512
 _ENTITY_ID_RE = re.compile(r"[^a-z0-9]+")
+_IP_SCOPES = frozenset({"external", "internal", "unknown"})
 
 
 def _slug_entity_id(prefix: str, value: str) -> str:
-    cleaned = _ENTITY_ID_RE.sub("", (value or "").lower())[:24] or "unknown"
-    return f"{prefix}-{cleaned}"
+    """Stable id from natural key; hash suffix prevents punctuation collisions."""
+
+    raw = (value or "").strip().lower()
+    cleaned = _ENTITY_ID_RE.sub("", raw)[:24] or "unknown"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}-{cleaned}-{digest}"
 
 
 _ENTITY_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
@@ -99,6 +105,9 @@ def _coerce_entity_list(
             cleaned.pop("source_refs", None)
         if "attributes" in cleaned and not isinstance(cleaned["attributes"], dict):
             cleaned.pop("attributes", None)
+        if category == "ips" and "scope" in cleaned:
+            scope = str(cleaned.get("scope") or "").strip().lower()
+            cleaned["scope"] = scope if scope in _IP_SCOPES else "unknown"
         out.append(_fill_entity_id(cleaned, prefix=prefix, natural_key=natural_key))
     return out
 

@@ -17,7 +17,7 @@ from app.agents.prompts.storyline_prompt import (
     build_storyline_messages,
 )
 from app.core.errors import ShadowTraceError
-from app.core.llm.prompt_quality import STRUCTURED_PROMPT_TIMEOUT_SECONDS
+from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 
 # LLMError / LLMProviderError are runtime-importable from app.core.llm.base
 # even though only LLMProviderError is listed in __all__.  Catch Exception
@@ -202,7 +202,7 @@ class StorylineService:
             prompt_key="storyline_generate",
             json_mode=True,
             response_model=StorylineLLMResponse,
-            timeout=STRUCTURED_PROMPT_TIMEOUT_SECONDS,
+            timeout=resolve_structured_prompt_timeout("storyline_generate"),
             max_tokens=2048,
         )
         import json as _json
