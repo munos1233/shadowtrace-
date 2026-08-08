@@ -21,6 +21,7 @@ from app.api.v1 import schemas as s
 from app.api.v1.deps import (
     _get_context_store,
     _get_session_factory,
+    get_disposition_source_service,
     get_event_lease,
     get_event_service,
     get_pipeline,
@@ -28,11 +29,9 @@ from app.api.v1.deps import (
     get_super_agent,
 )
 from app.api.v1.errors import (
-    DispositionPermissionDenied,
     EventNotFoundError,
     InvalidStateTransitionError,
     ResourceNotFoundError,
-    WritebackConflictError,
     WritebackUnsupportedError,
 )
 from app.core.auth import (
@@ -54,7 +53,6 @@ from app.core.errors import (
 )
 from app.db import models as orm
 from app.models.action import Action as ActionModel
-from app.models.disposition import SourceObjectLocator
 from app.models.enums import (
     ActionStatus,
     DecisionTraceEntryType,
@@ -63,7 +61,6 @@ from app.models.enums import (
     EventType,
     FinalVerdict,
     Severity,
-    SourceObjectKind,
     WritebackReadiness,
     WritebackStatus,
 )
@@ -84,9 +81,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["events"])
-
-# Source objects associated with the example event (contract-test backward compat).
-_ASSOCIATED_SOURCE_RECORDS = {"src-associated-1"}
 
 
 # --------------------------------------------------------------------------- #
@@ -2056,78 +2050,19 @@ async def select_disposition_source(
     event_id: str,
     body: s.SelectDispositionSourceRequest,
     principal: Annotated[Principal, require_roles(ROLE_DISPOSITION_OPERATOR)],
-    event_service: EventService = Depends(get_event_service),
+    disposition_source_service: Annotated[Any, Depends(get_disposition_source_service)],
 ) -> s.DispositionSourceSelectResponse:
-    event = await event_service.get_event(event_id)
-    if event is None:
-        raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
-
-    # Optimistic concurrency.
-    if body.expected_event_version != event.row_version:
-        raise WritebackConflictError(
-            "event version mismatch",
-            details={"expected": body.expected_event_version, "actual": event.row_version},
-        )
-
-    # Validate source is associated.
-    sf = _try_get_session_factory()
-    if sf is not None:
-        try:
-            async with sf() as session:
-                link = await session.scalar(
-                    select(orm.SourceEventLink).where(
-                        orm.SourceEventLink.source_record_id == body.source_record_id,
-                        orm.SourceEventLink.event_id == event_id,
-                    )
-                )
-                if link is None:
-                    raise DispositionPermissionDenied(
-                        "source object is not associated with this event",
-                        details={"source_record_id": body.source_record_id, "event_id": event_id},
-                    )
-
-                source_obj = await session.scalar(
-                    select(orm.SourceObject).where(
-                        orm.SourceObject.source_record_id == body.source_record_id
-                    )
-                )
-                if source_obj is None:
-                    raise DispositionPermissionDenied(
-                        "source object not found",
-                        details={"source_record_id": body.source_record_id},
-                    )
-
-                locator = SourceObjectLocator(
-                    source_product=source_obj.source_product,
-                    source_tenant_id=source_obj.source_tenant_id,
-                    connector_id=source_obj.connector_id,
-                    source_kind=SourceObjectKind(source_obj.source_kind),
-                    source_object_id=source_obj.source_object_id,
-                )
-                return s.DispositionSourceSelectResponse(
-                    event_id=event_id,
-                    disposition_source_ref=locator,
-                    event_version=event.row_version + 1,
-                )
-        except Exception:
-            logger.warning("DB unavailable for disposition-source validation", exc_info=True)
-
-    # DB unavailable fallback — use static associated set.
-    if body.source_record_id not in _ASSOCIATED_SOURCE_RECORDS:
-        raise DispositionPermissionDenied(
-            "source object is not an associated, tenant-consistent source for this event",
-            details={"source_record_id": body.source_record_id},
-        )
+    result = await disposition_source_service.select_disposition_source(
+        event_id,
+        source_record_id=body.source_record_id,
+        expected_event_version=body.expected_event_version,
+        operator=principal.subject,
+        comment=body.comment,
+    )
     return s.DispositionSourceSelectResponse(
-        event_id=event_id,
-        disposition_source_ref=SourceObjectLocator(
-            source_product="mock_xdr",
-            source_tenant_id="t1",
-            connector_id="conn-mock-1",
-            source_kind=s.example_source_reference().source_kind,
-            source_object_id="INC-1001",
-        ),
-        event_version=event.row_version + 1,
+        event_id=result.event_id,
+        disposition_source_ref=result.disposition_source_ref,
+        event_version=result.event_version,
     )
 
 
@@ -2144,22 +2079,15 @@ async def recheck_disposition_readiness(
     event_id: str,
     body: s.RecheckDispositionReadinessRequest,
     principal: Annotated[Principal, require_roles(ROLE_DISPOSITION_OPERATOR)],
-    event_service: EventService = Depends(get_event_service),
+    disposition_source_service: Annotated[Any, Depends(get_disposition_source_service)],
 ) -> s.ReadinessRecheckResponse:
-    event = await event_service.get_event(event_id)
-    if event is None:
-        raise EventNotFoundError(f"event {event_id} not found", details={"event_id": event_id})
-
-    if body.expected_event_version != event.row_version:
-        raise WritebackConflictError(
-            "event version mismatch",
-            details={"expected": body.expected_event_version, "actual": event.row_version},
-        )
-
-    # Recheck: recompute readiness without external call.
+    result = await disposition_source_service.recheck_disposition_readiness(
+        event_id,
+        expected_event_version=body.expected_event_version,
+    )
     return s.ReadinessRecheckResponse(
-        event_id=event_id,
-        writeback_readiness=WritebackReadiness.CAPABILITY_UNKNOWN,
-        blocked_reason="capability_unknown",
-        event_version=event.row_version,
+        event_id=result.event_id,
+        writeback_readiness=result.writeback_readiness,
+        blocked_reason=result.blocked_reason,
+        event_version=result.event_version,
     )

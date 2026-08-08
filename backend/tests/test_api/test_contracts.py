@@ -15,12 +15,14 @@ from pydantic import ValidationError
 from app.api.v1 import schemas as s
 from app.api.v1.deps import _get_context_store as _real_get_context_store
 from app.api.v1.deps import _get_session_factory as _real_get_session_factory
+from app.api.v1.deps import get_disposition_source_service as _real_get_disposition_source_service
 from app.api.v1.deps import get_disposition_sync as _real_get_disposition_sync
 from app.api.v1.deps import get_event_service as _real_get_event_service
 from app.api.v1.deps import get_state_machine as _real_get_state_machine
 from app.api.v1.errors import register_exception_handlers
 from app.core.config import get_settings
 from app.core.errors import (
+    DispositionPermissionDenied,
     EventNotFoundError,
     WritebackConflictError,
 )
@@ -29,7 +31,7 @@ from app.core.errors import (
 )
 from app.main import app
 from app.models.context import EventContext
-from app.models.disposition import DispositionCommand
+from app.models.disposition import DispositionCommand, SourceObjectLocator
 from app.models.enums import (
     DispositionPolicy,
     EventStatus,
@@ -133,7 +135,11 @@ def client() -> TestClient:
     async def _mock_disposition_sync() -> _MockDispositionSyncService:
         return _MockDispositionSyncService()
 
+    async def _mock_disposition_source() -> _MockDispositionSourceService:
+        return _MockDispositionSourceService()
+
     app.dependency_overrides[_real_get_disposition_sync] = _mock_disposition_sync
+    app.dependency_overrides[_real_get_disposition_source_service] = _mock_disposition_source
     app.dependency_overrides[_real_get_context_store] = lambda: _MockContextStore()
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -399,6 +405,74 @@ class _MockDispositionSyncService:
     async def process_ready_outboxes(self, *, limit: int = 10) -> int:
         _ = limit
         return 0
+
+
+class _MockDispositionSourceService:
+    """DB-free disposition source / readiness stub for contract tests."""
+
+    async def select_disposition_source(
+        self,
+        event_id: str,
+        *,
+        source_record_id: str,
+        expected_event_version: int,
+        operator: str,
+        comment: str | None = None,
+    ) -> Any:
+        _ = (operator, comment)
+        if event_id != s.EXAMPLE_EVENT_ID:
+            raise EventNotFoundError(
+                f"event {event_id} not found",
+                details={"event_id": event_id},
+            )
+        if expected_event_version != 1:
+            raise WritebackConflictError(
+                "event version mismatch",
+                details={"expected": expected_event_version, "actual": 1},
+            )
+        if source_record_id != "src-associated-1":
+            raise DispositionPermissionDenied(
+                "source object is not associated with this event",
+                details={"source_record_id": source_record_id, "event_id": event_id},
+            )
+        from app.services.disposition_source_service import DispositionSourceSelectResult
+
+        return DispositionSourceSelectResult(
+            event_id=event_id,
+            disposition_source_ref=SourceObjectLocator(
+                source_product="mock_xdr",
+                source_tenant_id="t1",
+                connector_id="conn-mock-1",
+                source_kind=s.example_source_reference().source_kind,
+                source_object_id="INC-1001",
+            ),
+            event_version=2,
+        )
+
+    async def recheck_disposition_readiness(
+        self,
+        event_id: str,
+        *,
+        expected_event_version: int,
+    ) -> Any:
+        if event_id != s.EXAMPLE_EVENT_ID:
+            raise EventNotFoundError(
+                f"event {event_id} not found",
+                details={"event_id": event_id},
+            )
+        if expected_event_version != 1:
+            raise WritebackConflictError(
+                "event version mismatch",
+                details={"expected": expected_event_version, "actual": 1},
+            )
+        from app.services.disposition_source_service import DispositionReadinessRecheckResult
+
+        return DispositionReadinessRecheckResult(
+            event_id=event_id,
+            writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+            blocked_reason=None,
+            event_version=1,
+        )
 
 
 class _MockStateMachine:
