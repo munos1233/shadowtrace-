@@ -75,3 +75,5 @@ class InvestigationState(TypedDict, total=False):
     # resumes via approval_engine / resume_investigation. Workflow unit tests
     # pass defer_response_execution=False via _base_state().
     defer_response_execution: bool
+    # ISSUE-277: incremented on each manual_hold_node entry; paired with journal CAS.
+    manual_hold_generation: int | None

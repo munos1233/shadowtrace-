@@ -94,3 +94,6 @@ class EventContext(BaseModel):
     storyline_degraded: dict[str, Any] | None = None
     # ISSUE-209: durable human classification override (not a machine-write path).
     classification_override: dict[str, Any] | None = None
+    # ISSUE-277: manual hold generation + metadata for durable graph resume CAS.
+    manual_hold_generation: int | None = None
+    manual_hold_detail: dict[str, Any] | None = None

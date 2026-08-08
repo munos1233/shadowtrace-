@@ -1055,6 +1055,42 @@ class InvestigationIntent(Base):
     )
 
 
+class GraphResumeIntent(Base):
+    """PostgreSQL durable graph resume intent after manual resolution (ISSUE-277 / #873)."""
+
+    __tablename__ = "graph_resume_intent"
+    __table_args__ = (
+        UniqueConstraint("operation_id", name="uq_graph_resume_intent_operation_id"),
+        Index("ix_graph_resume_intent_status_updated", "status", "updated_at"),
+        Index("ix_graph_resume_intent_claim_expires", "claim_expires_at"),
+    )
+
+    intent_id: Mapped[str] = mapped_column(String, primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("security_event.event_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    operation_id: Mapped[str] = mapped_column(String, nullable=False)
+    resolution_kind: Mapped[str] = mapped_column(String, nullable=False)
+    subject_id: Mapped[str] = mapped_column(String, nullable=False)
+    hold_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    checkpoint_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    claim_owner: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
+    broker_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_TS, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        _TS, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class KnowledgeReleaseORM(Base):
     """ATT&CK STIX knowledge release registry (ISSUE-128 / #634)."""
 

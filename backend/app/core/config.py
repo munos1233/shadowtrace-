@@ -395,6 +395,27 @@ class Settings(BaseSettings):
         ge=1,
     )
 
+    graph_resume_claim_lease_s: int = Field(
+        default=30,
+        alias="GRAPH_RESUME_CLAIM_LEASE_S",
+        ge=5,
+    )
+    graph_resume_max_attempts: int = Field(
+        default=5,
+        alias="GRAPH_RESUME_MAX_ATTEMPTS",
+        ge=1,
+    )
+    graph_resume_dispatch_interval_s: int = Field(
+        default=10,
+        alias="GRAPH_RESUME_DISPATCH_INTERVAL_S",
+        ge=5,
+    )
+    graph_resume_reconcile_interval_s: int = Field(
+        default=60,
+        alias="GRAPH_RESUME_RECONCILE_INTERVAL_S",
+        ge=10,
+    )
+
     auto_response_enabled: bool = Field(default=False, alias="AUTO_RESPONSE_ENABLED")
     auto_response_min_severity: str = Field(
         default="high",

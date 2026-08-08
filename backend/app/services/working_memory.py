@@ -74,6 +74,9 @@ FIELD_OWNERSHIP: dict[str, str] = {
     "storyline_degraded": "StorylineService",
     # ISSUE-209 — analyst classification override (API via EventService)
     "classification_override": "EventService",
+    # ISSUE-277 — manual hold metadata for durable graph resume CAS
+    "manual_hold_generation": "ManualResolutionService",
+    "manual_hold_detail": "ManualResolutionService",
 }
 
 # Legacy writer alias kept for journal entries written before ISSUE-114 hook removal.

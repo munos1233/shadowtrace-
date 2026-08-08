@@ -418,6 +418,15 @@ class ApprovalDecisionConflictError(ShadowTraceError):
     default_retryable = False
 
 
+class ManualResolutionConflictError(ShadowTraceError):
+    """Conflicting manual resolution or stale hold generation (ISSUE-277 / #873)."""
+
+    status_code = 409
+    default_error_code = "manual_resolution_conflict"
+    default_category = ErrorCategory.PERMANENT
+    default_retryable = False
+
+
 # Writeback / disposition HTTP domain errors (ISSUE-004 codes; registered above).
 
 
