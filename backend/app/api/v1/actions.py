@@ -9,6 +9,8 @@ from fastapi import APIRouter
 from app.api.v1 import schemas as s
 from app.api.v1.deps import ActionExecutionDep, ApprovalEngineDep
 from app.core.auth import ROLE_ADMIN, ROLE_APPROVER, Principal, require_roles
+from app.models.enums import ActionStatus
+from app.services.approval_engine import approval_status_label
 
 router = APIRouter(tags=["actions"])
 
@@ -27,11 +29,14 @@ async def approve_action(
         body.decision_id,
     )
     await engine.scan_timeouts()
+    status = approval_status_label(
+        outcome.persisted_status or ActionStatus.APPROVED,
+    )
     return s.ActionOperationResponse(
         action_id=action_id,
-        status="approved",
-        decision_id=body.decision_id,
-        message="approved",
+        status=status,
+        decision_id=outcome.decision_id or body.decision_id,
+        message=status,
         resume_status=outcome.resume_status,
         degraded=outcome.resume_degraded if outcome.resume_degraded else None,
     )
@@ -51,11 +56,14 @@ async def reject_action(
         body.decision_id,
     )
     await engine.scan_timeouts()
+    status = approval_status_label(
+        outcome.persisted_status or ActionStatus.REJECTED,
+    )
     return s.ActionOperationResponse(
         action_id=action_id,
-        status="rejected",
-        decision_id=body.decision_id,
-        message="rejected",
+        status=status,
+        decision_id=outcome.decision_id or body.decision_id,
+        message=status,
         resume_status=outcome.resume_status,
         degraded=outcome.resume_degraded if outcome.resume_degraded else None,
     )

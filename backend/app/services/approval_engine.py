@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -78,6 +80,80 @@ class ApprovalOutcome:
 
     resume_status: Literal["ok", "failed", "skipped"] | None = None
     resume_degraded: bool = False
+    persisted_status: ActionStatus | None = None
+    decision_id: str | None = None
+    idempotent_replay: bool = False
+
+
+ApprovalOperation = Literal["approve", "reject"]
+
+
+@dataclass(frozen=True)
+class _ApprovalIdempotencyBinding:
+    operation: ApprovalOperation
+    payload_hash: str
+
+
+def approval_status_label(status: ActionStatus) -> str:
+    """Map persisted action status to API-facing approval label."""
+    if status is ActionStatus.APPROVED:
+        return "approved"
+    if status is ActionStatus.REJECTED:
+        return "rejected"
+    return status.value
+
+
+def _approval_operation(target_status: ActionStatus) -> ApprovalOperation:
+    return "approve" if target_status is ActionStatus.APPROVED else "reject"
+
+
+def _normalize_approval_comment(comment: str | None) -> str:
+    if comment is None:
+        return ""
+    return comment.strip()
+
+
+def _approval_payload_hash(*, comment: str | None) -> str:
+    material = {"comment": _normalize_approval_comment(comment)}
+    return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
+
+
+def _idempotency_binding_from_record(
+    record: ApprovalRecordORM,
+    *,
+    action_status: ActionStatus,
+) -> _ApprovalIdempotencyBinding:
+    detail = record.detail if isinstance(record.detail, dict) else {}
+    stored = detail.get("idempotency")
+    if isinstance(stored, dict) and stored.get("operation") and stored.get("payload_hash"):
+        return _ApprovalIdempotencyBinding(
+            operation=cast(ApprovalOperation, stored["operation"]),
+            payload_hash=str(stored["payload_hash"]),
+        )
+    if action_status is ActionStatus.APPROVED:
+        operation: ApprovalOperation = "approve"
+    elif action_status is ActionStatus.REJECTED:
+        operation = "reject"
+    else:
+        operation = "approve"
+    return _ApprovalIdempotencyBinding(
+        operation=operation,
+        payload_hash=_approval_payload_hash(comment=record.comment),
+    )
+
+
+def _persist_idempotency_detail(
+    record: ApprovalRecordORM,
+    *,
+    operation: ApprovalOperation,
+    payload_hash: str,
+) -> None:
+    detail = dict(record.detail) if isinstance(record.detail, dict) else {}
+    detail["idempotency"] = {
+        "operation": operation,
+        "payload_hash": payload_hash,
+    }
+    record.detail = detail
 
 
 def evaluate_hard_gates(
@@ -470,6 +546,8 @@ class ApprovalEngine:
         decision_id: str | None,
         target_status: ActionStatus,
     ) -> ApprovalOutcome:
+        operation = _approval_operation(target_status)
+        payload_hash = _approval_payload_hash(comment=comment)
         async with self._session_factory() as session:
             async with session.begin():
                 row = await self._load_action_row(session, action_id, for_update=True)
@@ -498,22 +576,20 @@ class ApprovalEngine:
                         validate_approval_binding(action, pending.detail)
 
                 if decision_id:
-                    replay = await session.scalar(
-                        select(ApprovalRecordORM).where(
-                            ApprovalRecordORM.action_id == action_id,
-                            ApprovalRecordORM.decision_id == decision_id,
-                            ApprovalRecordORM.decided_at.is_not(None),
-                        )
+                    replay_outcome = await self._resolve_idempotent_replay(
+                        session,
+                        action_id=action_id,
+                        decision_id=decision_id,
+                        operation=operation,
+                        payload_hash=payload_hash,
+                        action_row=row,
                     )
-                    if replay is not None:
-                        # Idempotent decision_id replay: no new transition / resume.
-                        return ApprovalOutcome()
+                    if replay_outcome is not None:
+                        return replay_outcome
 
                 record = await self._load_pending_record_row(session, action_id)
 
                 if record is not None and record.decided_at is not None:
-                    if decision_id and record.decision_id == decision_id:
-                        return ApprovalOutcome()
                     raise ApprovalDecisionConflictError(
                         "approval already decided by another operator",
                         details={
@@ -570,6 +646,11 @@ class ApprovalEngine:
                 record.comment = comment
                 record.decided_at = now
                 record.decision_id = decision_id
+                _persist_idempotency_detail(
+                    record,
+                    operation=operation,
+                    payload_hash=payload_hash,
+                )
                 validate_action_status_transition(
                     action.action_category,
                     action.status,
@@ -597,6 +678,51 @@ class ApprovalEngine:
         return ApprovalOutcome(
             resume_status=resume_status,
             resume_degraded=resume_status == "failed",
+            persisted_status=target_status,
+            decision_id=decision_id,
+        )
+
+    async def _resolve_idempotent_replay(
+        self,
+        session: AsyncSession,
+        *,
+        action_id: str,
+        decision_id: str,
+        operation: ApprovalOperation,
+        payload_hash: str,
+        action_row: orm.Action,
+    ) -> ApprovalOutcome | None:
+        replay = await session.scalar(
+            select(ApprovalRecordORM).where(
+                ApprovalRecordORM.decision_id == decision_id,
+                ApprovalRecordORM.decided_at.is_not(None),
+            )
+        )
+        if replay is None:
+            return None
+        if replay.action_id != action_id:
+            raise ApprovalDecisionConflictError(
+                "decision_id already used",
+                details={"decision_id": decision_id},
+            )
+        stored = _idempotency_binding_from_record(
+            replay,
+            action_status=ActionStatus(action_row.status),
+        )
+        if stored.operation != operation or stored.payload_hash != payload_hash:
+            raise ApprovalDecisionConflictError(
+                "decision_id replay operation or payload mismatch",
+                details={
+                    "decision_id": decision_id,
+                    "action_id": action_id,
+                    "expected_operation": stored.operation,
+                    "requested_operation": operation,
+                },
+            )
+        return ApprovalOutcome(
+            persisted_status=ActionStatus(action_row.status),
+            decision_id=decision_id,
+            idempotent_replay=True,
         )
 
     async def _persist_evaluation(

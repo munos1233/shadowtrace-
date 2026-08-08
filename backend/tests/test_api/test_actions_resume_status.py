@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.deps import get_approval_engine
 from app.core.config import get_settings
 from app.main import app
+from app.models.enums import ActionStatus
 from app.services.approval_engine import ApprovalOutcome
 
 _DEV_TOKENS = json.dumps(
@@ -41,7 +42,11 @@ def test_approve_response_includes_resume_failed_and_degraded(
 ) -> None:
     class _ResumeFailedEngine:
         async def approve(self, *args: object, **kwargs: object) -> ApprovalOutcome:
-            return ApprovalOutcome(resume_status="failed", resume_degraded=True)
+            return ApprovalOutcome(
+                resume_status="failed",
+                resume_degraded=True,
+                persisted_status=ActionStatus.APPROVED,
+            )
 
         async def reject(self, *args: object, **kwargs: object) -> ApprovalOutcome:
             return ApprovalOutcome()
@@ -74,7 +79,11 @@ def test_approve_response_omits_degraded_when_resume_ok(
 ) -> None:
     class _ResumeOkEngine:
         async def approve(self, *args: object, **kwargs: object) -> ApprovalOutcome:
-            return ApprovalOutcome(resume_status="ok", resume_degraded=False)
+            return ApprovalOutcome(
+                resume_status="ok",
+                resume_degraded=False,
+                persisted_status=ActionStatus.APPROVED,
+            )
 
         async def reject(self, *args: object, **kwargs: object) -> ApprovalOutcome:
             return ApprovalOutcome()

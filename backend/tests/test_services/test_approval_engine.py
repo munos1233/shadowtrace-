@@ -631,6 +631,7 @@ async def test_decision_id_replay_is_idempotent(
     session_factory: async_sessionmaker[AsyncSession],
     store: EventContextStore,
     engine: ApprovalEngine,
+    fake_bus: FakeEventBus,
 ) -> None:
     event_id = await _create_event(session_factory, store)
     action = await _insert_action(
@@ -640,8 +641,89 @@ async def test_decision_id_replay_is_idempotent(
     )
     await engine.evaluate(action, _risk(), approval_cycle=0)
     principal = Principal(subject="approver-1", roles=["approver"])
-    await engine.approve(action.action_id, principal, "ok", "dec-replay")
-    await engine.approve(action.action_id, principal, "ok", "dec-replay")
+    first = await engine.approve(action.action_id, principal, "ok", "dec-replay")
+    second = await engine.approve(action.action_id, principal, "ok", "dec-replay")
+    assert first.persisted_status is ActionStatus.APPROVED
+    assert first.idempotent_replay is False
+    assert second.persisted_status is ActionStatus.APPROVED
+    assert second.idempotent_replay is True
+    approval_updates = [item for item in fake_bus.published if item[1] == "approval_updated"]
+    assert len(approval_updates) == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_id_reject_replay_is_idempotent(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine: ApprovalEngine,
+    fake_bus: FakeEventBus,
+) -> None:
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4),
+    )
+    await engine.evaluate(action, _risk(), approval_cycle=0)
+    principal = Principal(subject="approver-1", roles=["approver"])
+    first = await engine.reject(action.action_id, principal, "no", "dec-reject-replay")
+    second = await engine.reject(action.action_id, principal, "no", "dec-reject-replay")
+    assert first.persisted_status is ActionStatus.REJECTED
+    assert second.idempotent_replay is True
+    approval_updates = [item for item in fake_bus.published if item[1] == "approval_updated"]
+    assert len(approval_updates) == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_id_cross_operation_conflict(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine: ApprovalEngine,
+    fake_bus: FakeEventBus,
+) -> None:
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4),
+    )
+    await engine.evaluate(action, _risk(), approval_cycle=0)
+    principal = Principal(subject="approver-1", roles=["approver"])
+    await engine.approve(action.action_id, principal, "ok", "dec-cross")
+    with pytest.raises(ApprovalDecisionConflictError) as exc_info:
+        await engine.reject(action.action_id, principal, "no", "dec-cross")
+    assert "operation or payload mismatch" in str(exc_info.value)
+    async with session_factory() as session:
+        row = await session.get(orm.Action, action.action_id)
+        assert row is not None
+        assert row.status == ActionStatus.APPROVED.value
+    approval_updates = [item for item in fake_bus.published if item[1] == "approval_updated"]
+    assert len(approval_updates) == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_id_payload_mismatch_conflict(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine: ApprovalEngine,
+) -> None:
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L4),
+    )
+    await engine.evaluate(action, _risk(), approval_cycle=0)
+    principal = Principal(subject="approver-1", roles=["approver"])
+    await engine.approve(action.action_id, principal, "first comment", "dec-payload")
+    with pytest.raises(ApprovalDecisionConflictError):
+        await engine.approve(action.action_id, principal, "different comment", "dec-payload")
+    async with session_factory() as session:
+        record = await session.scalar(
+            select(ApprovalRecordORM).where(ApprovalRecordORM.action_id == action.action_id)
+        )
+        assert record is not None
+        assert record.comment == "first comment"
 
 
 @pytest.mark.asyncio
