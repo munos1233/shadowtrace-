@@ -16,8 +16,10 @@ References
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -60,6 +62,38 @@ from app.services.writeback_close_gate import build_closed_gate_actions
 logger = logging.getLogger(__name__)
 
 _STATE_MACHINE_OPERATOR = "StateMachineService"
+_REDIS_CONTEXT_UNAVAILABLE_FLAG = "redis_context_unavailable"
+_STATE_TRANSITION_PROJECTION_DEGRADED_FLAG = "state_transition_projection_degraded"
+
+ProjectionFailureKind = Literal["exception", "redis_degraded"]
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextProjectionStepResult:
+    """Outcome of one post-commit EventContext projection step."""
+
+    step: str
+    ok: bool
+    degraded: bool
+    failure_kind: ProjectionFailureKind | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSyncResult:
+    """Post-commit projection outcome — transition is already committed in PostgreSQL."""
+
+    projection_ok: bool
+    steps: tuple[ContextProjectionStepResult, ...]
+
+    @property
+    def has_exception_failure(self) -> bool:
+        return any(step.failure_kind == "exception" for step in self.steps if step.degraded)
+
+    @property
+    def has_redis_degraded_failure(self) -> bool:
+        return any(step.failure_kind == "redis_degraded" for step in self.steps if step.degraded)
 
 
 def _utc_now() -> datetime:
@@ -421,7 +455,18 @@ class StateMachineService:
         # --- post-commit side effects (best-effort, never roll back) ---
 
         # 8. Sync EventContext (event summary + state_history).
-        await self._sync_context_after_transition(event_id, row, current, target, op, reason)
+        sync_result = await self._sync_context_after_transition(
+            event_id, row, current, target, op, reason
+        )
+        if not sync_result.projection_ok:
+            logger.warning(
+                "transition committed with degraded projection event_id=%s "
+                "%s→%s steps=%s",
+                event_id,
+                current.value,
+                target.value,
+                [step.step for step in sync_result.steps if step.degraded],
+            )
 
         # 9. Publish state_change via EventBus.
         if self._bus is not None:
@@ -513,9 +558,15 @@ class StateMachineService:
         # see the force-close consistently with transition().  This also handles
         # refresh_closed_snapshot + set_closed_ttl for the CLOSED target — no
         # need to duplicate those calls here.
-        await self._sync_context_after_transition(
+        sync_result = await self._sync_context_after_transition(
             event_id, row, current, EventStatus.CLOSED, principal, reason_text
         )
+        if not sync_result.projection_ok:
+            logger.warning(
+                "force_close committed with degraded projection event_id=%s steps=%s",
+                event_id,
+                [step.step for step in sync_result.steps if step.degraded],
+            )
 
         # Publish state_change.
         if self._bus is not None:
@@ -560,6 +611,30 @@ class StateMachineService:
             }
             for r in rows
         ]
+
+    async def repair_transition_projection(self, event_id: str) -> ContextSyncResult:
+        """Idempotently rebuild EventContext projection from authoritative PostgreSQL state.
+
+        Does **not** replay status transitions, audit entries, or external side
+        effects. Safe to retry after post-commit projection degradation.
+        """
+        async with self._session_factory() as session:
+            row = await session.get(orm.SecurityEvent, event_id)
+            if row is None:
+                raise EventNotFoundError(
+                    f"security_event not found: {event_id}",
+                    details={"event_id": event_id},
+                )
+
+        target = EventStatus(row.status)
+        history = await self._state_history_from_audit_log(event_id)
+        return await self._project_context(
+            event_id,
+            row,
+            target=target,
+            history=history,
+            sync_replan_count=int(row.replan_count or 0) > 0,
+        )
 
     # ------------------------------------------------------------------ #
     # Side-effect helpers
@@ -627,17 +702,8 @@ class StateMachineService:
         target: EventStatus,
         operator: str | None,
         reason: str | None,
-    ) -> None:
-        """Sync EventContext (event summary + state_history) after commit.
-
-        Redis failures are logged and degrade the event but never roll back
-        the PostgreSQL transaction.
-        """
-        # 1. Sync the event summary.
-        summary = event_summary_from_security_event(row)
-        summary_result = await self._store.set(event_id, "event", summary)
-
-        # 2. Append to state_history.
+    ) -> ContextSyncResult:
+        """Sync EventContext after commit; never raise to callers."""
         history_entry: dict[str, Any] = {
             "from_status": current.value,
             "to_status": target.value,
@@ -645,46 +711,248 @@ class StateMachineService:
             "reason": reason,
             "timestamp": _utc_now().isoformat(),
         }
+        history = await self._append_state_history_entry(event_id, history_entry)
+        return await self._project_context(
+            event_id,
+            row,
+            target=target,
+            history=history,
+            sync_replan_count=target is EventStatus.REPLANNING,
+        )
+
+    async def _append_state_history_entry(
+        self,
+        event_id: str,
+        history_entry: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        current_history: list[dict[str, Any]] = []
         try:
-            current_history = await self._store.get(event_id, "state_history")
-            if not isinstance(current_history, list):
-                current_history = []
-        except (KeyError, ConnectionError, TimeoutError, OSError):
-            current_history = []
-        updated_history = list(current_history) + [history_entry]
-        history_result = await self._store.set(event_id, "state_history", updated_history)
-
-        # 3. Sync replan_count into EventContext (journal).
-        replan_result = None
-        if target is EventStatus.REPLANNING:
-            replan_result = await self._store.set(
-                event_id, "replan_count", int(row.replan_count or 0)
-            )
-
-        # 4. Mark degraded if Redis is unavailable.
-        redis_ok = summary_result.redis_ok and history_result.redis_ok
-        if replan_result is not None:
-            redis_ok = redis_ok and replan_result.redis_ok
-        if not redis_ok:
+            loaded = await self._store.get(event_id, "state_history")
+            if isinstance(loaded, list):
+                current_history = list(loaded)
+        except Exception:  # noqa: BLE001 — best-effort read before append
             logger.warning(
-                "Redis context sync failed for event_id=%s after transition "
-                "%s→%s; marking degraded",
+                "state_history read failed during transition projection event_id=%s",
                 event_id,
-                current.value,
-                target.value,
+                exc_info=True,
             )
-            if self._degraded is not None:
+        return [*current_history, history_entry]
+
+    async def _state_history_from_audit_log(self, event_id: str) -> list[dict[str, Any]]:
+        if self._audit_log is None:
+            return []
+        rows = await self._audit_log.get_logs_by_event(event_id)
+        history: list[dict[str, Any]] = []
+        for row in rows:
+            if row.from_status is None and row.to_status is None:
+                continue
+            history.append(
+                {
+                    "from_status": row.from_status,
+                    "to_status": row.to_status,
+                    "operator": row.operator,
+                    "reason": row.reason,
+                    "timestamp": row.created_at.isoformat() if row.created_at else None,
+                }
+            )
+        return history
+
+    async def _project_context(
+        self,
+        event_id: str,
+        row: orm.SecurityEvent,
+        *,
+        target: EventStatus,
+        history: list[dict[str, Any]],
+        sync_replan_count: bool = False,
+    ) -> ContextSyncResult:
+        """Project EventContext fields from authoritative PostgreSQL state."""
+        steps: list[ContextProjectionStepResult] = []
+
+        summary = event_summary_from_security_event(row)
+        _, summary_step = await self._run_projection_step(
+            event_id,
+            "event_summary",
+            lambda: self._store.set(event_id, "event", summary),
+        )
+        steps.append(summary_step)
+
+        _, history_step = await self._run_projection_step(
+            event_id,
+            "state_history",
+            lambda: self._store.set(event_id, "state_history", history),
+        )
+        steps.append(history_step)
+
+        replan_step = ContextProjectionStepResult(
+            step="replan_count",
+            ok=True,
+            degraded=False,
+        )
+        if sync_replan_count:
+            _, replan_step = await self._run_projection_step(
+                event_id,
+                "replan_count",
+                lambda: self._store.set(event_id, "replan_count", int(row.replan_count or 0)),
+            )
+        steps.append(replan_step)
+
+        if target is EventStatus.CLOSED:
+            _, snapshot_step = await self._run_projection_step(
+                event_id,
+                "closed_snapshot",
+                lambda: self._store.refresh_closed_snapshot(event_id),
+            )
+            steps.append(snapshot_step)
+
+            _, ttl_step = await self._run_closed_ttl_step(event_id)
+            steps.append(ttl_step)
+
+        result = ContextSyncResult(
+            projection_ok=all(step.ok for step in steps),
+            steps=tuple(steps),
+        )
+        if result.projection_ok:
+            await self._clear_projection_degradation_flags(event_id)
+        else:
+            await self._record_projection_degradation(event_id, target, result)
+        return result
+
+    async def _run_projection_step(
+        self,
+        event_id: str,
+        step: str,
+        action: Callable[[], Awaitable[Any]],
+    ) -> tuple[Any | None, ContextProjectionStepResult]:
+        try:
+            outcome = await action()
+        except Exception as exc:  # noqa: BLE001 — post-commit projection must not bubble
+            logger.warning(
+                "post-commit context projection raised event_id=%s step=%s",
+                event_id,
+                step,
+                exc_info=True,
+            )
+            return None, ContextProjectionStepResult(
+                step=step,
+                ok=False,
+                degraded=True,
+                failure_kind="exception",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        if hasattr(outcome, "redis_ok") and not outcome.redis_ok:
+            return outcome, ContextProjectionStepResult(
+                step=step,
+                ok=False,
+                degraded=True,
+                failure_kind="redis_degraded",
+                error="redis_unavailable",
+            )
+
+        return outcome, ContextProjectionStepResult(
+            step=step,
+            ok=True,
+            degraded=False,
+        )
+
+    async def _run_closed_ttl_step(
+        self, event_id: str
+    ) -> tuple[bool | None, ContextProjectionStepResult]:
+        try:
+            ttl_ok = await self._store.set_closed_ttl(event_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "post-commit closed TTL projection raised event_id=%s",
+                event_id,
+                exc_info=True,
+            )
+            return None, ContextProjectionStepResult(
+                step="closed_ttl",
+                ok=False,
+                degraded=True,
+                failure_kind="exception",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        if not ttl_ok:
+            logger.warning("set_closed_ttl failed for event_id=%s", event_id)
+            return ttl_ok, ContextProjectionStepResult(
+                step="closed_ttl",
+                ok=False,
+                degraded=True,
+                failure_kind="redis_degraded",
+                error="redis_unavailable",
+            )
+
+        return ttl_ok, ContextProjectionStepResult(
+            step="closed_ttl",
+            ok=True,
+            degraded=False,
+        )
+
+    async def _record_projection_degradation(
+        self,
+        event_id: str,
+        target: EventStatus,
+        result: ContextSyncResult,
+    ) -> None:
+        if result.projection_ok or self._degraded is None:
+            return
+
+        if result.has_redis_degraded_failure:
+            try:
                 await self._degraded.set_flag(
                     event_id,
-                    "redis_context_unavailable",
+                    _REDIS_CONTEXT_UNAVAILABLE_FLAG,
                     True,
                     writer="StateMachineService",
                 )
+            except Exception:  # noqa: BLE001 — observability must not undo commit
+                logger.warning(
+                    "failed to set redis_context_unavailable event_id=%s target=%s",
+                    event_id,
+                    target.value,
+                    exc_info=True,
+                )
 
-        # 5. Snapshot + TTL for CLOSED events (post-commit — avoids cross-connection
-        #    deadlock with the row lock held by the main transaction).
-        if target is EventStatus.CLOSED:
-            await self._store.refresh_closed_snapshot(event_id)
-            ttl_ok = await self._store.set_closed_ttl(event_id)
-            if not ttl_ok:
-                logger.warning("set_closed_ttl failed for event_id=%s", event_id)
+        if result.has_exception_failure:
+            failed_steps = [
+                f"{step.step}:{step.error}"
+                for step in result.steps
+                if step.failure_kind == "exception" and step.error
+            ]
+            detail = ",".join(failed_steps)[:240] if failed_steps else "unknown"
+            try:
+                await self._degraded.set_flag(
+                    event_id,
+                    _STATE_TRANSITION_PROJECTION_DEGRADED_FLAG,
+                    detail,
+                    writer="StateMachineService",
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "failed to set state_transition_projection_degraded "
+                    "event_id=%s target=%s detail=%s",
+                    event_id,
+                    target.value,
+                    detail,
+                    exc_info=True,
+                )
+
+    async def _clear_projection_degradation_flags(self, event_id: str) -> None:
+        if self._degraded is None:
+            return
+        try:
+            await self._degraded.set_flag(
+                event_id,
+                _STATE_TRANSITION_PROJECTION_DEGRADED_FLAG,
+                False,
+                writer="StateMachineService",
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "failed to clear state_transition_projection_degraded event_id=%s",
+                event_id,
+                exc_info=True,
+            )

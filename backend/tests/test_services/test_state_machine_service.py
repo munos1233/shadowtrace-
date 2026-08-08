@@ -55,10 +55,18 @@ from app.models.enums import (
 from app.models.source import SourceReference
 from app.models.tool_meta import TERMINAL_DISPOSITION_TOOL
 from app.models.workflow import MAX_REPLAN_COUNT, TransitionContext
-from app.services.context_service import EventContextStore, event_summary_from_security_event
+from app.services.context_service import (
+    EventContextStore,
+    ctx_key,
+    event_summary_from_security_event,
+)
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.event_audit_log_service import EventAuditLogService
-from app.services.state_machine_service import StateMachineService, _build_terminal_writeback_view
+from app.services.state_machine_service import (
+    ContextSyncResult,
+    StateMachineService,
+    _build_terminal_writeback_view,
+)
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 DATABASE_URL = os.environ.get(
@@ -1542,3 +1550,231 @@ async def test_close_rejected_when_only_superseded_outboxes_remain(
             operator="SuperAgent",
             reason="vacuum outbox must not close",
         )
+
+
+# ===================================================================
+# ISSUE-285: post-commit context sync / projection degradation
+# ===================================================================
+
+
+async def _count_audit_logs(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_id: str,
+) -> int:
+    async with session_factory() as session:
+        rows = await session.scalars(
+            select(orm.EventAuditLog).where(orm.EventAuditLog.event_id == event_id)
+        )
+        return len(list(rows.all()))
+
+
+@pytest.mark.asyncio
+async def test_post_commit_event_summary_raise_db_committed(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    """Direct store raise on event summary must not fail the committed transition."""
+    event_id = await _create_event(session_factory, store)
+    original_set = store.set
+
+    async def raising_set(event_id: str, key: str, value, **kwargs):  # noqa: ARG001
+        if key == "event":
+            raise RuntimeError("injected event_summary projection failure")
+        return await original_set(event_id, key, value, **kwargs)
+
+    with patch.object(store, "set", side_effect=raising_set):
+        result = await state_machine.transition(
+            event_id,
+            EventStatus.TRIAGING,
+            operator="TriageAgent",
+            reason="post-commit summary fault",
+        )
+
+    assert result.status == EventStatus.TRIAGING
+    assert await state_machine.get_current_status(event_id) == EventStatus.TRIAGING
+    assert await _count_audit_logs(session_factory, event_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_post_commit_state_history_raise_db_committed(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    """Direct store raise on state_history must not fail the committed transition."""
+    event_id = await _create_event(session_factory, store)
+    original_set = store.set
+
+    async def raising_set(event_id: str, key: str, value, **kwargs):  # noqa: ARG001
+        if key == "state_history":
+            raise RuntimeError("injected state_history projection failure")
+        return await original_set(event_id, key, value, **kwargs)
+
+    with patch.object(store, "set", side_effect=raising_set):
+        result = await state_machine.transition(
+            event_id,
+            EventStatus.TRIAGING,
+            operator="TriageAgent",
+            reason="post-commit history fault",
+        )
+
+    assert result.status == EventStatus.TRIAGING
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, event_id)
+        assert row is not None
+        flags = [str(f) for f in (row.degraded_flags or [])]
+        assert any("state_transition_projection_degraded" in f for f in flags)
+
+
+@pytest.mark.asyncio
+async def test_post_commit_closed_snapshot_raise_db_committed(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    """Direct store raise on closed snapshot must not fail the committed close."""
+    event_id = await _create_event(session_factory, store, severity=Severity.LOW.value)
+    await _walk_to_reporting(state_machine, event_id)
+    await _add_report(session_factory, event_id)
+
+    with patch.object(
+        store,
+        "refresh_closed_snapshot",
+        side_effect=RuntimeError("injected closed_snapshot projection failure"),
+    ):
+        result = await state_machine.transition(
+            event_id,
+            EventStatus.CLOSED,
+            operator="SuperAgent",
+            reason="post-commit snapshot fault",
+        )
+
+    assert result.status == EventStatus.CLOSED
+    assert await state_machine.get_current_status(event_id) == EventStatus.CLOSED
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, event_id)
+        assert row is not None
+        assert row.status == EventStatus.CLOSED.value
+        flags = [str(f) for f in (row.degraded_flags or [])]
+        assert any("state_transition_projection_degraded" in f for f in flags)
+
+
+@pytest.mark.asyncio
+async def test_post_commit_redis_degraded_returns_committed_semantics(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    """Returned redis_ok=False must degrade observably without failing transition()."""
+    from app.services.context_service import SetResult
+
+    event_id = await _create_event(session_factory, store)
+    original_set = store.set
+
+    async def redis_down_set(event_id: str, key: str, value, **kwargs):  # noqa: ARG001
+        if key == "event":
+            return SetResult(redis_ok=False, version=99)
+        return await original_set(event_id, key, value, **kwargs)
+
+    with patch.object(store, "set", side_effect=redis_down_set):
+        result = await state_machine.transition(
+            event_id,
+            EventStatus.TRIAGING,
+            operator="TriageAgent",
+            reason="redis degraded",
+        )
+
+    assert result.status == EventStatus.TRIAGING
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, event_id)
+        assert row is not None
+        flags = [str(f) for f in (row.degraded_flags or [])]
+        assert any("redis_context_unavailable" in f for f in flags)
+        assert not any("state_transition_projection_degraded" in f for f in flags)
+
+
+@pytest.mark.asyncio
+async def test_repair_transition_projection_idempotent(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    """Repair rebuilds projection from audit log without replaying the transition."""
+    event_id = await _create_event(session_factory, store)
+    original_set = store.set
+
+    async def raising_set(event_id: str, key: str, value, **kwargs):  # noqa: ARG001
+        if key == "state_history":
+            raise RuntimeError("injected state_history projection failure")
+        return await original_set(event_id, key, value, **kwargs)
+
+    with patch.object(store, "set", side_effect=raising_set):
+        await state_machine.transition(
+            event_id,
+            EventStatus.TRIAGING,
+            operator="TriageAgent",
+            reason="needs repair",
+        )
+
+    audit_before = await _count_audit_logs(session_factory, event_id)
+    first_repair = await state_machine.repair_transition_projection(event_id)
+    second_repair = await state_machine.repair_transition_projection(event_id)
+
+    assert isinstance(first_repair, ContextSyncResult)
+    assert first_repair.projection_ok is True
+    assert second_repair.projection_ok is True
+    assert await _count_audit_logs(session_factory, event_id) == audit_before
+
+    sh = await store.get(event_id, "state_history")
+    assert isinstance(sh, list)
+    assert len(sh) == 1
+    assert sh[0]["to_status"] == "triaging"
+    assert sh[0]["reason"] == "needs repair"
+
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, event_id)
+        assert row is not None
+        flags = [str(f) for f in (row.degraded_flags or [])]
+        assert not any("state_transition_projection_degraded" in f for f in flags)
+
+
+@pytest.mark.asyncio
+async def test_repair_does_not_replay_transition_or_side_effects(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    redis_client: RedisClient,
+) -> None:
+    """Retrying repair must not add audit rows or change committed status."""
+    event_id = await _create_event(session_factory, store)
+    await state_machine.transition(
+        event_id,
+        EventStatus.TRIAGING,
+        operator="TriageAgent",
+        reason="baseline",
+    )
+    await state_machine.transition(
+        event_id,
+        EventStatus.COLLECTING_EVIDENCE,
+        operator="EvidenceAgent",
+        reason="collect",
+    )
+
+    status_before = await state_machine.get_current_status(event_id)
+    audit_before = await _count_audit_logs(session_factory, event_id)
+    version_before = (await store.get(event_id, "event"))["row_version"]
+
+    for _ in range(2):
+        repair = await state_machine.repair_transition_projection(event_id)
+        assert repair.projection_ok is True
+
+    assert await state_machine.get_current_status(event_id) == status_before
+    assert await _count_audit_logs(session_factory, event_id) == audit_before
+    assert (await store.get(event_id, "event"))["row_version"] == version_before
+
+    sh = await store.get(event_id, "state_history")
+    assert isinstance(sh, list)
+    assert len(sh) == 2
+    assert sh[-1]["to_status"] == "collecting_evidence"
+    assert await redis_client.get_client().hget(ctx_key(event_id), "state_history") is not None

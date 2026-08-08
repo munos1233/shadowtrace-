@@ -48,6 +48,8 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "report_generation_failed",
         # ISSUE-254 durable event_context_snapshot merge failures
         "event_context_snapshot_merge_failed",
+        # ISSUE-285 post-commit state transition projection failures
+        "state_transition_projection_degraded",
     }
 )
 
