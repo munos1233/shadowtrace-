@@ -1146,12 +1146,19 @@
         "report_quality": {
           "$ref": "#/$defs/ReportQuality",
           "default": "complete"
+        },
+        "degraded": {
+          "description": "True when ``report_quality`` is anything other than ``complete``.",
+          "readOnly": true,
+          "title": "Degraded",
+          "type": "boolean"
         }
       },
       "required": [
         "report_id",
         "event_id",
-        "title"
+        "title",
+        "degraded"
       ],
       "title": "InvestigationReport",
       "type": "object"
