@@ -285,6 +285,8 @@ worker-nightly-pytest:
 		tests/test_core/test_celery_health.py \
 		tests/test_core/test_celery_delivery.py \
 		tests/test_tasks/test_celery_redelivery_matrix.py \
+		tests/test_tasks/test_investigation_task_contract.py \
+		tests/test_tasks/test_fake_redis_contract.py \
 		tests/test_api/test_celery_investigation.py \
 		tests/test_tasks/test_investigation_tasks.py -q
 
@@ -292,7 +294,7 @@ worker-nightly-smoke:
 	bash "$(CURDIR)/scripts/celery_worker_smoke.sh"
 
 worker-nightly-matrix: worker-nightly-pytest autonomous-mock-e2e-worker-pytest
-	@echo "Phase B pytest matrix + ISSUE-110 worker-gated E2E passed."
+	@echo "Phase B pytest matrix + ISSUE-110/283 worker-gated E2E (incl. SIGKILL fault injection) passed."
 	@echo "Prerequisite: Docker with worker profile (see autonomous-mock-e2e-worker-pytest)."
 
 # --- ISSUE-108 auto-investigate intent quality gate ------------------------- #
@@ -343,6 +345,9 @@ autonomous-mock-e2e: autonomous-mock-e2e-pytest
 autonomous-mock-e2e-worker-pytest:
 	@set -eu; \
 	project="$(INTEGRATION_PROJECT_NAME)"; \
+	export COMPOSE_PROJECT_NAME="$$project"; \
+	export INTEGRATION_PROJECT_NAME="$$project"; \
+	export CELERY_CRASH_ARTIFACT_DIR="$(CURDIR)/backend/artifacts/celery-crash"; \
 	compose() { \
 		COMPOSE_PROJECT_NAME="$$project" \
 		POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
@@ -366,6 +371,9 @@ autonomous-mock-e2e-worker-pytest:
 	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
 		TASK_MODE=celery \
 		CELERY_BROKER_URL="$(CI_REDIS_URL)" \
+		COMPOSE_PROJECT_NAME="$$project" \
+		INTEGRATION_PROJECT_NAME="$$project" \
+		CELERY_CRASH_ARTIFACT_DIR="$(CURDIR)/backend/artifacts/celery-crash" \
 		$(PYTHON) -m pytest tests/integration/autonomous_e2e/ \
 		-m "autonomous_mock_e2e" -v --tb=short
 

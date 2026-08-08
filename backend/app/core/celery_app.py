@@ -110,6 +110,7 @@ celery_app.conf.update(
     task_routes={
         "shadowtrace.run_investigation": {"queue": "investigation"},
         "shadowtrace.worker_ping": {"queue": "investigation"},
+        "shadowtrace.fault_injection_barrier": {"queue": "investigation"},
         "shadowtrace.poll_sources": {"queue": "ingestion"},
         "shadowtrace.dispatch_investigation_intents": {"queue": "investigation"},
         "shadowtrace.reconcile_investigation_intents": {"queue": "investigation"},

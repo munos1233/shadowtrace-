@@ -68,6 +68,7 @@ markers = [
   "baseline_refresh: explicit baseline overwrite (ISSUE-087; UPDATE_BASELINE=1 only)",
   "evaluation: evaluation pipeline gate (ISSUE-105; requires PostgreSQL)",
   "autonomous_mock_e2e: ISSUE-110 full-loop E2E with live Celery worker (make up WORKER=1)",
+  "worker_crash_fault_injection: ISSUE-283 real worker SIGKILL redelivery gate",
   "unit: pure unit tests with no external services",
   "opensearch: requires OpenSearch service (ISSUE-084)",
   "neo4j: requires Neo4j service (docker compose --profile optional up -d neo4j)",

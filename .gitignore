@@ -40,3 +40,6 @@ tmp/
 *.local
 .env.local
 .github_token
+
+# ISSUE-283 Celery crash fault-injection artifacts (local/CI review only)
+backend/artifacts/

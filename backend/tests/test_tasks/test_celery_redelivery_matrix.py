@@ -97,6 +97,7 @@ def test_run_investigation_uses_task_id_owner(
         event_id: str,
         *,
         include_response_execution: bool = False,
+        generate_report: bool = True,
         owner_id: str | None = None,
         lease_acquired: bool = False,
     ) -> dict[str, str]:
@@ -254,6 +255,7 @@ def test_run_investigation_honors_delivery_info_redelivered_flag(
         event_id: str,
         *,
         include_response_execution: bool,
+        generate_report: bool = True,
         owner_id: str,
         redelivered: bool,
         lease_acquired: bool = False,

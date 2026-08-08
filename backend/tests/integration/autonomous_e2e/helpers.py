@@ -224,11 +224,18 @@ def celery_worker_responding() -> bool:
     return payload.get("status") == "ok" and int(payload.get("workers") or 0) > 0
 
 
-def require_celery_worker() -> None:
+def require_celery_worker(*, fail_hard: bool = False) -> None:
     import pytest
 
-    if not celery_worker_responding():
-        pytest.skip("ISSUE-110 worker E2E requires live Celery worker (make up WORKER=1)")
+    if celery_worker_responding():
+        return
+    message = (
+        "ISSUE-283 worker fault-injection requires live Celery worker "
+        "(make autonomous-mock-e2e-worker-pytest / make up WORKER=1)"
+    )
+    if fail_hard:
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 @dataclass(frozen=True)

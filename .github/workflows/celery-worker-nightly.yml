@@ -60,17 +60,66 @@ jobs:
         working-directory: backend
         run: uv sync --frozen --extra dev
 
-      - name: ISSUE-117 Phase B redelivery matrix (unit/integration)
+      - name: ISSUE-117/264 Phase B redelivery + contract matrix
         run: >
           uv run --frozen pytest
           tests/test_core/test_celery_delivery.py
           tests/test_core/test_celery_health.py
           tests/test_tasks/test_celery_redelivery_matrix.py
+          tests/test_tasks/test_investigation_task_contract.py
+          tests/test_tasks/test_fake_redis_contract.py
           tests/test_api/test_celery_investigation.py
           tests/test_tasks/test_investigation_tasks.py -q
 
-  # Schedule (cron) runs pytest-only redelivery matrix. Real Docker worker smoke
-  # requires compose + worker profile and is manual via workflow_dispatch only.
+  # ISSUE-283: real Docker worker + SIGKILL fault injection — must fail hard (no skip).
+  docker-worker-crash-gate:
+    name: docker-worker-crash-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: shadowtrace-worker-nightly-${{ github.run_id }}
+      INTEGRATION_PROJECT_NAME: shadowtrace-worker-nightly-${{ github.run_id }}
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
+      BACKEND_PORT: "8000"
+      FRONTEND_PORT: "5173"
+      MOCK_XDR_PORT: "8100"
+      CELERY_CRASH_ARTIFACT_DIR: ${{ github.workspace }}/backend/artifacts/celery-crash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend (frozen dev)
+        working-directory: backend
+        run: uv sync --frozen --extra dev
+
+      - name: ISSUE-283 worker SIGKILL fault-injection gate
+        run: make autonomous-mock-e2e-worker-pytest
+
+      - name: Upload Celery crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: celery-crash-artifacts-${{ github.run_id }}
+          path: backend/artifacts/celery-crash/
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose \
+            --project-name "${COMPOSE_PROJECT_NAME}" \
+            -f "${GITHUB_WORKSPACE}/infra/docker-compose.yml" \
+            down --volumes --remove-orphans || true
+
   docker-worker-smoke:
     name: docker-worker-smoke
     if: github.event_name == 'workflow_dispatch'
@@ -78,6 +127,7 @@ jobs:
     timeout-minutes: 30
     env:
       COMPOSE_PROJECT_NAME: shadowtrace-worker-nightly-${{ github.run_id }}
+      INTEGRATION_PROJECT_NAME: shadowtrace-worker-nightly-${{ github.run_id }}
       POSTGRES_PORT: "5432"
       REDIS_PORT: "6379"
       BACKEND_PORT: "8000"
@@ -94,16 +144,8 @@ jobs:
       - name: Run celery worker smoke script
         run: bash scripts/celery_worker_smoke.sh
 
-      - name: ISSUE-110 autonomous mock E2E (worker-gated)
-        working-directory: backend
-        env:
-          DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@127.0.0.1:5432/shadowtrace
-          REDIS_URL: redis://127.0.0.1:6379/0
-          TASK_MODE: celery
-          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-        run: >
-          uv run --frozen pytest tests/integration/autonomous_e2e/
-          -m autonomous_mock_e2e -v --tb=short
+      - name: ISSUE-110/283 autonomous mock E2E (worker-gated)
+        run: make autonomous-mock-e2e-worker-pytest
 
       - name: Tear down stack
         if: always()

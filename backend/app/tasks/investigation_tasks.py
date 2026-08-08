@@ -24,6 +24,11 @@ from app.core.errors import (
 )
 from app.core.redis_client import RedisClient
 from app.models.investigation_intent import IntentDeliveryAdmission
+from app.tasks.investigation_task_contract import (
+    AnalysisOnlyDispatchKwargs,
+    InvestigationDispatchKwargs,
+    InvestigationIntentPublishKwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,17 +195,15 @@ async def dispatch_investigation(
     task_id = str(celery_uuid())
     await register_task_metadata(task_id, event_id)
     try:
-        kwargs: dict[str, object] = {
-            "include_response_execution": include_response_execution,
-            "generate_report": generate_report,
-        }
-        if owner_id is not None:
-            kwargs["owner_id"] = owner_id
-        if lease_acquired:
-            kwargs["lease_acquired"] = True
+        payload = InvestigationDispatchKwargs(
+            include_response_execution=include_response_execution,
+            generate_report=generate_report,
+            owner_id=owner_id,
+            lease_acquired=lease_acquired,
+        )
         run_investigation.apply_async(
             args=[event_id],
-            kwargs=kwargs,
+            kwargs=payload.to_apply_async_kwargs(),
             task_id=task_id,
             queue=TASK_QUEUE,
         )
@@ -232,13 +235,14 @@ def publish_investigation_for_intent(
 
     Raises broker connectivity errors to the caller; ingest paths must catch.
     """
+    payload = InvestigationIntentPublishKwargs(
+        intent_id=intent_id,
+        include_response_execution=include_response_execution,
+        generate_report=generate_report,
+    )
     run_investigation.apply_async(
         args=[event_id],
-        kwargs={
-            "include_response_execution": bool(include_response_execution),
-            "generate_report": bool(generate_report),
-            "intent_id": intent_id,
-        },
+        kwargs=payload.to_apply_async_kwargs(),
         task_id=task_id,
         queue=TASK_QUEUE,
     )
@@ -628,14 +632,14 @@ async def dispatch_analysis_only_investigation(
     task_id = str(celery_uuid())
     await register_task_metadata(task_id, event_id)
     try:
-        kwargs: dict[str, object] = {"generate_report": generate_report}
-        if owner_id is not None:
-            kwargs["owner_id"] = owner_id
-        if lease_acquired:
-            kwargs["lease_acquired"] = True
+        payload = AnalysisOnlyDispatchKwargs(
+            generate_report=generate_report,
+            owner_id=owner_id,
+            lease_acquired=lease_acquired,
+        )
         run_analysis_only_investigation.apply_async(
             args=[event_id],
-            kwargs=kwargs,
+            kwargs=payload.to_apply_async_kwargs(),
             task_id=task_id,
             queue=ANALYSIS_ONLY_TASK_QUEUE,
         )

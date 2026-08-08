@@ -13,7 +13,6 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
-from app.core.redis_client import RedisClient
 from app.main import app
 from app.models.enums import (
     DispositionPolicy,
@@ -25,6 +24,7 @@ from app.models.enums import (
 from app.models.security_event import SecurityEvent
 from app.models.source import SourceReference
 from app.tasks.investigation_tasks import register_task_metadata
+from tests.support.fake_redis import InMemoryFakeRedis, patch_redis_client
 
 _DEV_TOKENS = json.dumps(
     {
@@ -44,37 +44,12 @@ def _celery_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+def fake_redis_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryFakeRedis:
     """In-memory Redis stand-in for metadata registration tests."""
-    store: dict[str, str] = {}
-
-    class _FakeRedis:
-        async def set(self, key: str, value: str, ex: int | None = None) -> bool:
-            store[key] = value
-            return True
-
-        async def get(self, key: str) -> bytes | None:
-            raw = store.get(key)
-            return raw.encode() if raw is not None else None
-
-        async def delete(self, key: str) -> int:
-            return 1 if store.pop(key, None) is not None else 0
-
-    async def _ping(self: RedisClient) -> bool:
-        return True
-
-    def _get_client(self: RedisClient) -> _FakeRedis:
-        return _FakeRedis()
-
-    async def _aclose(self: RedisClient) -> None:
-        return None
-
-    monkeypatch.setattr(RedisClient, "ping", _ping)
-    monkeypatch.setattr(RedisClient, "get_client", _get_client)
-    monkeypatch.setattr(RedisClient, "aclose", _aclose)
+    fake = patch_redis_client(monkeypatch)
     celery_app.conf.result_backend = "cache+memory://"
     celery_app.conf.broker_url = "memory://"
-    return store
+    return fake
 
 
 def _hdr() -> dict[str, str]:
