@@ -97,12 +97,14 @@ def test_run_investigation_uses_task_id_owner(
         event_id: str,
         *,
         include_response_execution: bool = False,
+        generate_report: bool = True,
         owner_id: str | None = None,
         lease_acquired: bool = False,
     ) -> dict[str, str]:
         captured["event_id"] = event_id
         captured["owner_id"] = owner_id
         captured["include_response_execution"] = include_response_execution
+        captured["generate_report"] = generate_report
         return {"status": "completed", "event_id": event_id}
 
     monkeypatch.setattr(tasks, "execute_investigation", _fake_execute)
@@ -254,6 +256,7 @@ def test_run_investigation_honors_delivery_info_redelivered_flag(
         event_id: str,
         *,
         include_response_execution: bool,
+        generate_report: bool,
         owner_id: str,
         redelivered: bool,
         lease_acquired: bool = False,

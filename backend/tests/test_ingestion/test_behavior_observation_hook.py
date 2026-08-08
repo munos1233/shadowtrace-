@@ -29,37 +29,33 @@ from app.services.behavior_observation_projection import BehaviorObservationProj
 from app.services.behavior_observation_service import BehaviorObservationService
 from app.services.detection_scope_service import DetectionScopeService
 from tests.test_ingestion.test_source_ingester import FakePagedAdapter
+from tests.test_services.behavior_observation_fixtures import ambiguous_scope_binding_error
+
+
+async def _delete_hook_tables(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(delete(orm.ActionExecutionJob))
+            await session.execute(delete(orm.ActionTargetResult))
+            await session.execute(delete(orm.Action))
+            await session.execute(delete(orm.BehaviorObservationProjectionFailure))
+            await session.execute(delete(orm.BehaviorObservation))
+            await session.execute(delete(orm.DetectionScopeRevision))
+            await session.execute(delete(orm.DispositionOutbox))
+            await session.execute(delete(orm.SourceEventLink))
+            await session.execute(delete(orm.SourceObject))
+            await session.execute(delete(orm.SourceConnector))
+            await session.execute(delete(orm.DataQualityError))
+            await session.execute(delete(orm.SecurityEvent))
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean_hook_tables(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    async with session_factory() as session:
-        async with session.begin():
-            await session.execute(delete(orm.BehaviorObservationProjectionFailure))
-            await session.execute(delete(orm.BehaviorObservation))
-            await session.execute(delete(orm.DetectionScopeRevision))
-            # disposition_outbox.source_record_id FK → source_object (delete first)
-            await session.execute(delete(orm.DispositionOutbox))
-            await session.execute(delete(orm.SourceEventLink))
-            await session.execute(delete(orm.SourceObject))
-            await session.execute(delete(orm.SourceConnector))
-            await session.execute(delete(orm.DataQualityError))
-            await session.execute(delete(orm.SecurityEvent))
+    await _delete_hook_tables(session_factory)
     yield
-    async with session_factory() as session:
-        async with session.begin():
-            await session.execute(delete(orm.BehaviorObservationProjectionFailure))
-            await session.execute(delete(orm.BehaviorObservation))
-            await session.execute(delete(orm.DetectionScopeRevision))
-            # disposition_outbox.source_record_id FK → source_object (delete first)
-            await session.execute(delete(orm.DispositionOutbox))
-            await session.execute(delete(orm.SourceEventLink))
-            await session.execute(delete(orm.SourceObject))
-            await session.execute(delete(orm.SourceConnector))
-            await session.execute(delete(orm.DataQualityError))
-            await session.execute(delete(orm.SecurityEvent))
+    await _delete_hook_tables(session_factory)
 
 
 def _suffix() -> str:
@@ -462,6 +458,7 @@ async def test_hook_projects_unbound_connector_with_unverified_fallback(
 @pytest.mark.asyncio
 async def test_hook_marks_ambiguous_scope_binding_dead_letter(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     suffix = _suffix()
     tenant_id = f"tenant-{suffix}"
@@ -483,30 +480,6 @@ async def test_hook_marks_ambiguous_scope_binding_dead_letter(
                     },
                 )
             )
-    connector_set = {
-        "connector_set_version": 1,
-        "upstream_connectors": [{"connector_id": connector_id, "source_product": "mock_xdr"}],
-    }
-    async with session_factory() as session:
-        async with session.begin():
-            for label in ("a", "b"):
-                session.add(
-                    orm.DetectionScopeRevision(
-                        scope_revision_id=f"dsrev-{label}-{suffix}",
-                        detection_scope_id=f"dscope-{label}-{suffix}",
-                        source_tenant_id=tenant_id,
-                        source_product="mock_xdr",
-                        integration_instance_id=instance_id,
-                        connector_set=connector_set,
-                        connector_set_version=1,
-                        lifecycle_state=DetectionScopeLifecycleState.ACTIVE.value,
-                        revision=1,
-                        content_hash=f"{label}a" * 32,
-                        identity_hash=f"{label}b" * 32,
-                        idempotency_key=f"idem-{label}-{suffix}",
-                        schema_version="1.0",
-                    )
-                )
 
     record_id = f"src-dead-{suffix}"
     async with session_factory() as session:
@@ -533,6 +506,15 @@ async def test_hook_marks_ambiguous_scope_binding_dead_letter(
                     source_sync_state="synced",
                 )
             )
+
+    monkeypatch.setattr(
+        "app.services.behavior_observation_service.resolve_detection_scope_id",
+        ambiguous_scope_binding_error(
+            connector_id=connector_id,
+            instance_id=instance_id,
+            detection_scope_ids=(f"dscope-a-{suffix}", f"dscope-b-{suffix}"),
+        ),
+    )
 
     projection = BehaviorObservationProjection(session_factory)
     assert await projection.on_source_record_persisted(record_id) is False

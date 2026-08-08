@@ -32,6 +32,8 @@ from app.services.behavior_observation_resolver import (
 )
 from app.services.detection_scope_service import DetectionScopeService
 from tests.test_services.behavior_observation_fixtures import (
+    build_ambiguous_active_scope_rows,
+    patch_session_scalars_with_ambiguous_scopes,
     seed_behavior_observation_connector as seed_connector,
 )
 from tests.test_services.behavior_observation_fixtures import (
@@ -318,32 +320,15 @@ async def test_resolve_scope_ambiguous_binding_raises(
         tenant_id=tenant_id,
         integration_instance_id=instance_id,
     )
-    connector_set = {
-        "connector_set_version": 1,
-        "upstream_connectors": [{"connector_id": connector_id, "source_product": "mock_xdr"}],
-    }
-    async with session_factory() as session:
-        async with session.begin():
-            for label in ("a", "b"):
-                session.add(
-                    orm.DetectionScopeRevision(
-                        scope_revision_id=f"dsrev-{label}-{suffix}",
-                        detection_scope_id=f"dscope-{label}-{suffix}",
-                        source_tenant_id=tenant_id,
-                        source_product="mock_xdr",
-                        integration_instance_id=instance_id,
-                        connector_set=connector_set,
-                        connector_set_version=1,
-                        lifecycle_state=DetectionScopeLifecycleState.ACTIVE.value,
-                        revision=1,
-                        content_hash=f"{label}a" * 32,
-                        identity_hash=f"{label}b" * 32,
-                        idempotency_key=f"idem-{label}-{suffix}",
-                        schema_version="1.0",
-                    )
-                )
+    ambiguous_rows = build_ambiguous_active_scope_rows(
+        suffix=suffix,
+        tenant_id=tenant_id,
+        connector_id=connector_id,
+        instance_id=instance_id,
+    )
 
     async with session_factory() as session:
+        patch_session_scalars_with_ambiguous_scopes(session, ambiguous_rows)
         with pytest.raises(ValidationError, match="ambiguous detection scope binding"):
             await resolve_detection_scope_id(
                 session,
