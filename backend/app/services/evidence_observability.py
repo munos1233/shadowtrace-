@@ -57,9 +57,7 @@ def build_query_summary_items(
                     str(item["gap_reason"]) if item.get("gap_reason") is not None else None
                 ),
                 "tool_outcome": str(tool_outcome) if tool_outcome is not None else None,
-                "provider_status": (
-                    str(provider_status) if provider_status is not None else None
-                ),
+                "provider_status": (str(provider_status) if provider_status is not None else None),
             }
         )
     return summary

@@ -1039,8 +1039,7 @@ class EventService:
                     if isinstance(raw_codes, list):
                         reason_codes = [str(c) for c in raw_codes[:5] if c is not None]
                 audit_reason = (
-                    f"risk_fields:score={score},"
-                    f"severity={row.severity},confidence={conf:.4f}"
+                    f"risk_fields:score={score},severity={row.severity},confidence={conf:.4f}"
                 )
                 if risk_assessment and risk_assessment.get("evidence_limited"):
                     audit_reason = f"{audit_reason},evidence_limited=true"

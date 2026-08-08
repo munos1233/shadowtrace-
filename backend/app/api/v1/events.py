@@ -550,12 +550,10 @@ async def list_events(
             else WritebackReadiness.NOT_REQUIRED
         )
         snapshot = (
-            event.event_context_snapshot
-            if isinstance(event.event_context_snapshot, dict)
-            else None
+            event.event_context_snapshot if isinstance(event.event_context_snapshot, dict) else None
         )
-        evidence_limited, scoring_mode, verdict_reason_codes = (
-            risk_observability_from_snapshot(snapshot)
+        evidence_limited, scoring_mode, verdict_reason_codes = risk_observability_from_snapshot(
+            snapshot
         )
         items.append(
             s.EventListItem(

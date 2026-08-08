@@ -153,3 +153,109 @@ def test_get_event_evidence_includes_triage_context_chain() -> None:
     assert triage_context["degraded"] is True
     assert triage_context["degradation_reasons"] == ["llm_timeout"]
     assert triage_context["entity_rejection_summary"]["total_rejected"] == 2
+
+
+def test_build_query_summary_items_exposes_tool_ok_empty() -> None:
+    """ISSUE-249: observability map keeps provider_status separate from tool_ok_empty."""
+    from types import SimpleNamespace
+
+    from app.services.evidence_observability import build_query_summary_items
+
+    rows = [
+        SimpleNamespace(
+            agent_name="evidence_agent",
+            output_data={
+                "query_timings": [
+                    {
+                        "tool_name": "query_dns",
+                        "source": EvidenceSource.DNS.value,
+                        "status": "tool_ok_empty",
+                        "provider_status": "success",
+                        "tool_outcome": "tool_ok_empty",
+                        "execution_time_ms": 3,
+                        "records_count": 0,
+                        "gap_reason": "no_records",
+                    },
+                    {
+                        "tool_name": "query_edr_process",
+                        "source": EvidenceSource.ENDPOINT.value,
+                        "status": "failed",
+                        "provider_status": "failed",
+                        "tool_outcome": "tool_failed",
+                        "execution_time_ms": 4,
+                        "records_count": 0,
+                        "gap_reason": "tool_failed",
+                    },
+                ]
+            },
+        )
+    ]
+
+    summary = build_query_summary_items(rows)  # type: ignore[arg-type]
+    by_tool = {item["tool_name"]: item for item in summary}
+    assert by_tool["query_dns"]["tool_outcome"] == "tool_ok_empty"
+    assert by_tool["query_dns"]["provider_status"] == "success"
+    assert by_tool["query_dns"]["status"] == "tool_ok_empty"
+    assert by_tool["query_dns"]["gap_reason"] == "no_records"
+    assert by_tool["query_edr_process"]["tool_outcome"] == "tool_failed"
+    assert by_tool["query_dns"]["tool_outcome"] != by_tool["query_edr_process"]["tool_outcome"]
+
+
+def test_get_event_evidence_query_summary_exposes_tool_ok_empty(monkeypatch: Any) -> None:
+    """ISSUE-249 API contract: GET /evidence surfaces tool_ok_empty in query_summary."""
+    from types import SimpleNamespace
+
+    from app.api.v1 import events as events_mod
+
+    fake_row = SimpleNamespace(
+        agent_name="evidence_agent",
+        output_data={
+            "query_timings": [
+                {
+                    "tool_name": "query_dns",
+                    "source": EvidenceSource.DNS.value,
+                    "status": "tool_ok_empty",
+                    "provider_status": "success",
+                    "tool_outcome": "tool_ok_empty",
+                    "execution_time_ms": 2,
+                    "records_count": 0,
+                    "gap_reason": "no_records",
+                }
+            ]
+        },
+    )
+
+    monkeypatch.setattr(events_mod, "_try_get_session_factory", lambda: object())
+
+    async def _fake_db_read(*_args: Any, **_kwargs: Any) -> tuple[list[Any], int]:
+        return [fake_row], 1
+
+    monkeypatch.setattr(events_mod, "_db_read", _fake_db_read)
+
+    evidence_output = _evidence_output()
+    evidence_output["gaps"] = [
+        {
+            "event_id": "evt-api-249",
+            "missing_source": EvidenceSource.DNS.value,
+            "reason": "no_records",
+            "detail": {
+                "tool_name": "query_dns",
+                "description": "query query_dns returned no usable evidence",
+            },
+        }
+    ]
+    evidence_output["failed_sources"] = []
+
+    response = _client(evidence_output).get("/api/v1/events/evt-api-249/evidence")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["collection_status"] == CollectionStatus.FAILED.value
+    assert payload["gaps"][0]["reason"] == "no_records"
+    assert len(payload["query_summary"]) == 1
+    item = payload["query_summary"][0]
+    assert item["tool_name"] == "query_dns"
+    assert item["tool_outcome"] == "tool_ok_empty"
+    assert item["provider_status"] == "success"
+    assert item["status"] == "tool_ok_empty"
+    assert item["records_count"] == 0
+    assert item["gap_reason"] == "no_records"

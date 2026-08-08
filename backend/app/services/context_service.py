@@ -204,9 +204,7 @@ def event_summary_from_security_event(row: orm.SecurityEvent) -> EventSummary:
         # PolicyFilter evaluates the connector/adapter and writes Action readiness.
         writeback_readiness = WritebackReadiness.CAPABILITY_UNKNOWN
     snapshot = (
-        dict(row.event_context_snapshot)
-        if isinstance(row.event_context_snapshot, dict)
-        else None
+        dict(row.event_context_snapshot) if isinstance(row.event_context_snapshot, dict) else None
     )
     from app.services.risk_verdict_projection import risk_observability_from_snapshot
 
@@ -253,9 +251,7 @@ def event_summary_from_domain(event: SecurityEvent) -> EventSummary:
     from app.services.risk_verdict_projection import risk_observability_from_snapshot
 
     evidence_limited, scoring_mode, verdict_reason_codes = risk_observability_from_snapshot(
-        event.event_context_snapshot
-        if isinstance(event.event_context_snapshot, dict)
-        else None
+        event.event_context_snapshot if isinstance(event.event_context_snapshot, dict) else None
     )
     return EventSummary(
         event_id=event.event_id,

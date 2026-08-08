@@ -651,16 +651,13 @@ async def test_missing_event_service_marks_missing_scope_gaps(
 @pytest.mark.asyncio(loop_scope="function")
 async def test_resolve_tool_outcome_distinguishes_empty_failed_and_skipped() -> None:
     """ISSUE-249: tool_ok_empty / tool_failed / source_skipped are mutually exclusive."""
-    assert (
-        resolve_tool_outcome(success=True, failed=False, gap_reason=None) == "tool_ok"
-    )
+    assert resolve_tool_outcome(success=True, failed=False, gap_reason=None) == "tool_ok"
     assert (
         resolve_tool_outcome(success=False, failed=False, gap_reason="no_records")
         == "tool_ok_empty"
     )
     assert (
-        resolve_tool_outcome(success=False, failed=True, gap_reason="tool_failed")
-        == "tool_failed"
+        resolve_tool_outcome(success=False, failed=True, gap_reason="tool_failed") == "tool_failed"
     )
     assert (
         resolve_tool_outcome(success=False, failed=True, gap_reason="source_skipped")
@@ -755,15 +752,8 @@ async def test_empty_records_counts_as_gap_not_success_source(
     assert dns_timing["provider_status"] == "success"
     assert dns_timing["records_count"] == 0
     assert dns_timing["gap_reason"] == "no_records"
-    # ISSUE-101: empty provider success must not flip collection thresholds.
-    assert output.collection_status in {
-        CollectionStatus.FAILED,
-        CollectionStatus.DEGRADED,
-        CollectionStatus.PARTIAL_DONE,
-        CollectionStatus.COMPLETED,
-    }
-    if not output.success_sources:
-        assert output.collection_status is CollectionStatus.FAILED
+    # ISSUE-101: collection_status is derived only from parser-success source count.
+    assert output.collection_status is EvidenceAgent._collection_status(len(output.success_sources))
 
 
 async def test_empty_records_tool_outcome_differs_from_tool_failed(

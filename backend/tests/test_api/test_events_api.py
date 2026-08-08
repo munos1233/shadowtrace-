@@ -617,9 +617,7 @@ async def test_list_events_projects_evidence_limited_demotion_fields(
     assert item["final_verdict"] == "none"
     assert item["evidence_limited"] is True
     assert item["scoring_mode"] == "rule_only"
-    assert item["verdict_reason_codes"] == [
-        EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT
-    ]
+    assert item["verdict_reason_codes"] == [EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT]
 
     detail_resp = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
     assert detail_resp.status_code == 200, detail_resp.text

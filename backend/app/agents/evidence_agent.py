@@ -1140,9 +1140,7 @@ class EvidenceAgent(BaseAgent[EvidenceAgentInput, EvidenceOutput]):
         # Surface tool_ok_empty in status so traces/UI cannot misread provider
         # SUCCESS + zero records as a healthy collection contribution.
         status_text = (
-            TOOL_OUTCOME_OK_EMPTY
-            if tool_outcome == TOOL_OUTCOME_OK_EMPTY
-            else provider_status
+            TOOL_OUTCOME_OK_EMPTY if tool_outcome == TOOL_OUTCOME_OK_EMPTY else provider_status
         )
 
         self.last_query_timings.append(

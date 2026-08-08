@@ -37,7 +37,5 @@ def test_project_for_compat_keeps_verdict_reason_codes() -> None:
             "thought": "secret-cot-must-not-leak",
         }
     )
-    assert projected["verdict_reason_codes"] == [
-        EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT
-    ]
+    assert projected["verdict_reason_codes"] == [EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT]
     assert projected["thought"] == "[NOT_RETAINED]"

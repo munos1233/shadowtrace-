@@ -299,10 +299,7 @@ def _normalize_tool_calls(
                 f"tool_outcome=tool_ok_empty（工具成功但无可用记录）"
             )
         elif tool_outcome is not None:
-            title = (
-                f"{row.tool_name} 工具调用完成：status={row.status} "
-                f"tool_outcome={tool_outcome}"
-            )
+            title = f"{row.tool_name} 工具调用完成：status={row.status} tool_outcome={tool_outcome}"
         else:
             title = f"{row.tool_name} 工具调用完成：status={row.status}"
         entries.append(

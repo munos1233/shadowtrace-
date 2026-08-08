@@ -11,9 +11,7 @@ from typing import Any
 from app.models.agent_io import ScoringMode
 
 # Stable machine-readable reason code (API / decision-trace / UI contract).
-EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT = (
-    "evidence_limited_demoted_from_confirmed_threat"
-)
+EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT = "evidence_limited_demoted_from_confirmed_threat"
 
 RISK_ASSESSMENT_SNAPSHOT_KEY = "risk_assessment"
 
