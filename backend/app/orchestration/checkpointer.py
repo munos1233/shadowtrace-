@@ -31,7 +31,9 @@ from app.core.redis_client import RedisClient, is_event_loop_error
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_KEY_PREFIX = "shadowtrace:checkpoint:"
+CHECKPOINT_GEN_KEY_PREFIX = "shadowtrace:checkpoint:gen:"
 CHECKPOINT_TTL_SECONDS = 7 * 24 * 60 * 60
+CHECKPOINT_ENVELOPE_FORMAT = 2
 
 _PROCESS_LAST_FALLBACK_REMINDER_AT = 0.0
 _CHECKPOINTERS: weakref.WeakSet[Any] = weakref.WeakSet()
@@ -47,6 +49,10 @@ def _live_checkpointers() -> list[RedisCheckpointer]:
 
 def checkpoint_key_for_event(event_id: str) -> str:
     return f"{CHECKPOINT_KEY_PREFIX}{event_id}"
+
+
+def checkpoint_gen_key_for_event(event_id: str) -> str:
+    return f"{CHECKPOINT_GEN_KEY_PREFIX}{event_id}"
 
 
 def _fallback_reason_category(message: str) -> str:
@@ -113,6 +119,7 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         self._fallback_reminder_interval_seconds = fallback_reminder_interval_seconds
         self._last_recovery_probe_at = 0.0
         self._memory_pinned_threads: set[str] = set()
+        self._thread_generations: dict[str, int] = {}
         self.memory_fallback = False
         self._fallback_warned = False
 
@@ -362,16 +369,16 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         await self._persist(thread_id)
 
     async def adelete_thread(self, thread_id: str) -> None:
-        was_pinned = thread_id in self._memory_pinned_threads
         self._memory.delete_thread(thread_id)
         self._memory_pinned_threads.discard(thread_id)
-        if was_pinned or self._redis is None or self.memory_fallback:
+        self._thread_generations.pop(thread_id, None)
+        if self._redis is None:
             return
         redis = self._redis
         try:
             await self._redis_call_with_loop_retry(
                 "delete",
-                lambda: redis.get_client().delete(checkpoint_key_for_event(thread_id)),
+                lambda: self._redis_delete_thread_keys(redis, thread_id),
             )
         except Exception as exc:
             if is_event_loop_error(exc):
@@ -383,7 +390,20 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
                 self._enable_memory_fallback("Redis checkpoint delete failed", exc_info=True)
             # Memory thread already deleted; align with persist/hydrate (no re-raise).
 
-    def _export(self, thread_id: str) -> bytes | None:
+    @staticmethod
+    def _generation_from_envelope(envelope: dict[str, Any]) -> int:
+        fmt = envelope.get("format", 1)
+        if fmt == 1:
+            return 1
+        if fmt != CHECKPOINT_ENVELOPE_FORMAT:
+            raise ValueError("unsupported Redis checkpoint envelope format")
+        return int(envelope["generation"])
+
+    def _peek_generation(self, raw: bytes) -> int:
+        envelope = json.loads(raw.decode())
+        return self._generation_from_envelope(envelope)
+
+    def _export(self, thread_id: str, *, generation: int) -> bytes | None:
         if thread_id not in self._memory.storage:
             return None
         payload = {
@@ -397,16 +417,16 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         }
         type_tag, raw = self._serde.dumps_typed(payload)
         envelope = {
-            "format": 1,
+            "format": CHECKPOINT_ENVELOPE_FORMAT,
+            "generation": generation,
             "serde": type_tag,
             "payload": base64.b64encode(raw).decode("ascii"),
         }
         return json.dumps(envelope, separators=(",", ":")).encode()
 
-    def _import(self, thread_id: str, raw: bytes) -> None:
+    def _import(self, thread_id: str, raw: bytes) -> int:
         envelope = json.loads(raw.decode())
-        if envelope.get("format") != 1:
-            raise ValueError("unsupported Redis checkpoint envelope format")
+        generation = self._generation_from_envelope(envelope)
         payload = self._serde.loads_typed(
             (
                 envelope["serde"],
@@ -416,6 +436,72 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         self._memory.storage[thread_id] = payload["storage"]
         self._memory.writes.update(payload.get("writes", {}))
         self._memory.blobs.update(payload.get("blobs", {}))
+        return generation
+
+    async def _redis_delete_thread_keys(self, redis: RedisClient, thread_id: str) -> None:
+        client = redis.get_client()
+        await client.delete(checkpoint_key_for_event(thread_id))
+        await client.delete(checkpoint_gen_key_for_event(thread_id))
+
+    async def _redis_persist_checkpoint(
+        self,
+        redis: RedisClient,
+        thread_id: str,
+        *,
+        generation: int,
+        raw: bytes,
+    ) -> None:
+        client = redis.get_client()
+        payload_key = checkpoint_key_for_event(thread_id)
+        gen_key = checkpoint_gen_key_for_event(thread_id)
+        await client.set(payload_key, raw, ex=self._ttl_seconds)
+        await client.set(gen_key, str(generation).encode(), ex=self._ttl_seconds)
+
+    async def _redis_tombstone_checkpoint(
+        self,
+        redis: RedisClient,
+        thread_id: str,
+        *,
+        generation: int,
+    ) -> None:
+        """Bump generation fence and drop payload so stale values cannot resume."""
+        client = redis.get_client()
+        gen_key = checkpoint_gen_key_for_event(thread_id)
+        payload_key = checkpoint_key_for_event(thread_id)
+        await client.set(gen_key, str(generation).encode(), ex=self._ttl_seconds)
+        await client.delete(payload_key)
+
+    async def _tombstone(self, thread_id: str, generation: int) -> None:
+        if self._redis is None:
+            return
+        redis = self._redis
+        try:
+            await self._redis_call_with_loop_retry(
+                "tombstone",
+                lambda: self._redis_tombstone_checkpoint(
+                    redis,
+                    thread_id,
+                    generation=generation,
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "checkpoint tombstone failed for thread=%s generation=%s",
+                thread_id,
+                generation,
+                exc_info=True,
+            )
+
+    async def _read_fence_generation(self, redis: RedisClient, thread_id: str) -> int:
+        raw = await self._redis_call_with_loop_retry(
+            "load_fence",
+            lambda: redis.get_client().get(checkpoint_gen_key_for_event(thread_id)),
+        )
+        if raw is None:
+            return 0
+        if isinstance(raw, bytes):
+            return int(raw.decode())
+        return int(str(raw))
 
     async def _hydrate(self, thread_id: str) -> None:
         if not self._uses_redis_for_thread(thread_id) or thread_id in self._memory.storage:
@@ -424,13 +510,26 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         if redis is None:
             return
         try:
+            fence_generation = await self._read_fence_generation(redis, thread_id)
             raw = await self._redis_call_with_loop_retry(
                 "load",
                 lambda: redis.get_client().get(checkpoint_key_for_event(thread_id)),
             )
-            if raw is not None:
-                value = raw if isinstance(raw, bytes) else str(raw).encode()
-                self._import(thread_id, value)
+            if raw is None:
+                return
+            value = raw if isinstance(raw, bytes) else str(raw).encode()
+            payload_generation = self._peek_generation(value)
+            if fence_generation > 0 and payload_generation < fence_generation:
+                logger.warning(
+                    "checkpoint rejected stale payload for thread=%s "
+                    "(payload_generation=%s fence_generation=%s)",
+                    thread_id,
+                    payload_generation,
+                    fence_generation,
+                )
+                return
+            imported_generation = self._import(thread_id, value)
+            self._thread_generations[thread_id] = imported_generation
         except Exception as exc:
             self._pin_thread_to_memory(thread_id)
             if is_event_loop_error(exc):
@@ -446,7 +545,8 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
             if self.memory_fallback:
                 self._pin_thread_to_memory(thread_id)
             return
-        raw = self._export(thread_id)
+        generation = self._thread_generations.get(thread_id, 0) + 1
+        raw = self._export(thread_id, generation=generation)
         if raw is None:
             return
         redis = self._redis
@@ -455,13 +555,16 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
         try:
             await self._redis_call_with_loop_retry(
                 "persist",
-                lambda: redis.get_client().set(
-                    checkpoint_key_for_event(thread_id),
-                    raw,
-                    ex=self._ttl_seconds,
+                lambda: self._redis_persist_checkpoint(
+                    redis,
+                    thread_id,
+                    generation=generation,
+                    raw=raw,
                 ),
             )
+            self._thread_generations[thread_id] = generation
         except Exception as exc:
+            await self._tombstone(thread_id, generation)
             self._pin_thread_to_memory(thread_id)
             if is_event_loop_error(exc):
                 self._enable_memory_fallback(
@@ -493,10 +596,13 @@ def reset_checkpoint_health_state_for_tests() -> None:
 
 
 __all__ = [
+    "CHECKPOINT_ENVELOPE_FORMAT",
+    "CHECKPOINT_GEN_KEY_PREFIX",
     "CHECKPOINT_KEY_PREFIX",
     "CHECKPOINT_TTL_SECONDS",
     "RedisCheckpointer",
     "build_checkpointer",
+    "checkpoint_gen_key_for_event",
     "checkpoint_key_for_event",
     "get_checkpoint_health",
     "reset_checkpoint_health_state_for_tests",
