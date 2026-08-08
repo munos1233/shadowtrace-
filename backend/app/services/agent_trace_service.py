@@ -412,7 +412,10 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
         similar = data.get("similar_cases") or []
         playbooks = data.get("playbook_refs") or []
         citations = data.get("citations") or []
-        fp = data.get("fp_similarity") if isinstance(data.get("fp_similarity"), Mapping) else {}
+        fp_raw = data.get("fp_similarity")
+        fp_max_score: Any | None = None
+        if isinstance(fp_raw, Mapping):
+            fp_max_score = fp_raw.get("max_score")
         technique_ids: list[str] = []
         if isinstance(techniques, list):
             for item in techniques[:3]:
@@ -422,7 +425,7 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
             [
                 f"techniques={len(techniques) if isinstance(techniques, list) else 0}",
                 f"top={','.join(technique_ids)}" if technique_ids else "",
-                f"fp_max={fp.get('max_score')}" if fp.get("max_score") is not None else "",
+                f"fp_max={fp_max_score}" if fp_max_score is not None else "",
                 f"similar_cases={len(similar) if isinstance(similar, list) else 0}",
                 f"playbook_refs={len(playbooks) if isinstance(playbooks, list) else 0}",
                 f"citations={len(citations) if isinstance(citations, list) else 0}",

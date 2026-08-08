@@ -92,6 +92,50 @@ def test_merge_evidence_summary_preserves_risk_and_strips_cot() -> None:
     assert "PROMPT-LEAK" not in blob
 
 
+def test_evidence_summary_from_dict_accepts_enum_collection_status() -> None:
+    summary = build_evidence_snapshot_summary(
+        {
+            "evidence_list": [],
+            "gaps": [],
+            "conflicts": [],
+            "success_sources": [],
+            "failed_sources": [],
+            "overall_confidence": 0.0,
+            "collection_status": CollectionStatus.PARTIAL_DONE,
+        }
+    )
+    assert summary["collection_status"] == CollectionStatus.PARTIAL_DONE.value
+
+
+def test_storyline_summary_from_dict_accepts_enum_fields() -> None:
+    summary = build_storyline_snapshot_summary(
+        {
+            "storyline_id": "stl-enum",
+            "grounding_status": StorylineGroundingStatus.EVIDENCE_GROUNDED,
+            "generated_by": StorylineGeneratedBy.LLM,
+            "phases": [],
+            "claim_refs": [],
+            "narrative_summary": "ok",
+        }
+    )
+    assert summary["grounding_status"] == StorylineGroundingStatus.EVIDENCE_GROUNDED.value
+    assert summary["generated_by"] == StorylineGeneratedBy.LLM.value
+
+
+def test_project_snapshot_for_api_accepts_enum_execution_substate() -> None:
+    from app.models.enums import ExecutionSubstate
+
+    projected = project_snapshot_for_api(
+        {
+            "collection_status": "partial",
+            "evidence_count": 0,
+            "execution_substate": ExecutionSubstate.WAITING_APPROVAL,
+        }
+    )
+    assert projected is not None
+    assert projected["execution_substate"] == ExecutionSubstate.WAITING_APPROVAL.value
+
+
 def test_merge_storyline_summary_keeps_grounding_status_bounded() -> None:
     storyline = AttackStoryline(
         storyline_id="stl-254",

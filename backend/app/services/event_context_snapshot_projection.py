@@ -12,6 +12,7 @@ CLOSED rows may still persist a full freeze in ORM for ``rebuild_context``;
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 import orjson
@@ -80,13 +81,27 @@ def _strip_forbidden(value: Any) -> Any:
     return value
 
 
+def _strip_forbidden_dict(payload: dict[str, Any]) -> dict[str, Any]:
+    """Strip forbidden keys and return a dict (empty when projection is not mapping-like)."""
+    stripped = _strip_forbidden(payload)
+    if not isinstance(stripped, dict):
+        return {}
+    return stripped
+
+
+def _enum_or_str(value: Any) -> str:
+    if isinstance(value, Enum):
+        return str(value.value)
+    return str(value or "")
+
+
 def _canonical_bytes(value: Any) -> bytes:
     return orjson.dumps(value, option=orjson.OPT_SORT_KEYS)
 
 
 def _fit_bytes(payload: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
     """Return payload if within budget; otherwise drop optional stringy fields."""
-    cleaned = _strip_forbidden(payload)
+    cleaned = _strip_forbidden_dict(payload)
     if len(_canonical_bytes(cleaned)) <= max_bytes:
         return cleaned
     # Progressive shrink: drop narrative / reasons first, keep status counters.
@@ -108,7 +123,7 @@ def _fit_bytes(payload: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
     if len(_canonical_bytes(shrunk)) <= max_bytes:
         return shrunk
     # Last resort: counters / enums only.
-    minimal = {
+    minimal: dict[str, Any] = {
         k: shrunk[k]
         for k in (
             "evidence_count",
@@ -162,9 +177,7 @@ def build_evidence_snapshot_summary(
         success_sources = [str(s) for s in (evidence.get("success_sources") or [])]
         failed_sources = [str(s) for s in (evidence.get("failed_sources") or [])]
         raw_status = evidence.get("collection_status")
-        collection_status = (
-            raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")
-        )
+        collection_status = _enum_or_str(raw_status)
         try:
             overall_confidence = float(evidence.get("overall_confidence") or 0.0)
         except (TypeError, ValueError):
@@ -205,12 +218,8 @@ def build_storyline_snapshot_summary(
         claim_refs = storyline.get("claim_refs") or []
         payload = {
             "storyline_id": str(storyline.get("storyline_id") or "")[:128],
-            "grounding_status": (
-                grounding.value if hasattr(grounding, "value") else str(grounding or "")
-            )[:64],
-            "generated_by": (
-                generated_by.value if hasattr(generated_by, "value") else str(generated_by or "")
-            )[:32],
+            "grounding_status": _enum_or_str(grounding)[:64],
+            "generated_by": _enum_or_str(generated_by)[:32],
             "phase_count": len(phases) if isinstance(phases, list) else 0,
             "claim_ref_count": len(claim_refs) if isinstance(claim_refs, list) else 0,
             "narrative_summary": str(storyline.get("narrative_summary") or "")[
@@ -222,10 +231,7 @@ def build_storyline_snapshot_summary(
 
 
 def _bound_risk_assessment(risk: dict[str, Any]) -> dict[str, Any]:
-    cleaned = _strip_forbidden(risk)
-    if not isinstance(cleaned, dict):
-        return {}
-    return _fit_bytes(cleaned, max_bytes=_MAX_RISK_ASSESSMENT_BYTES)
+    return _fit_bytes(_strip_forbidden_dict(risk), max_bytes=_MAX_RISK_ASSESSMENT_BYTES)
 
 
 def _storyline_needs_reproject(storyline: dict[str, Any]) -> bool:
@@ -326,10 +332,7 @@ def project_snapshot_for_api(snapshot: dict[str, Any] | None) -> dict[str, Any] 
     if isinstance(override, dict):
         projected["classification_override"] = _strip_forbidden(override)
     if snapshot.get("execution_substate") is not None:
-        raw_sub = snapshot.get("execution_substate")
-        projected["execution_substate"] = (
-            raw_sub.value if hasattr(raw_sub, "value") else str(raw_sub)
-        )[:64]
+        projected["execution_substate"] = _enum_or_str(snapshot.get("execution_substate"))[:64]
 
     return _hard_project_api_snapshot(projected)
 
