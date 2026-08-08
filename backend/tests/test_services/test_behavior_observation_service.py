@@ -34,6 +34,8 @@ from app.services.behavior_observation_resolver import (
 from app.services.behavior_observation_service import BehaviorObservationService
 from app.services.detection_scope_service import DetectionScopeService
 from tests.test_services.behavior_observation_fixtures import (
+    build_ambiguous_active_scope_rows,
+    patch_session_scalars_with_ambiguous_scopes,
     seed_behavior_observation_connector as seed_connector,
 )
 from tests.test_services.behavior_observation_fixtures import (
@@ -513,48 +515,15 @@ async def test_ambiguous_scope_binding_still_fails_closed(
         tenant_id=tenant_id,
         integration_instance_id=instance_id,
     )
-    connector_set = {
-        "connector_set_version": 1,
-        "upstream_connectors": [{"connector_id": connector_id, "source_product": "mock_xdr"}],
-    }
-    async with session_factory() as session:
-        async with session.begin():
-            session.add(
-                orm.DetectionScopeRevision(
-                    scope_revision_id=f"dsrev-a-{suffix}",
-                    detection_scope_id=f"dscope-a-{suffix}",
-                    source_tenant_id=tenant_id,
-                    source_product="mock_xdr",
-                    integration_instance_id=instance_id,
-                    connector_set=connector_set,
-                    connector_set_version=1,
-                    lifecycle_state=DetectionScopeLifecycleState.ACTIVE.value,
-                    revision=1,
-                    content_hash="a" * 64,
-                    identity_hash="b" * 64,
-                    idempotency_key=f"idem-a-{suffix}",
-                    schema_version="1.0",
-                )
-            )
-            session.add(
-                orm.DetectionScopeRevision(
-                    scope_revision_id=f"dsrev-b-{suffix}",
-                    detection_scope_id=f"dscope-b-{suffix}",
-                    source_tenant_id=tenant_id,
-                    source_product="mock_xdr",
-                    integration_instance_id=instance_id,
-                    connector_set=connector_set,
-                    connector_set_version=1,
-                    lifecycle_state=DetectionScopeLifecycleState.ACTIVE.value,
-                    revision=1,
-                    content_hash="c" * 64,
-                    identity_hash="d" * 64,
-                    idempotency_key=f"idem-b-{suffix}",
-                    schema_version="1.0",
-                )
-            )
+    ambiguous_rows = build_ambiguous_active_scope_rows(
+        suffix=suffix,
+        tenant_id=tenant_id,
+        connector_id=connector_id,
+        instance_id=instance_id,
+    )
 
     async with session_factory() as session:
+        patch_session_scalars_with_ambiguous_scopes(session, ambiguous_rows)
         with pytest.raises(ValidationError, match="ambiguous detection scope binding"):
             await resolve_detection_scope_id(
                 session,

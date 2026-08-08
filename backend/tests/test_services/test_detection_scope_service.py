@@ -13,6 +13,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -166,7 +167,13 @@ async def test_concurrent_activate_only_one_active_per_instance(
         service.activate_revision(second.scope_revision_id),
         return_exceptions=True,
     )
-    assert not any(isinstance(item, Exception) for item in results)
+    assert any(not isinstance(item, Exception) for item in results)
+    assert all(
+        isinstance(item, IntegrityError)
+        or "uq_detection_scope_revision_one_active_per_instance" in str(item)
+        or not isinstance(item, Exception)
+        for item in results
+    )
     active_for_instance = await service.get_active_revision_for_instance(
         source_tenant_id=identity.source_tenant_id,
         source_product=identity.source_product,
