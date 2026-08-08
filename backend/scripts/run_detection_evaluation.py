@@ -40,14 +40,20 @@ def cli_exit_code(
     gate_verdict: str | None,
     baseline_compare_failed: bool,
     allow_gate_fail: bool,
+    required_scorer_error_count: int = 0,
 ) -> int:
-    """Map evaluation outcomes to process exit codes (ISSUE-167 / #686).
+    """Map evaluation outcomes to process exit codes (ISSUE-167 / #686, ISSUE-263).
 
-    Baseline drift always fails. During the #642 report-only / baseline-pin
-    phase, ``--allow-gate-fail`` keeps CI green when the pinned gate is still
-    ``fail_closed`` (expected cold-start / resource-limit ERROR slices). Flip
-    CI back to required by dropping ``--allow-gate-fail`` once fixtures make
-    ``required_gate`` + gate pass deterministic.
+    Required mode (default, no ``--allow-gate-fail``) exits non-zero when:
+
+    - baseline structural drift is detected;
+    - artifact status is not ``completed``;
+    - gate verdict is ``fail`` or ``fail_closed``;
+    - any required scorer raised an error.
+
+    Observe mode (``--allow-gate-fail``) keeps the process exit code zero for gate
+    and scorer failures so a non-blocking CI job can upload diagnostics without
+    impersonating the required gate. Baseline drift still fails in observe mode.
 
     We use a CLI flag instead of ``threshold_manifest.required_gate: false``
     because lowering ``required_gate`` would emit ``fail`` rather than
@@ -56,10 +62,42 @@ def cli_exit_code(
     """
     if baseline_compare_failed:
         return 1
-    gate_failed = artifact_status != "completed" or gate_verdict in {"fail", "fail_closed"}
-    if gate_failed and not allow_gate_fail:
+    if allow_gate_fail:
+        return 0
+    if required_scorer_error_count > 0:
+        return 1
+    if artifact_status != "completed":
+        return 1
+    if gate_verdict in {"fail", "fail_closed"}:
         return 1
     return 0
+
+
+def format_evaluation_summary(*, artifact, threshold_path: Path | None) -> str:
+    """Render a compact human-readable summary for CI step output."""
+    gate = artifact.gate
+    required_gate = None
+    if threshold_path is not None and threshold_path.is_file():
+        from app.evaluation.threshold import load_threshold_manifest
+
+        required_gate = load_threshold_manifest(threshold_path).required_gate
+    lines = [
+        "### Detection evaluation",
+        "",
+        f"- **status**: `{artifact.status.value}`",
+        f"- **gate_verdict**: `{gate.verdict.value if gate else 'none'}`",
+        f"- **required_gate** (manifest): `{required_gate}`",
+        f"- **pass_rate**: `{artifact.aggregates.pass_rate}`",
+        f"- **required_scorer_error_count**: `{artifact.aggregates.required_scorer_error_count}`",
+        f"- **artifact_hash**: `{artifact.artifact_hash}`",
+    ]
+    if gate and gate.diffs:
+        lines.extend(["", "**Gate diffs:**", ""])
+        for diff in gate.diffs[:10]:
+            lines.append(f"- `{diff.field}`: {diff.reason}")
+        if len(gate.diffs) > 10:
+            lines.append(f"- … and {len(gate.diffs) - 10} more")
+    return "\n".join(lines) + "\n"
 
 
 def _apply_migrations(database_url: str) -> None:
@@ -231,6 +269,7 @@ async def _run(args: argparse.Namespace) -> int:
                 gate_verdict=artifact.gate.verdict.value if artifact.gate else None,
                 baseline_compare_failed=True,
                 allow_gate_fail=args.allow_gate_fail,
+                required_scorer_error_count=artifact.aggregates.required_scorer_error_count,
             )
         print(
             json.dumps(
@@ -242,12 +281,20 @@ async def _run(args: argparse.Namespace) -> int:
             )
         )
 
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        Path(summary_path).write_text(
+            format_evaluation_summary(artifact=artifact, threshold_path=threshold_path),
+            encoding="utf-8",
+        )
+
     await engine.dispose()
     return cli_exit_code(
         artifact_status=artifact.status.value,
         gate_verdict=artifact.gate.verdict.value if artifact.gate else None,
         baseline_compare_failed=False,
         allow_gate_fail=args.allow_gate_fail,
+        required_scorer_error_count=artifact.aggregates.required_scorer_error_count,
     )
 
 
@@ -304,9 +351,9 @@ def main() -> None:
         "--allow-gate-fail",
         action="store_true",
         help=(
-            "Report-only baseline phase (#642/#686): do not exit non-zero for "
-            "gate fail/fail_closed or non-completed status. Baseline drift still fails. "
-            "Remove this flag in CI when detection_shadow_v1 gate is required green."
+            "Observe-only mode (non-blocking CI jobs): do not exit non-zero for "
+            "gate fail/fail_closed, non-completed status, or required scorer errors. "
+            "Baseline drift still fails. Required CI jobs must omit this flag."
         ),
     )
     args = parser.parse_args()

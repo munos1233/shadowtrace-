@@ -556,8 +556,7 @@ evaluation-test:
 	DATABASE_URL="$(CI_DATABASE_URL)" \
 		$(PYTHON) -m pytest tests/evaluation/ -m evaluation -v --tb=short
 
-# --- ISSUE-126 detection shadow evaluation (report-only baseline; mock-only replay) --- #
-# Drop --allow-gate-fail once detection_shadow_v1 gate is deterministically green (#642/#686).
+# --- ISSUE-126 detection shadow evaluation (required gate; mock-only replay) --- #
 detection-evaluation-run:
 	@set -eu; \
 	project="$(INTEGRATION_PROJECT_NAME)"; \
@@ -583,8 +582,7 @@ detection-evaluation-run:
 		--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)" \
 		--seed 42 \
 		--threshold-manifest "$(CURDIR)/data/evaluation/detection_shadow_v1/threshold_manifest.json" \
-		--compare-baseline "$(CURDIR)/data/evaluation/detection_shadow_v1/baseline_artifact.json" \
-		--allow-gate-fail
+		--compare-baseline "$(CURDIR)/data/evaluation/detection_shadow_v1/baseline_artifact.json"
 
 # --- ISSUE-126 detection production comparison (Phase B; requires promoted candidates) --- #
 detection-production-comparison-run:

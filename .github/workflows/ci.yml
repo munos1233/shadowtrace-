@@ -346,17 +346,17 @@ jobs:
             --threshold-manifest "${GITHUB_WORKSPACE}/data/evaluation/agentic_coordination_v1/threshold_manifest.json" \
             --compare-baseline "${GITHUB_WORKSPACE}/data/evaluation/agentic_coordination_v1/baseline_artifact.json"
 
-      - name: Run mock detection evaluation (report-only baseline)
+      - name: Run mock detection evaluation (required gate)
         run: |
           uv run --frozen python -m scripts.run_detection_evaluation \
             --output "${GITHUB_WORKSPACE}/artifacts/evaluation/detection_ci_run.json" \
             --code-sha "${GITHUB_SHA}" \
             --seed 42 \
             --threshold-manifest "${GITHUB_WORKSPACE}/data/evaluation/detection_shadow_v1/threshold_manifest.json" \
-            --compare-baseline "${GITHUB_WORKSPACE}/data/evaluation/detection_shadow_v1/baseline_artifact.json" \
-            --allow-gate-fail
+            --compare-baseline "${GITHUB_WORKSPACE}/data/evaluation/detection_shadow_v1/baseline_artifact.json"
 
       - name: Upload evaluation artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: evaluation-run-artifact
@@ -365,7 +365,7 @@ jobs:
             artifacts/evaluation/security_knowledge_ci_run.json
             artifacts/evaluation/agentic_coordination_ci_run.json
             artifacts/evaluation/detection_ci_run.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   frontend-build:
     name: frontend-build
