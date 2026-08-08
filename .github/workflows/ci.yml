@@ -131,10 +131,20 @@ jobs:
       - name: Install backend (frozen dev)
         run: uv sync --frozen --extra dev
 
-      - name: Pytest with coverage
+      - name: Pytest with coverage (ISSUE-267)
         run: >
           uv run --frozen pytest --cov=app --cov-report=term
           --cov-report=xml:coverage.xml
+          --junitxml=junit-default.xml
+          --durations=25 --durations-min=0.5
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-junit-default
+          path: backend/junit-default.xml
+          if-no-files-found: warn
 
       - name: ISSUE-055 orchestration coverage gate
         run: >
@@ -151,8 +161,21 @@ jobs:
               tests/test_tools/test_verify_tools.py::test_pending_projection_timeout_is_not_reported_as_effect_failure \
               tests/test_tools/test_verify_tools.py::test_delayed_projection_becomes_visible_after_clock_advance \
               --cov=app --cov-append --cov-report=term \
-              --cov-report=xml:coverage.xml
+              --cov-report=xml:coverage.xml \
+              --junitxml="junit-timing-${attempt}.xml" \
+              --durations=10
           done
+
+      - name: Upload timing JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-junit-timing
+          path: |
+            backend/junit-timing-1.xml
+            backend/junit-timing-2.xml
+            backend/junit-timing-3.xml
+          if-no-files-found: warn
 
       - name: Upload coverage summary
         if: always()

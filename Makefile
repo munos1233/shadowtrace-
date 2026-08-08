@@ -666,7 +666,8 @@ ci-test:
 	compose up -d --wait --wait-timeout 120 postgres redis; \
 	cd "$(CURDIR)/backend"; \
 	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
-		$(UV) run --frozen pytest --cov=app --cov-report=term --cov-report=xml:coverage.xml
+		$(UV) run --frozen pytest --cov=app --cov-report=term --cov-report=xml:coverage.xml \
+		--junitxml=junit-default.xml --durations=25 --durations-min=0.5
 
 ci-build:
 	cd frontend && (corepack enable && corepack prepare pnpm@9.15.9 --activate || true)
