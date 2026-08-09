@@ -69,8 +69,8 @@ jobs:
           tests/test_api/test_celery_investigation.py
           tests/test_tasks/test_investigation_tasks.py -q
 
-  # Schedule (cron) runs pytest-only redelivery matrix. Real Docker worker smoke
-  # requires compose + worker profile and is manual via workflow_dispatch only.
+  # Broad Docker smoke remains manual; the focused SIGKILL gate below runs on
+  # both the nightly schedule and workflow_dispatch.
   docker-worker-smoke:
     name: docker-worker-smoke
     if: github.event_name == 'workflow_dispatch'
@@ -112,3 +112,42 @@ jobs:
             --project-name "${COMPOSE_PROJECT_NAME}" \
             -f "${GITHUB_WORKSPACE}/infra/docker-compose.yml" \
             down --volumes --remove-orphans || true
+
+  worker-sigkill-fault-injection:
+    name: worker-sigkill-fault-injection
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CELERY_SIGKILL_PROJECT_NAME: shadowtrace-issue283-${{ github.run_id }}
+      CELERY_SIGKILL_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/issue-283
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
+      BACKEND_PORT: "8000"
+      MOCK_XDR_PORT: "8100"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend (frozen dev)
+        working-directory: backend
+        run: uv sync --frozen --extra dev
+
+      - name: ISSUE-283 real worker SIGKILL/redelivery gate
+        run: make autonomous-mock-e2e-worker-sigkill
+
+      - name: Upload ISSUE-283 fault artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-283-sigkill-${{ github.run_id }}
+          path: artifacts/issue-283/*.json
+          if-no-files-found: error
+          retention-days: 30

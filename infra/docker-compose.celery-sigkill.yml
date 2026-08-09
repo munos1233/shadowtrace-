@@ -1,0 +1,30 @@
+# ISSUE-283 dedicated real-worker fault-injection override.
+# Imported test tasks are never loaded by the normal production worker.
+services:
+  worker:
+    environment:
+      PYTHONPATH: /app:/app/backend
+      ISSUE283_VISIBILITY_TIMEOUT_S: "5"
+      ALLOW_LIVE_SIDE_EFFECTS: "false"
+      ALLOW_XDR_WRITEBACK: "false"
+    command:
+      [
+        "python", "-m", "celery",
+        "-A", "tests.fault_injection.celery_sigkill_tasks:celery_app",
+        "worker",
+        "-Q", "issue283-sigkill",
+        "-n", "issue283@%h",
+        "-c", "1",
+        "--prefetch-multiplier=1",
+        "--loglevel=INFO",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -m celery -A tests.fault_injection.celery_sigkill_tasks:celery_app inspect ping -d issue283@$(hostname) -t 3 | grep -q OK",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s

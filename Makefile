@@ -16,6 +16,7 @@ PROMETHEUS_PORT ?= 9090
 GRAFANA_PORT ?= 3001
 
 COMPOSE_FILE := $(CURDIR)/infra/docker-compose.yml
+CELERY_SIGKILL_COMPOSE_FILE := $(CURDIR)/infra/docker-compose.celery-sigkill.yml
 OBS_COMPOSE_FILE := $(CURDIR)/infra/observability/docker-compose.observability.yml
 COMPOSE := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
@@ -57,12 +58,14 @@ export TASK_MODE := $(if $(WORKER),celery,$(if $(TASK_MODE),$(TASK_MODE),backgro
 INTEGRATION_PROJECT_NAME ?= $(COMPOSE_PROJECT_NAME)-integration
 CI_TEST_PROJECT_NAME ?= $(COMPOSE_PROJECT_NAME)-ci-test
 CI_BUILD_PROJECT_PREFIX ?= $(COMPOSE_PROJECT_NAME)-ci-build
+CELERY_SIGKILL_PROJECT_NAME ?= $(COMPOSE_PROJECT_NAME)-issue283-sigkill
+CELERY_SIGKILL_ARTIFACT_DIR ?= $(CURDIR)/artifacts/issue-283
 
 # Host-side URLs for tests that talk to Compose postgres/redis from the workstation / CI runner.
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest eval-full-loop test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
+.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
 	$(COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
@@ -368,6 +371,47 @@ autonomous-mock-e2e-worker-pytest:
 		CELERY_BROKER_URL="$(CI_REDIS_URL)" \
 		$(PYTHON) -m pytest tests/integration/autonomous_e2e/ \
 		-m "autonomous_mock_e2e" -v --tb=short
+
+# --- ISSUE-283 real Celery SIGKILL / redelivery durability gate ------------ #
+autonomous-mock-e2e-worker-sigkill:
+	@set -eu; \
+	project="$(CELERY_SIGKILL_PROJECT_NAME)"; \
+	artifact_dir="$(CELERY_SIGKILL_ARTIFACT_DIR)"; \
+	compose() { \
+		COMPOSE_PROJECT_NAME="$$project" \
+		POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+		BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+		MOCK_XDR_PORT="$(MOCK_XDR_PORT)" \
+		docker compose --project-name "$$project" \
+			-f "$(COMPOSE_FILE)" -f "$(CELERY_SIGKILL_COMPOSE_FILE)" \
+			--profile worker "$$@"; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ "$$status" -ne 0 ]; then \
+			compose ps -a || true; \
+			compose logs --no-color --tail 300 postgres redis mock-xdr backend worker || true; \
+		fi; \
+		compose down --volumes --remove-orphans || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	compose up -d --build --wait --wait-timeout 240 postgres redis mock-xdr backend worker; \
+	cd "$(CURDIR)/backend"; \
+	POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
+		BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
+		MOCK_XDR_PORT="$(MOCK_XDR_PORT)" \
+		DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
+		CELERY_BROKER_URL="$(CI_REDIS_URL)" TASK_MODE=celery \
+		MOCK_XDR_URL="http://127.0.0.1:$(MOCK_XDR_PORT)" \
+		$(PYTHON) -m scripts.celery_worker_sigkill_gate \
+		--project "$$project" \
+		--compose-file "$(COMPOSE_FILE)" \
+		--compose-file "$(CELERY_SIGKILL_COMPOSE_FILE)" \
+		--artifact-dir "$$artifact_dir" \
+		--redis-url "$(CI_REDIS_URL)" \
+		--mock-xdr-url "http://127.0.0.1:$(MOCK_XDR_PORT)"
 
 # --- ISSUE-107 Mock XDR ingestion scheduler quality gate -------------------- #
 ingestion-scheduler-test:
