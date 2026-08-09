@@ -13,6 +13,7 @@ import pytest
 from app.core.metrics import checkpoint_health_snapshot
 from app.core.redis_client import RedisClient, is_event_loop_error
 from app.orchestration.checkpointer import (
+    CheckpointPersistenceError,
     RedisCheckpointer,
     checkpoint_key_for_event,
     get_checkpoint_health,
@@ -169,6 +170,37 @@ async def test_persist_recovers_from_event_loop_error_without_sticky_fallback() 
                 raise RuntimeError("Event loop is closed")
             self.values[key] = value
 
+        async def incr(self, key: str) -> int:
+            generation = int(self.values.get(key, b"0")) + 1
+            self.values[key] = str(generation).encode()
+            return generation
+
+        async def expire(self, key: str, seconds: int) -> bool:
+            del key, seconds
+            return True
+
+        async def eval(self, script: str, numkeys: int, *args: object) -> int:
+            del numkeys
+            if "checkpoint-reserve-generation-v2" in script:
+                sequence_key, generation_key, _ttl = args
+                assert isinstance(sequence_key, str)
+                assert isinstance(generation_key, str)
+                generation = int(self.values.get(sequence_key, b"0")) + 1
+                self.values[sequence_key] = str(generation).encode()
+                self.values[generation_key] = str(generation).encode()
+                return generation
+            assert "checkpoint-publish-v2" in script
+            checkpoint_key, generation_key, generation, value, ttl = args
+            assert isinstance(checkpoint_key, str)
+            assert isinstance(generation_key, str)
+            assert isinstance(generation, int)
+            assert isinstance(value, bytes)
+            assert isinstance(ttl, int)
+            if int(self.values.get(generation_key, b"0")) != generation:
+                return 0
+            await self.set(checkpoint_key, value, ex=ttl)
+            return 1
+
         async def delete(self, key: str) -> None:
             self.values.pop(key, None)
 
@@ -210,6 +242,22 @@ async def test_persist_loop_error_falls_back_when_rebind_retry_fails() -> None:
             del key
             raise RuntimeError("Event loop is closed")
 
+        async def incr(self, key: str) -> int:
+            del key
+            raise RuntimeError("Event loop is closed")
+
+        async def expire(self, key: str, seconds: int) -> bool:
+            del key, seconds
+            raise RuntimeError("Event loop is closed")
+
+        async def delete(self, key: str) -> None:
+            del key
+            raise RuntimeError("Event loop is closed")
+
+        async def eval(self, script: str, numkeys: int, *args: object) -> int:
+            del script, numkeys, args
+            raise RuntimeError("Event loop is closed")
+
     class _BrokenRedis:
         def __init__(self) -> None:
             self.store = _AlwaysClosedStore()
@@ -226,7 +274,8 @@ async def test_persist_loop_error_falls_back_when_rebind_retry_fails() -> None:
     redis = _BrokenRedis()
     saver = await RedisCheckpointer.create(redis)  # type: ignore[arg-type]
     saver._memory.storage["evt-loop-fail"] = {}
-    await saver._persist("evt-loop-fail")
+    with pytest.raises(CheckpointPersistenceError, match="generation fence"):
+        await saver._persist("evt-loop-fail")
 
     assert saver.memory_fallback is True
     assert "evt-loop-fail" in saver._memory_pinned_threads
@@ -324,6 +373,36 @@ async def test_hydrate_recovers_from_event_loop_error_without_sticky_fallback() 
         async def set(self, key: str, value: bytes, *, ex: int | None = None) -> None:
             del ex
             self.values[key] = value
+
+        async def incr(self, key: str) -> int:
+            generation = int(self.values.get(key, b"0")) + 1
+            self.values[key] = str(generation).encode()
+            return generation
+
+        async def expire(self, key: str, seconds: int) -> bool:
+            del key, seconds
+            return True
+
+        async def eval(self, script: str, numkeys: int, *args: object) -> int:
+            del numkeys
+            if "checkpoint-reserve-generation-v2" in script:
+                sequence_key, generation_key, _ttl = args
+                assert isinstance(sequence_key, str)
+                assert isinstance(generation_key, str)
+                generation = int(self.values.get(sequence_key, b"0")) + 1
+                self.values[sequence_key] = str(generation).encode()
+                self.values[generation_key] = str(generation).encode()
+                return generation
+            assert "checkpoint-publish-v2" in script
+            checkpoint_key, generation_key, generation, value, _ttl = args
+            assert isinstance(checkpoint_key, str)
+            assert isinstance(generation_key, str)
+            assert isinstance(generation, int)
+            assert isinstance(value, bytes)
+            if int(self.values.get(generation_key, b"0")) != generation:
+                return 0
+            self.values[checkpoint_key] = value
+            return 1
 
         async def delete(self, key: str) -> None:
             self.values.pop(key, None)

@@ -313,6 +313,7 @@ class FakeStateMachine:
 class FakeEventService:
     def __init__(self) -> None:
         self.verdicts: list[FinalVerdict] = []
+        self.context_snapshots: dict[str, dict[str, bool]] = {}
 
     async def set_final_verdict(
         self,
@@ -323,6 +324,20 @@ class FakeEventService:
     ) -> Any:
         self.verdicts.append(verdict)
         return SimpleNamespace(event_id=event_id, final_verdict=verdict)
+
+    async def merge_report_generated_context_snapshot(
+        self,
+        event_id: str,
+        generated: bool,
+    ) -> None:
+        self.context_snapshots.setdefault(event_id, {})["report_generated"] = generated
+
+    async def merge_analysis_only_complete_context_snapshot(
+        self,
+        event_id: str,
+        complete: bool,
+    ) -> None:
+        self.context_snapshots.setdefault(event_id, {})["analysis_only_complete"] = complete
 
 
 class FakeRuntime:
@@ -408,6 +423,37 @@ class FakeRedisStore:
         self.values[key] = value
         if ex is not None:
             self.ttls[key] = ex
+
+    async def incr(self, key: str) -> int:
+        generation = int(self.values.get(key, b"0")) + 1
+        self.values[key] = str(generation).encode()
+        return generation
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        self.ttls[key] = seconds
+        return True
+
+    async def eval(self, script: str, numkeys: int, *args: object) -> int:
+        del numkeys
+        if "checkpoint-reserve-generation-v2" in script:
+            sequence_key, generation_key, _ttl = args
+            assert isinstance(sequence_key, str)
+            assert isinstance(generation_key, str)
+            generation = int(self.values.get(sequence_key, b"0")) + 1
+            self.values[sequence_key] = str(generation).encode()
+            self.values[generation_key] = str(generation).encode()
+            return generation
+        assert "checkpoint-publish-v2" in script
+        checkpoint_key, generation_key, generation, value, ttl = args
+        assert isinstance(checkpoint_key, str)
+        assert isinstance(generation_key, str)
+        assert isinstance(generation, int)
+        assert isinstance(value, bytes)
+        assert isinstance(ttl, int)
+        if int(self.values.get(generation_key, b"0")) != generation:
+            return 0
+        await self.set(checkpoint_key, value, ex=ttl)
+        return 1
 
     async def delete(self, key: str) -> None:
         self.values.pop(key, None)
@@ -1787,7 +1833,7 @@ async def test_issue277_hold_resolve_intent_claim_resume_reaches_report_via_veri
 
     Must exercise ManualResolutionService (not seed+prepare alone).
     """
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.db import models as orm
     from app.models.enums import GraphResumeIntentStatus, Severity
