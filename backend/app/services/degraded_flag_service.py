@@ -50,6 +50,8 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "event_context_snapshot_merge_failed",
         # ISSUE-275 Celery redelivery exhaustion / manual recovery
         "celery_redelivery_recovery_needed",
+        # ISSUE-285 committed state with a degraded post-commit projection.
+        "state_transition_projection_degraded",
     }
 )
 

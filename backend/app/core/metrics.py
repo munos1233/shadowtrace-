@@ -25,12 +25,16 @@ _checkpoint_loop_rebind_total: Any | None = None
 _budget_redis_fallback_total: Any | None = None
 _budget_redis_recovery_total: Any | None = None
 _budget_redis_degraded_gauge: Any | None = None
+_state_projection_failure_total: Any | None = None
+_state_projection_repair_total: Any | None = None
 _initialized = False
 _process_checkpoint_fallback_active = False
 _process_checkpoint_fallback_triggers = 0
 _process_checkpoint_loop_rebinds = 0
 _process_budget_redis_degraded = False
 _process_reservation_redis_degraded = False
+_process_state_projection_failures = 0
+_process_state_projection_repairs = 0
 
 
 def _ensure_metrics() -> None:
@@ -39,6 +43,7 @@ def _ensure_metrics() -> None:
     global _checkpoint_memory_fallback_gauge, _checkpoint_loop_rebind_total
     global _budget_redis_fallback_total
     global _budget_redis_recovery_total, _budget_redis_degraded_gauge, _initialized
+    global _state_projection_failure_total, _state_projection_repair_total
 
     if not telemetry.is_telemetry_enabled():
         return
@@ -100,6 +105,16 @@ def _ensure_metrics() -> None:
         _budget_redis_degraded_gauge = _meter.create_up_down_counter(
             name="shadowtrace_budget_redis_degraded",
             description="1 when a budget/reservation service is in Redis degraded mode, else 0",
+            unit="1",
+        )
+        _state_projection_failure_total = _meter.create_counter(
+            name="shadowtrace_state_projection_failure_total",
+            description="Post-commit state projection failures by step and failure mode",
+            unit="1",
+        )
+        _state_projection_repair_total = _meter.create_counter(
+            name="shadowtrace_state_projection_repair_total",
+            description="Bounded post-commit state projection repair outcomes",
             unit="1",
         )
     except Exception:
@@ -266,6 +281,40 @@ def budget_redis_health_snapshot() -> dict[str, bool]:
     }
 
 
+def record_state_projection_failure(*, step: str, mode: str) -> None:
+    """Record a low-cardinality post-commit projection failure."""
+    global _process_state_projection_failures
+    _process_state_projection_failures += 1
+    _ensure_metrics()
+    if _state_projection_failure_total is None:
+        return
+    try:
+        _state_projection_failure_total.add(1, {"step": step, "mode": mode})
+    except Exception:
+        logger.debug("state projection failure metric export failed", exc_info=True)
+
+
+def record_state_projection_repair(*, outcome: str) -> None:
+    """Record a bounded repair outcome (``success`` or ``exhausted``)."""
+    global _process_state_projection_repairs
+    _process_state_projection_repairs += 1
+    _ensure_metrics()
+    if _state_projection_repair_total is None:
+        return
+    try:
+        _state_projection_repair_total.add(1, {"outcome": outcome})
+    except Exception:
+        logger.debug("state projection repair metric export failed", exc_info=True)
+
+
+def state_projection_health_snapshot() -> dict[str, int]:
+    """Process-local counters for health probes and deterministic tests."""
+    return {
+        "projection_failures": _process_state_projection_failures,
+        "projection_repairs": _process_state_projection_repairs,
+    }
+
+
 def get_budget_redis_health() -> dict[str, object]:
     """Process-wide budget/reservation Redis readiness for health probes (ISSUE-174)."""
     from app.core.config import get_settings
@@ -288,9 +337,11 @@ def reset_metrics_for_tests() -> None:
     global _checkpoint_memory_fallback_gauge, _checkpoint_loop_rebind_total
     global _budget_redis_fallback_total
     global _budget_redis_recovery_total, _budget_redis_degraded_gauge, _initialized
+    global _state_projection_failure_total, _state_projection_repair_total
     global _process_checkpoint_fallback_active, _process_checkpoint_fallback_triggers
     global _process_checkpoint_loop_rebinds
     global _process_budget_redis_degraded, _process_reservation_redis_degraded
+    global _process_state_projection_failures, _process_state_projection_repairs
     _meter = None
     _writeback_total = None
     _writeback_queue_age = None
@@ -303,12 +354,16 @@ def reset_metrics_for_tests() -> None:
     _budget_redis_fallback_total = None
     _budget_redis_recovery_total = None
     _budget_redis_degraded_gauge = None
+    _state_projection_failure_total = None
+    _state_projection_repair_total = None
     _initialized = False
     _process_checkpoint_fallback_active = False
     _process_checkpoint_fallback_triggers = 0
     _process_checkpoint_loop_rebinds = 0
     _process_budget_redis_degraded = False
     _process_reservation_redis_degraded = False
+    _process_state_projection_failures = 0
+    _process_state_projection_repairs = 0
 
 
 def reset_checkpoint_metrics_for_tests() -> None:
@@ -337,6 +392,8 @@ __all__ = [
     "record_budget_redis_recovery",
     "record_checkpoint_fallback",
     "record_checkpoint_loop_rebind",
+    "record_state_projection_failure",
+    "record_state_projection_repair",
     "record_writeback",
     "record_writeback_retry",
     "record_writeback_dead_letter",
@@ -345,4 +402,5 @@ __all__ = [
     "reset_metrics_for_tests",
     "set_budget_redis_degraded",
     "set_checkpoint_memory_fallback",
+    "state_projection_health_snapshot",
 ]
