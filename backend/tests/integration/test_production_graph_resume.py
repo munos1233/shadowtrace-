@@ -56,6 +56,8 @@ async def _checkpoint_snapshot(event_id: str) -> dict[str, Any]:
     snap = await graph.aget_state(config)
     if snap is None or not snap.values:
         return {"graph_wired": True, "checkpoint_present": False}
+    lease = getattr(agent, "lease", None)
+    owner = await lease.get_owner(event_id) if lease is not None else None
     return {
         "graph_wired": True,
         "checkpoint_present": True,
@@ -65,11 +67,14 @@ async def _checkpoint_snapshot(event_id: str) -> dict[str, Any]:
         "event_status": snap.values.get("event_status"),
         "next": list(snap.next or ()),
         "node_trace": list(snap.values.get("node_trace") or []),
+        "owner": owner,
     }
 
 
+@pytest.mark.parametrize("attempt", range(1, 11), ids=lambda value: f"attempt-{value:02d}")
 @pytest.mark.asyncio
 async def test_production_resume_hook_after_real_approval_wait_halt(
+    attempt: int,
     monkeypatch: pytest.MonkeyPatch,
     session_factory: async_sessionmaker[AsyncSession],
     redis_client: Any,
@@ -89,7 +94,7 @@ async def test_production_resume_hook_after_real_approval_wait_halt(
         settings=settings,
     )
     ingest = await events.ingest_source_object(
-        incident_source(object_id=unique_id("inc-prod-resume-ci"))
+        incident_source(object_id=unique_id(f"inc-prod-resume-ci-{attempt:02d}"))
     )
     event_id = ingest.event_id
     patch_production_session_factory(monkeypatch, session_factory)
@@ -119,6 +124,7 @@ async def test_production_resume_hook_after_real_approval_wait_halt(
     assert pre_checkpoint.get("halted") is True
     assert pre_checkpoint.get("execution_substate") == ExecutionSubstate.WAITING_APPROVAL.value
     assert pre_checkpoint.get("next") == []
+    assert pre_checkpoint.get("owner") is None
     pre_trace = pre_checkpoint.get("node_trace") or []
     assert NODE_APPROVAL_WAIT in pre_trace
     assert NODE_EXECUTE not in pre_trace
@@ -141,7 +147,7 @@ async def test_production_resume_hook_after_real_approval_wait_halt(
         target.action_id,
         Principal(subject="ci-resume-approver", roles=["approver"]),
         "production resume hook regression",
-        f"dec-resume-{uuid.uuid4().hex[:10]}",
+        f"dec-resume-{attempt:02d}-{uuid.uuid4().hex[:8]}",
     )
 
     async with session_factory() as session:
@@ -157,6 +163,16 @@ async def test_production_resume_hook_after_real_approval_wait_halt(
         approved_status = await session.scalar(
             select(orm.Action.status).where(orm.Action.action_id == target.action_id)
         )
+        pending_ids_after = list(
+            await session.scalars(
+                select(orm.Action.action_id)
+                .where(
+                    orm.Action.event_id == event_id,
+                    orm.Action.status == ActionStatus.WAITING_APPROVAL.value,
+                )
+                .order_by(orm.Action.action_id)
+            )
+        )
 
     post_checkpoint = await _checkpoint_snapshot(event_id)
     verification = await context_store.get(event_id, "verification_result")
@@ -170,6 +186,9 @@ async def test_production_resume_hook_after_real_approval_wait_halt(
         f"status={db_status_after} trace={node_trace}"
     )
     assert post_checkpoint.get("needs_approval_wait") is False, post_checkpoint
+    assert post_checkpoint.get("next") == [], post_checkpoint
+    assert post_checkpoint.get("owner") is None
+    assert pending_ids_after == []
     assert NODE_EXECUTE in node_trace, node_trace
     assert NODE_VERIFY in node_trace or verify_trace is not None or bool(verification), (
         f"resume must reach verify tail; trace={node_trace}"
