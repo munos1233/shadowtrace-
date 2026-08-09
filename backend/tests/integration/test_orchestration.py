@@ -18,6 +18,7 @@ from app.models.enums import (
     DispositionPolicy,
     EventStatus,
     EventType,
+    ExecutionSubstate,
     FinalVerdict,
     Severity,
     WritebackReadiness,
@@ -166,8 +167,10 @@ async def test_evidence_agent_failure_retries_once_and_records_traces(
 
 
 @pytest.mark.usefixtures("clean_state")
+@pytest.mark.parametrize("_attempt", range(1, 11), ids=lambda value: f"attempt-{value:02d}")
 @pytest.mark.asyncio
 async def test_checkpoint_resume_skips_completed_nodes(
+    _attempt: int,
     event_service: EventService,
     context_store: EventContextStore,
     state_machine_service: StateMachineService,
@@ -188,15 +191,39 @@ async def test_checkpoint_resume_skips_completed_nodes(
         interrupt_before=[NODE_RISK],
     )
     paused = await first_graph.ainvoke(_graph_base_state(event_id), config)
+    paused_checkpoint = await first_graph.aget_state(config)
+    paused_context = await context_store.get_full_context(event_id)
     assert NODE_RISK not in paused["node_trace"]
+    assert paused["halted"] is False
+    assert tuple(paused_checkpoint.next) == (NODE_RISK,)
+    assert paused_context.event is not None
+    assert paused_context.event.status is EventStatus.ANALYZING
+    assert paused_context.execution_substate is ExecutionSubstate.NONE
+
+    async with session_factory() as session:
+        paused_action_ids = list(
+            await session.scalars(
+                select(orm.Action.action_id)
+                .where(orm.Action.event_id == event_id)
+                .order_by(orm.Action.action_id)
+            )
+        )
+    assert paused_action_ids == []
 
     second_graph = workflow_graph_factory(checkpointer=redis_checkpointer)
     final = await second_graph.ainvoke(None, config)
+    final_checkpoint = await second_graph.aget_state(config)
+    final_context = await context_store.get_full_context(event_id)
 
     assert NODE_CLOSE in final["node_trace"]
     assert final["node_trace"].count(NODE_RISK) == 1
     assert final["node_trace"].count("triage_node") == 1
     assert final["node_trace"].count("evidence_node") == 1
+    assert final["halted"] is False
+    assert tuple(final_checkpoint.next) == ()
+    assert final_context.event is not None
+    assert final_context.event.status is EventStatus.CLOSED
+    assert final_context.execution_substate is ExecutionSubstate.NONE
 
     await assert_valid_audit_transitions(session_factory, event_id)
 
