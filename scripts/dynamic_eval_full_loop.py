@@ -49,6 +49,7 @@ from dynamic_eval_approve import (  # noqa: E402
     approve_or_reject_pending,
     list_event_actions,
     select_pending_actions,
+    unwrap_event_detail_payload,
 )
 
 # Demo scenarios from bootstrap / ISSUE-088. Gold path uses one at a time by default.
@@ -183,9 +184,7 @@ def parse_seed_stdout(stdout: str) -> dict[str, Any]:
 
 def get_event(client: DynamicEvalClient, event_id: str) -> dict[str, Any]:
     payload = client.get_json(f"/api/v1/events/{event_id}")
-    if not isinstance(payload, dict) or "event_id" not in payload:
-        raise DynamicEvalApiError(f"unexpected event payload: {payload!r}")
-    return payload
+    return unwrap_event_detail_payload(payload, expected_event_id=event_id)
 
 
 def list_events(client: DynamicEvalClient, *, page_size: int = 50) -> list[dict[str, Any]]:

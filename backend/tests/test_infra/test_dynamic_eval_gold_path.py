@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 import pytest
+
+from app.api.v1 import schemas as s
+from app.models.enums import EventStatus, WritebackReadiness
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = REPO_ROOT / "scripts"
@@ -231,6 +235,77 @@ def test_assert_evidence_ok_requires_non_failed(full_loop_mod) -> None:
         )
 
 
+def _example_event_detail_payload(
+    *,
+    event_id: str,
+    status: EventStatus = EventStatus.ANALYZING,
+) -> dict:
+    detail = s.EventDetailResponse(
+        event=s.example_security_event(event_id).model_copy(update={"status": status}),
+        writeback_required=False,
+        writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+    )
+    return detail.model_dump(mode="json")
+
+
+def test_unwrap_event_detail_payload_accepts_event_detail_response(approve_mod) -> None:
+    payload = _example_event_detail_payload(
+        event_id="evt-wrap",
+        status=EventStatus.WAITING_APPROVAL,
+    )
+    event = approve_mod.unwrap_event_detail_payload(payload, expected_event_id="evt-wrap")
+    assert event["event_id"] == "evt-wrap"
+    assert event["status"] == "waiting_approval"
+
+
+def test_unwrap_event_detail_payload_accepts_legacy_flat_event(approve_mod) -> None:
+    flat = s.example_security_event("evt-flat").model_dump(mode="json")
+    event = approve_mod.unwrap_event_detail_payload(flat, expected_event_id="evt-flat")
+    assert event["event_id"] == "evt-flat"
+
+
+def test_unwrap_event_detail_payload_rejects_event_id_mismatch(approve_mod) -> None:
+    payload = _example_event_detail_payload(event_id="evt-other")
+    with pytest.raises(approve_mod.DynamicEvalApiError, match="event_id mismatch"):
+        approve_mod.unwrap_event_detail_payload(payload, expected_event_id="evt-expected")
+
+
+def test_collection_status_from_event_after_unwrap(full_loop_mod, approve_mod) -> None:
+    payload = _example_event_detail_payload(
+        event_id="evt-evidence",
+        status=EventStatus.SCORING,
+    )
+    payload["event"]["event_context_snapshot"] = {"collection_status": "partial_done"}
+    event = approve_mod.unwrap_event_detail_payload(payload, expected_event_id="evt-evidence")
+    assert full_loop_mod.collection_status_from_event(event) == "partial_done"
+
+
+def test_openapi_get_event_detail_returns_event_detail_response() -> None:
+    spec = json.loads((REPO_ROOT / "contracts" / "openapi" / "openapi.json").read_text())
+    schema_ref = (
+        spec["paths"]["/api/v1/events/{event_id}"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+    )
+    assert schema_ref.endswith("/EventDetailResponse")
+    required = set(spec["components"]["schemas"]["EventDetailResponse"]["required"])
+    assert {"event", "writeback_required", "writeback_readiness"}.issubset(required)
+
+
+def test_get_event_unwraps_event_detail_response(full_loop_mod, approve_mod) -> None:
+    class _Client:
+        def get_json(self, path: str):
+            assert path == "/api/v1/events/evt-detail"
+            return _example_event_detail_payload(
+                event_id="evt-detail",
+                status=EventStatus.CLOSED,
+            )
+
+    event = full_loop_mod.get_event(_Client(), "evt-detail")
+    assert event["event_id"] == "evt-detail"
+    assert event["status"] == "closed"
+
+
 def test_run_gold_loop_fails_fast_when_waiting_without_actions(full_loop_mod) -> None:
     class _Client:
         def __init__(self) -> None:
@@ -241,11 +316,12 @@ def test_run_gold_loop_fails_fast_when_waiting_without_actions(full_loop_mod) ->
                 return {"items": []}
             if "/actions?" in path:
                 return {"items": []}
-            return {
-                "event_id": "evt-stall",
-                "status": "waiting_approval",
-                "event_context_snapshot": {"collection_status": "completed"},
-            }
+            payload = _example_event_detail_payload(
+                event_id="evt-stall",
+                status=EventStatus.WAITING_APPROVAL,
+            )
+            payload["event"]["event_context_snapshot"] = {"collection_status": "completed"}
+            return payload
 
         def post_json(self, path: str, body=None):
             from dynamic_eval_approve import ApiResponse

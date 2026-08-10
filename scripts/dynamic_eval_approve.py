@@ -58,6 +58,40 @@ class DynamicEvalApiError(RuntimeError):
     """HTTP / contract failure during dynamic eval."""
 
 
+def unwrap_event_detail_payload(
+    payload: Any,
+    *,
+    expected_event_id: str | None = None,
+) -> dict[str, Any]:
+    """Normalize GET /api/v1/events/{event_id} JSON to a SecurityEvent dict.
+
+    Production returns ``EventDetailResponse`` with the event nested under
+    ``event``; older stacks may still return a flat SecurityEvent. After
+    unwrap, ``event_id`` is validated when *expected_event_id* is provided.
+    """
+    if not isinstance(payload, dict):
+        raise DynamicEvalApiError(f"unexpected event payload: {payload!r}")
+
+    nested = payload.get("event")
+    if isinstance(nested, dict):
+        event = nested
+    elif "event_id" in payload:
+        event = payload
+    else:
+        raise DynamicEvalApiError(f"unexpected event payload: {payload!r}")
+
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        raise DynamicEvalApiError(f"unexpected event payload: {payload!r}")
+
+    if expected_event_id is not None and event_id != expected_event_id:
+        raise DynamicEvalApiError(
+            f"event_id mismatch for GET detail: expected {expected_event_id!r}, "
+            f"got {event_id!r}"
+        )
+    return event
+
+
 class DynamicEvalClient:
     """Minimal stdlib HTTP client for /api/v1 (no third-party deps on host)."""
 
