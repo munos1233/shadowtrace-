@@ -1,4 +1,4 @@
-"""Docker build context guards (ISSUE-278, ISSUE-294)."""
+"""Docker build context guards (ISSUE-278, ISSUE-294, ISSUE-297)."""
 
 from __future__ import annotations
 
@@ -47,6 +47,17 @@ def test_backend_dockerfile_does_not_copy_full_backend_tree() -> None:
     )
     assert "COPY backend/scripts ./backend/scripts" in text
     assert "ISSUE-278" in text
+
+
+def test_backend_dockerfile_copies_contracts_to_runtime() -> None:
+    text = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+    assert "COPY --from=builder /contracts /contracts" in text, (
+        "runtime stage must ship /contracts for Socket.IO schema resolution (ISSUE-297)"
+    )
+    chown_pos = text.index("chown -R shadowtrace:shadowtrace")
+    assert "/contracts" in text[chown_pos : chown_pos + 80], (
+        "shadowtrace user must own /contracts for non-root schema reads"
+    )
 
 
 def test_compose_backend_services_share_root_context() -> None:
@@ -350,3 +361,43 @@ def test_seed_dirty_fails_when_ignore_empty(tmp_path: Path) -> None:
         max_bytes=80 * 1024 * 1024,
     )
     assert mod.check_context(profile, seed_dirty=True) == 1
+
+
+def test_inspect_backend_image_runs_socketio_schema_probe() -> None:
+    mod = _load_check_module()
+    with (
+        mock.patch.object(mod, "shutil_which", return_value="/usr/bin/docker"),
+        mock.patch.object(
+            mod,
+            "probe_socketio_schema_in_image",
+            return_value=0,
+        ) as schema_probe,
+        mock.patch(
+            "subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["docker", "image", "inspect"],
+                returncode=0,
+                stdout="1000\n",
+                stderr="",
+            ),
+        ),
+    ):
+        assert mod.inspect_backend_image("sha256:test", max_bytes=1024 * 1024) == 0
+    schema_probe.assert_called_once_with("sha256:test")
+
+
+def test_probe_socketio_schema_in_image_fails_when_unreadable() -> None:
+    mod = _load_check_module()
+    with (
+        mock.patch.object(mod, "shutil_which", return_value="/usr/bin/docker"),
+        mock.patch(
+            "subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["docker", "run"],
+                returncode=1,
+                stdout="",
+                stderr="missing",
+            ),
+        ),
+    ):
+        assert mod.probe_socketio_schema_in_image("sha256:missing-schema") == 1

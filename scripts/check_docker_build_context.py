@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Docker build context / runtime image guards (ISSUE-278, ISSUE-294).
+"""Docker build context / runtime image guards (ISSUE-278, ISSUE-294, ISSUE-297).
 
 Measures effective build context size (honouring .dockerignore) and optionally
 validates a built backend image does not ship host-only trees or secrets.
@@ -45,6 +45,29 @@ FORBIDDEN_BACKEND_IMAGE_PATHS = (
     "/app/frontend",
     "/app/node_modules",
 )
+
+SOCKETIO_SCHEMA_IMAGE_PATH = "/contracts/socketio/events.schema.json"
+
+# Exercises the same import path and jsonschema gate used by SocketIOManager._dispatch.
+_SOCKETIO_SCHEMA_SMOKE_PY = """
+import jsonschema
+from app.core.socketio_manager import _events_schema
+
+schema = _events_schema()
+envelope = {
+    "type": "state_change",
+    "event_id": "evt-20260101-00000001",
+    "sequence": 1,
+    "timestamp": "2026-01-01T00:00:00+00:00",
+    "payload": {
+        "from_status": "NEW",
+        "to_status": "TRIAGED",
+        "operator": "system",
+    },
+}
+jsonschema.validate(instance=envelope, schema=schema)
+print("socketio-schema-smoke OK")
+""".strip()
 
 
 @dataclass(frozen=True)
@@ -467,6 +490,63 @@ def resolve_compose_service_image(
     raise SystemExit(1)
 
 
+def probe_socketio_schema_in_image(image_ref: str) -> int:
+    """Assert runtime image ships readable Socket.IO schema for the non-root user."""
+    readable = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "sh",
+            image_ref,
+            "-c",
+            (
+                f'test -r "{SOCKETIO_SCHEMA_IMAGE_PATH}" '
+                '&& test "$(id -un)" = shadowtrace'
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if readable.returncode != 0:
+        detail = (readable.stderr or readable.stdout or "").strip()
+        print(
+            f"ERROR: Socket.IO schema missing or unreadable for shadowtrace user "
+            f"at {SOCKETIO_SCHEMA_IMAGE_PATH}"
+            + (f": {detail}" if detail else ""),
+            file=sys.stderr,
+        )
+        return 1
+
+    smoke = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "python",
+            image_ref,
+            "-c",
+            _SOCKETIO_SCHEMA_SMOKE_PY,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if smoke.returncode != 0:
+        detail = (smoke.stderr or smoke.stdout or "").strip()
+        print(
+            "ERROR: Socket.IO schema smoke failed inside backend image"
+            + (f": {detail}" if detail else ""),
+            file=sys.stderr,
+        )
+        return 1
+    print("[backend-image] socketio schema probe: OK")
+    return 0
+
+
 def inspect_backend_image(image_ref: str, *, max_bytes: int) -> int:
     if not shutil_which("docker"):
         print("WARN: docker not available — skipping image inspection", file=sys.stderr)
@@ -502,6 +582,10 @@ def inspect_backend_image(image_ref: str, *, max_bytes: int) -> int:
             print(f"ERROR: forbidden path present in image: {forbidden}", file=sys.stderr)
             return 1
     print("[backend-image] forbidden path probe: OK")
+
+    schema_exit = probe_socketio_schema_in_image(image_ref)
+    if schema_exit != 0:
+        return schema_exit
     return 0
 
 

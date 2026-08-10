@@ -63,11 +63,15 @@ COPY --from=builder /app /app
 # runtime stage only copies /app and `ENTRYPOINT ["/docker-entrypoint.sh"]`
 # fails with "no such file or directory" (ISSUE-142 regression from ISSUE-112).
 COPY --from=builder /docker-entrypoint.sh /docker-entrypoint.sh
+# Canonical contracts tree for Socket.IO schema resolution (ISSUE-297).
+# Builder copies repo-root contracts/; runtime must ship the same path layout
+# expected by app.core.socketio_manager._SCHEMA_PATH (/contracts/...).
+COPY --from=builder /contracts /contracts
 
 ENV PATH="/app/.venv/bin:$PATH"
 
 RUN groupadd -r shadowtrace && useradd -r -g shadowtrace shadowtrace \
-    && chown -R shadowtrace:shadowtrace /app
+    && chown -R shadowtrace:shadowtrace /app /contracts
 USER shadowtrace
 
 EXPOSE 8000
