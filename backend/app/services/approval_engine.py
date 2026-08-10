@@ -40,6 +40,7 @@ from app.models.workflow import (
     AUTO_APPROVABLE_ACTION_LEVELS,
     validate_action_status_transition,
 )
+from app.orchestration.graph_invocation import is_in_investigation_graph
 from app.services.action_approval_policy import (
     action_level_rank,
     resolve_runtime_max_auto_level,
@@ -83,6 +84,7 @@ class EvaluatePlanResult:
     needs_wait: bool
     plan_revision: int
     evaluated_count: int
+    resume_deferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -363,12 +365,15 @@ class ApprovalEngine:
             )
         refreshed = await self._load_plan_response_actions(event_id, plan_revision)
         needs_wait = any(action.status is ActionStatus.WAITING_APPROVAL for action in refreshed)
+        resume_deferred = False
         if not needs_wait:
-            await self._maybe_advance_plan(event_id, plan_revision)
+            resume_status = await self._maybe_advance_plan(event_id, plan_revision)
+            resume_deferred = resume_status == "deferred"
         return EvaluatePlanResult(
             needs_wait=needs_wait,
             plan_revision=plan_revision,
             evaluated_count=len(actions),
+            resume_deferred=resume_deferred,
         )
 
     async def evaluate(
@@ -884,7 +889,7 @@ class ApprovalEngine:
         self,
         event_id: str,
         plan_revision: int,
-    ) -> Literal["ok", "failed", "skipped"] | None:
+    ) -> Literal["ok", "failed", "skipped", "deferred"] | None:
         if not await self.is_plan_fully_decided(event_id, plan_revision):
             return None
         actions = await self._load_plan_response_actions(event_id, plan_revision)
@@ -924,6 +929,12 @@ class ApprovalEngine:
                     )
 
         if self._resume is not None:
+            if is_in_investigation_graph(event_id=event_id):
+                logger.debug(
+                    "defer resume_investigation while graph active event=%s",
+                    event_id,
+                )
+                return "deferred"
             try:
                 await self._resume(event_id)
             except Exception as exc:

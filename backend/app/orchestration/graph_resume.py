@@ -19,6 +19,7 @@ from langchain_core.runnables import RunnableConfig
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.errors import ValidationError
 from app.db import models as orm
 from app.models.agent_io import EvidenceOutput, RiskAssessment
 from app.models.enums import (
@@ -246,6 +247,67 @@ async def _read_event_status(
     return str(event_status or "")
 
 
+async def _read_event_status_enum(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_id: str,
+) -> EventStatus | None:
+    raw = await _read_event_status(session_factory, event_id)
+    if not raw:
+        return None
+    try:
+        return EventStatus(raw)
+    except ValueError:
+        return None
+
+
+async def _sync_execution_substate(
+    runtime: Any,
+    session_factory: async_sessionmaker[AsyncSession],
+    event_id: str,
+    substate: ExecutionSubstate,
+    *,
+    event_status: EventStatus,
+) -> EventStatus:
+    """Persist substate; on caller/DB mismatch re-read authoritative status."""
+    from app.orchestration.graph_resume_observability import GraphResumeFailedError
+
+    try:
+        await runtime.set_execution_substate(
+            event_id,
+            substate,
+            event_status=event_status,
+        )
+        return event_status
+    except ValidationError as exc:
+        if "caller EventStatus does not match authoritative state" not in str(exc):
+            raise
+        authoritative = await _read_event_status_enum(session_factory, event_id)
+        if authoritative is None:
+            raise GraphResumeFailedError(
+                "state mismatch with missing authoritative status",
+                event_id=event_id,
+                error_type="state_mismatch",
+            ) from exc
+        logger.warning(
+            "graph resume state mismatch event=%s caller=%s authoritative=%s",
+            event_id,
+            event_status.value,
+            authoritative.value,
+        )
+        if authoritative in {
+            EventStatus.FAILED,
+            EventStatus.CLOSED,
+            EventStatus.REPORTING,
+        }:
+            return authoritative
+        raise GraphResumeFailedError(
+            f"state mismatch caller={event_status.value} authoritative={authoritative.value}",
+            event_id=event_id,
+            error_type="state_mismatch",
+            execution_substate=substate.value,
+        ) from exc
+
+
 async def prepare_graph_resume_state(
     session_factory: async_sessionmaker[AsyncSession],
     graph: Any,
@@ -263,6 +325,17 @@ async def prepare_graph_resume_state(
         return False
 
     status_value = await _read_event_status(session_factory, event_id)
+    if status_value in {
+        EventStatus.FAILED.value,
+        EventStatus.CLOSED.value,
+    }:
+        logger.info(
+            "prepare_graph_resume: terminal DB status=%s event=%s; skip checkpoint patch",
+            status_value,
+            event_id,
+        )
+        return snapshot is not None and bool(snapshot.values)
+
     values = snapshot.values
 
     if status_value == EventStatus.VERIFYING.value:
@@ -287,15 +360,21 @@ async def prepare_graph_resume_state(
             )
             values = {**values, **resume_patch}
         if values.get("execution_substate") == ExecutionSubstate.WAITING_WRITEBACK.value:
-            await runtime.set_execution_substate(
+            authoritative = await _sync_execution_substate(
+                runtime,
+                session_factory,
                 event_id,
                 ExecutionSubstate.WAITING_WRITEBACK,
                 event_status=EventStatus.VERIFYING,
             )
+            if authoritative is not EventStatus.VERIFYING:
+                return True
         return True
 
     if status_value == EventStatus.REPORTING.value:
-        await runtime.set_execution_substate(
+        authoritative = await _sync_execution_substate(
+            runtime,
+            session_factory,
             event_id,
             ExecutionSubstate.NONE,
             event_status=EventStatus.REPORTING,
@@ -326,7 +405,9 @@ async def prepare_graph_resume_state(
         )
         return True
 
-    await runtime.set_execution_substate(
+    await _sync_execution_substate(
+        runtime,
+        session_factory,
         event_id,
         ExecutionSubstate.NONE,
         event_status=EventStatus.EXECUTING_RESPONSE,

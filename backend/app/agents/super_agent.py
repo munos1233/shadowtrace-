@@ -426,7 +426,10 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                     raise RuntimeError(
                         "SuperAgent requires context_store when investigation_graph is wired"
                     )
-                from app.orchestration.workflow_graph import build_initial_investigation_state
+                from app.orchestration.workflow_graph import (
+                    build_initial_investigation_state,
+                    invoke_investigation_graph,
+                )
 
                 initial = await build_initial_investigation_state(
                     event_id,
@@ -436,7 +439,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                 )
                 config = {"configurable": {"thread_id": event_id}}
                 await _run_orchestration_with_renewal_watch(
-                    self._investigation_graph.ainvoke(initial, config),
+                    invoke_investigation_graph(self._investigation_graph, initial, config),
                     renewal_failed,
                     event_id=event_id,
                 )

@@ -662,6 +662,16 @@ def run_investigation(
                 resolved_owner,
                 exc_info=True,
             )
+        try:
+            from app.orchestration.checkpointer import invalidate_event_checkpoint
+
+            asyncio.run(invalidate_event_checkpoint(event_id))
+        except Exception:
+            logger.warning(
+                "run_investigation: checkpoint fence advance failed after soft limit event=%s",
+                event_id,
+                exc_info=True,
+            )
         if intent_id:
             from app.db.session import get_session_factory
             from app.services.investigation_intent_service import InvestigationIntentService
@@ -997,6 +1007,16 @@ def run_analysis_only_investigation(
                 "soft limit event=%s owner=%s",
                 event_id,
                 resolved_owner,
+                exc_info=True,
+            )
+        try:
+            from app.orchestration.checkpointer import invalidate_event_checkpoint
+
+            asyncio.run(invalidate_event_checkpoint(event_id))
+        except Exception:
+            logger.warning(
+                "run_analysis_only: checkpoint fence advance failed after soft limit event=%s",
+                event_id,
                 exc_info=True,
             )
         if intent_id:

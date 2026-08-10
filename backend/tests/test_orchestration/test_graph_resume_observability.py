@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.core.errors import InvalidStateTransitionError
+from app.core.errors import InvalidStateTransitionError, ValidationError
 from app.models.enums import EventStatus
 from app.orchestration.graph_resume_observability import (
     GRAPH_RESUME_FAILED_FLAG,
@@ -261,3 +261,67 @@ async def test_execute_graph_resume_classifies_invalid_transition() -> None:
 
     assert exc_info.value.error_type == "invalid_state_transition"
     degraded.set_flag.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_graph_resume_skips_nested_active_graph() -> None:
+    resume = AsyncMock()
+    agent = MagicMock()
+    agent._investigation_graph = MagicMock()
+
+    async def _get_super_agent() -> Any:
+        return agent
+
+    from app.orchestration.graph_invocation import bind_investigation_graph
+
+    async with bind_investigation_graph("evt-nested"):
+        await execute_graph_resume_with_retry(
+            "evt-nested",
+            session_factory=_SessionFactory(),
+            get_super_agent=_get_super_agent,
+            get_workflow_runtime=AsyncMock(return_value=MagicMock()),
+            degraded_flags=MagicMock(),
+        )
+
+    agent._investigation_graph.aget_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_graph_resume_state_mismatch_is_not_retried() -> None:
+    degraded = MagicMock()
+    degraded.set_flag = AsyncMock(return_value=[])
+    degraded.has_flag = AsyncMock(return_value=False)
+    exc = ValidationError(
+        "caller EventStatus does not match authoritative state",
+        details={
+            "caller_status": EventStatus.EXECUTING_RESPONSE.value,
+            "authoritative_status": EventStatus.FAILED.value,
+        },
+    )
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(
+        return_value=MagicMock(
+            values={
+                "halted": True,
+                "needs_approval_wait": True,
+                "execution_substate": "waiting_approval",
+            }
+        )
+    )
+    agent = MagicMock()
+    agent._investigation_graph = graph
+    runtime = MagicMock()
+    runtime.set_execution_substate = AsyncMock(side_effect=exc)
+
+    with pytest.raises(GraphResumeFailedError) as exc_info:
+        await execute_graph_resume_with_retry(
+            "evt-state-mismatch",
+            session_factory=_SessionFactory(),
+            get_super_agent=AsyncMock(return_value=agent),
+            get_workflow_runtime=AsyncMock(return_value=runtime),
+            degraded_flags=degraded,
+        )
+
+    assert exc_info.value.error_type == "state_mismatch"
+    degraded.set_flag.assert_awaited_once()
+    assert runtime.set_execution_substate.await_count == 1

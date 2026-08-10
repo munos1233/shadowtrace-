@@ -16,8 +16,9 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.errors import InvalidStateTransitionError
+from app.core.errors import InvalidStateTransitionError, ValidationError
 from app.db import models as orm
+from app.orchestration.graph_invocation import is_in_investigation_graph
 from app.orchestration.graph_resume import (
     GetSuperAgent,
     GetWorkflowRuntime,
@@ -61,9 +62,19 @@ class GraphResumeFailureContext:
     execution_substate: str | None = None
 
 
+def is_state_mismatch_error(exc: BaseException) -> bool:
+    if isinstance(exc, ValidationError):
+        return "caller EventStatus does not match authoritative state" in str(exc)
+    if isinstance(exc, GraphResumeFailedError):
+        return exc.error_type == "state_mismatch"
+    return False
+
+
 def classify_resume_error(exc: BaseException) -> str:
     if isinstance(exc, GraphResumeFailedError):
         return exc.error_type
+    if is_state_mismatch_error(exc):
+        return "state_mismatch"
     if isinstance(exc, InvalidStateTransitionError):
         return "invalid_state_transition"
     name = type(exc).__name__
@@ -73,6 +84,10 @@ def classify_resume_error(exc: BaseException) -> str:
 
 
 def is_transient_resume_error(exc: BaseException) -> bool:
+    if is_state_mismatch_error(exc):
+        return False
+    if isinstance(exc, InvalidStateTransitionError):
+        return False
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
         return True
     name = type(exc).__name__
@@ -181,6 +196,13 @@ async def execute_graph_resume_with_retry(
     degraded_flags: DegradedFlagService | None,
 ) -> None:
     """Resume with limited retries; record degraded + audit before raising."""
+    if is_in_investigation_graph(event_id=event_id):
+        logger.warning(
+            "skip nested graph resume while graph active event=%s",
+            event_id,
+        )
+        return
+
     last_exc: BaseException | None = None
     for attempt in range(_RESUME_MAX_ATTEMPTS):
         try:
@@ -245,5 +267,6 @@ __all__ = [
     "ResumeStatus",
     "clear_graph_resume_failure",
     "execute_graph_resume_with_retry",
+    "is_state_mismatch_error",
     "record_graph_resume_failure",
 ]

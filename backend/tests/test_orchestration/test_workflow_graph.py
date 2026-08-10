@@ -312,6 +312,9 @@ class FakeStateMachine:
         self.status = target
         return SimpleNamespace(event_id=event_id, status=target)
 
+    async def get_current_status(self, event_id: str) -> EventStatus:
+        return self.statuses.get(event_id, self.status)
+
 
 class FakeEventService:
     def __init__(self) -> None:
@@ -2636,3 +2639,78 @@ async def test_report_node_failure_marks_observability_not_silent_reporting() ->
     )
     assert machine.status is EventStatus.FAILED
     assert EventStatus.REPORTING not in {target for (_, target, _) in machine.transitions}
+
+
+@pytest.mark.asyncio
+async def test_mark_graph_failed_is_noop_for_terminal_status() -> None:
+    from app.orchestration.workflow_graph import _mark_graph_failed
+
+    event_id = "evt-failed-noop"
+    machine = FakeStateMachine(
+        status=EventStatus.FAILED,
+        statuses={event_id: EventStatus.FAILED},
+    )
+    services = {"state_machine": machine}
+    state = _base_state(event_id=event_id, event_status=EventStatus.FAILED.value)
+
+    await _mark_graph_failed(services, state, RuntimeError("resume loop"))
+
+    assert machine.transitions == []
+
+
+@pytest.mark.asyncio
+async def test_mark_graph_failed_skips_failed_self_loop() -> None:
+    from app.orchestration.workflow_graph import _mark_graph_failed
+
+    event_id = "evt-failed-self-loop"
+
+    class _RejectFailedSelfLoop(FakeStateMachine):
+        async def transition(self, event_id: str, target: EventStatus, **kwargs: Any) -> Any:
+            current = self.statuses.get(event_id, EventStatus.TRIAGING)
+            if current is EventStatus.FAILED and target is EventStatus.FAILED:
+                raise InvalidStateTransitionError(
+                    "illegal transition",
+                    current=EventStatus.FAILED,
+                    target=EventStatus.FAILED,
+                )
+            return await super().transition(event_id, target, **kwargs)
+
+    machine = _RejectFailedSelfLoop(
+        status=EventStatus.FAILED,
+        statuses={event_id: EventStatus.FAILED},
+    )
+    services = {"state_machine": machine}
+    state = _base_state(event_id=event_id, event_status=EventStatus.FAILED.value)
+
+    await _mark_graph_failed(services, state, RuntimeError("stale resume"))
+
+    assert machine.transitions == []
+
+
+@pytest.mark.asyncio
+async def test_mark_graph_failed_swallows_failed_to_failed_transition_error() -> None:
+    from app.orchestration.workflow_graph import _mark_graph_failed
+
+    event_id = "evt-failed-race"
+
+    class _StaleReadMachine(FakeStateMachine):
+        async def get_current_status(self, event_id: str) -> EventStatus:
+            return EventStatus.VERIFYING
+
+        async def transition(self, event_id: str, target: EventStatus, **kwargs: Any) -> Any:
+            raise InvalidStateTransitionError(
+                "illegal transition",
+                current=EventStatus.FAILED,
+                target=EventStatus.FAILED,
+            )
+
+    machine = _StaleReadMachine(
+        status=EventStatus.VERIFYING,
+        statuses={event_id: EventStatus.VERIFYING},
+    )
+    services = {"state_machine": machine}
+    state = _base_state(event_id=event_id, event_status=EventStatus.VERIFYING.value)
+
+    await _mark_graph_failed(services, state, RuntimeError("stale resume"))
+
+    assert machine.transitions == []

@@ -16,6 +16,7 @@ from app.agents.rag_agent import RAGAgent
 from app.agents.response_agent import compute_template_hash, generate_response_plan_id
 from app.core.config import get_settings
 from app.core.errors import InvalidStateTransitionError, ValidationError
+from app.core.metrics import record_graph_failed_transition_noop
 from app.models.action import TERMINAL_DISPOSITION_TOOL
 from app.models.agent_io import (
     CollectionStatus,
@@ -59,6 +60,7 @@ from app.models.enums import (
 from app.models.security_event import EventSummary
 from app.models.workflow import TransitionContext
 from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
+from app.orchestration.graph_invocation import bind_investigation_graph
 from app.orchestration.graph_state import InvestigationState
 from app.orchestration.replan_handler import (
     ReplanHandler,
@@ -399,22 +401,70 @@ def _patch_state(*parts: Mapping[str, Any]) -> InvestigationState:
     return cast(InvestigationState, merged)
 
 
+_GRAPH_TERMINAL_STATUSES = frozenset({EventStatus.FAILED, EventStatus.CLOSED})
+
+
+_STATE_MISMATCH_MSG = "caller EventStatus does not match authoritative state"
+
+
+def _is_state_mismatch_validation(exc: BaseException) -> bool:
+    return isinstance(exc, ValidationError) and _STATE_MISMATCH_MSG in str(exc)
+
+
 async def _mark_graph_failed(
     services: dict[str, Any],
     state: InvestigationState,
     error: Exception,
 ) -> None:
+    event_id = str(state.get("event_id") or "")
+    if not event_id:
+        return
+    if _is_state_mismatch_validation(error):
+        logger.warning(
+            "skip graph FAILED transition for state mismatch event=%s",
+            event_id,
+        )
+        record_graph_failed_transition_noop(reason="state_mismatch")
+        return
+
     state_machine = cast(StateMachineService, services["state_machine"])
     reason = f"investigation_graph:error:{type(error).__name__}:{error}"[:500]
     try:
+        current = await state_machine.get_current_status(event_id)
+        if current in _GRAPH_TERMINAL_STATUSES:
+            logger.info(
+                "skip graph FAILED transition event=%s already terminal status=%s",
+                event_id,
+                current.value,
+            )
+            record_graph_failed_transition_noop(reason="already_terminal")
+            return
         await state_machine.transition(
-            state["event_id"],
+            event_id,
             EventStatus.FAILED,
             operator=_GRAPH_OPERATOR,
             reason=reason,
         )
+    except InvalidStateTransitionError as exc:
+        current = getattr(exc, "current", None)
+        target = getattr(exc, "target", None)
+        current_value = getattr(current, "value", current)
+        target_value = getattr(target, "value", target)
+        if current_value == EventStatus.FAILED.value and target_value == EventStatus.FAILED.value:
+            logger.info(
+                "skip duplicate graph FAILED transition event=%s",
+                event_id,
+            )
+            record_graph_failed_transition_noop(reason="failed_self_loop")
+            return
+        logger.warning(
+            "illegal graph FAILED transition event=%s current=%s target=%s",
+            event_id,
+            current_value,
+            target_value,
+        )
     except Exception:
-        logger.exception("failed to mark event=%s FAILED", state.get("event_id"))
+        logger.exception("failed to mark event=%s FAILED", event_id)
 
 
 def _wrap_node(
@@ -437,6 +487,13 @@ async def invoke_investigation_graph(
     config: RunnableConfig,
 ) -> InvestigationState:
     """Invoke or resume a graph with its configured checkpoint saver."""
+    thread_id = str((config.get("configurable") or {}).get("thread_id") or "")
+    if state is not None and not thread_id:
+        thread_id = str(state.get("event_id") or "")
+    if thread_id:
+        async with bind_investigation_graph(thread_id):
+            result = await graph.ainvoke(state, config)
+            return cast(InvestigationState, result)
     result = await graph.ainvoke(state, config)
     return cast(InvestigationState, result)
 

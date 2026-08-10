@@ -28,6 +28,7 @@ _budget_redis_degraded_gauge: Any | None = None
 _state_projection_failure_total: Any | None = None
 _state_projection_repair_total: Any | None = None
 _investigation_intent_enqueue_total: Any | None = None
+_graph_failed_transition_noop_total: Any | None = None
 _initialized = False
 _process_checkpoint_fallback_active = False
 _process_checkpoint_fallback_triggers = 0
@@ -47,7 +48,7 @@ def _ensure_metrics() -> None:
     global _budget_redis_fallback_total
     global _budget_redis_recovery_total, _budget_redis_degraded_gauge, _initialized
     global _state_projection_failure_total, _state_projection_repair_total
-    global _investigation_intent_enqueue_total
+    global _investigation_intent_enqueue_total, _graph_failed_transition_noop_total
 
     if not telemetry.is_telemetry_enabled():
         return
@@ -124,6 +125,13 @@ def _ensure_metrics() -> None:
         _investigation_intent_enqueue_total = _meter.create_counter(
             name="shadowtrace_investigation_intent_enqueue_total",
             description="Best-effort Celery dispatch trigger outcomes for pending intents",
+            unit="1",
+        )
+        _graph_failed_transition_noop_total = _meter.create_counter(
+            name="shadowtrace_graph_failed_transition_noop_total",
+            description=(
+                "Bounded no-op outcomes when graph failure marking would duplicate terminal state"
+            ),
             unit="1",
         )
     except Exception:
@@ -371,6 +379,17 @@ def record_investigation_intent_enqueue(*, result: str) -> None:
         logger.debug("investigation intent enqueue metric export failed", exc_info=True)
 
 
+def record_graph_failed_transition_noop(*, reason: str) -> None:
+    """Increment bounded no-op counter when graph failure marking is skipped."""
+    _ensure_metrics()
+    if _graph_failed_transition_noop_total is None:
+        return
+    try:
+        _graph_failed_transition_noop_total.add(1, {"reason": reason})
+    except Exception:
+        logger.debug("graph failed transition noop metric export failed", exc_info=True)
+
+
 def investigation_intent_enqueue_health_snapshot() -> dict[str, int]:
     """Process-local enqueue counters for health probes and deterministic tests."""
     return {
@@ -398,7 +417,7 @@ def reset_metrics_for_tests() -> None:
     global _budget_redis_fallback_total
     global _budget_redis_recovery_total, _budget_redis_degraded_gauge, _initialized
     global _state_projection_failure_total, _state_projection_repair_total
-    global _investigation_intent_enqueue_total
+    global _investigation_intent_enqueue_total, _graph_failed_transition_noop_total
     global _process_checkpoint_fallback_active, _process_checkpoint_fallback_triggers
     global _process_checkpoint_loop_rebinds
     global _process_budget_redis_degraded, _process_reservation_redis_degraded
@@ -421,6 +440,7 @@ def reset_metrics_for_tests() -> None:
     _state_projection_failure_total = None
     _state_projection_repair_total = None
     _investigation_intent_enqueue_total = None
+    _graph_failed_transition_noop_total = None
     _initialized = False
     _process_checkpoint_fallback_active = False
     _process_checkpoint_fallback_triggers = 0
@@ -471,6 +491,7 @@ __all__ = [
     "record_budget_redis_recovery",
     "record_checkpoint_fallback",
     "record_checkpoint_loop_rebind",
+    "record_graph_failed_transition_noop",
     "record_investigation_intent_enqueue",
     "record_state_projection_failure",
     "record_state_projection_repair",

@@ -1182,6 +1182,37 @@ async def test_capability_revoked_during_wait_requires_reapproval(
 
 
 @pytest.mark.asyncio
+async def test_evaluate_plan_defers_resume_while_graph_active(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    state_machine: StateMachineService,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    resume = AsyncMock()
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        resume_investigation=resume,
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    event_id = await _create_event(session_factory, store)
+    await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(event_id=event_id, action_level=ActionLevel.L0),
+    )
+    from app.orchestration.graph_invocation import bind_investigation_graph
+
+    async with bind_investigation_graph(event_id):
+        result = await engine.evaluate_plan(event_id, 1, _risk())
+    assert result.needs_wait is False
+    assert result.resume_deferred is True
+    resume.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_evaluate_plan_resume_hook_called_when_fully_decided(
     session_factory: async_sessionmaker[AsyncSession],
     store: EventContextStore,

@@ -769,6 +769,16 @@ class RedisCheckpointer(BaseCheckpointSaver[str]):
             self._thread_basis_generation[thread_id] = generation
 
 
+async def invalidate_event_checkpoint(
+    event_id: str,
+    *,
+    redis_client: RedisClient | None = None,
+) -> None:
+    """Force-advance generation fence and delete stale checkpoint payload (ISSUE-296)."""
+    saver = await build_checkpointer(redis_client)
+    await saver.adelete_thread(event_id)
+
+
 async def build_checkpointer(
     redis_client: RedisClient | None,
 ) -> RedisCheckpointer:
@@ -797,5 +807,6 @@ __all__ = [
     "checkpoint_generation_key_for_event",
     "checkpoint_key_for_event",
     "get_checkpoint_health",
+    "invalidate_event_checkpoint",
     "reset_checkpoint_health_state_for_tests",
 ]
