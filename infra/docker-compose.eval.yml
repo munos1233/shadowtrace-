@@ -1,0 +1,13 @@
+# Eval matrix override: no published backend ports — harness uses compose exec (ISSUE-301).
+services:
+  backend:
+    ports: !reset []
+
+  mock-xdr:
+    ports: !reset []
+
+  frontend:
+    ports: !reset []
+
+  worker:
+    ports: !reset []

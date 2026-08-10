@@ -241,6 +241,9 @@ class EventDetailResponse(BaseModel):
     next_recommended_action: NextRecommendedAction = NextRecommendedAction.NONE
     full_loop_available: bool = True
     phase_message: str | None = None
+    background_side_effects_pending: bool = False
+    outstanding_side_effect_count: int = 0
+    gate_applicable_outstanding_count: int = 0
 
 
 class InvestigateResponse(BaseModel):
@@ -276,6 +279,9 @@ class EventCloseResponse(BaseModel):
     status: EventStatus
     final_verdict: FinalVerdict
     external_unsynced: bool = False
+    background_side_effects_pending: bool = False
+    outstanding_side_effect_count: int = 0
+    gate_applicable_outstanding_count: int = 0
 
 
 class ProjectionRepairFailure(BaseModel):

@@ -101,6 +101,19 @@ def test_event_outcome_ok_rejects_failed(full_loop_mod) -> None:
     assert full_loop_mod.event_outcome_ok("contained") is True
     assert full_loop_mod.event_outcome_ok("waiting_approval") is True
     assert full_loop_mod.event_outcome_ok("failed") is False
+    assert full_loop_mod.event_outcome_ok("reporting", require_closed=True) is False
+    assert full_loop_mod.event_outcome_ok("closed", require_closed=True) is True
+
+
+def test_matrix_runner_and_eval_compose_exist() -> None:
+    matrix_path = REPO_ROOT / "scripts" / "dynamic_eval_matrix.py"
+    eval_compose = REPO_ROOT / "infra" / "docker-compose.eval.yml"
+    assert matrix_path.is_file()
+    assert eval_compose.is_file()
+    text = eval_compose.read_text(encoding="utf-8")
+    assert "ports: !reset []" in text
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert "eval-full-loop-matrix:" in makefile
 
 
 def test_full_loop_refuses_half_hour_wait(full_loop_mod) -> None:

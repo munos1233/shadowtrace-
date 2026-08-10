@@ -43,6 +43,7 @@ from app.models.enums import (
     WritebackReadiness,
     WritebackStatus,
 )
+from app.models.side_effect_convergence import SideEffectConvergenceSummary
 
 # InvalidStateTransitionError / InvalidVerdictStatusCombinationError are defined
 # in ``app.core.errors`` (ISSUE-008) and re-exported here for ISSUE-007 imports.
@@ -592,6 +593,8 @@ class TransitionContext(BaseModel):
     # Default True preserves existing Mock behaviour; StateMachineService sets
     # this from disposition_mode at transition time.
     disposition_is_mock: bool = True
+    # ISSUE-302: gate-applicable vs background side-effect convergence projection.
+    side_effect_convergence: SideEffectConvergenceSummary | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -923,6 +926,8 @@ def validate_closed_gate(ctx: TransitionContext) -> None:
 
     policy = ctx.disposition_policy
     if policy is DispositionPolicy.NOT_REQUIRED:
+        # ISSUE-302: quick-close remains allowed; background side effects are
+        # tracked via side_effect_convergence projection (not blocking).
         return
     if policy is None:
         # Unknown policy: fail closed when targeting CLOSED with no explicit not_required.
@@ -930,6 +935,19 @@ def validate_closed_gate(ctx: TransitionContext) -> None:
             "CLOSED gate requires disposition_policy",
             target=EventStatus.CLOSED,
         )
+
+    # ISSUE-302: block required events while gate-applicable side effects converge.
+    from app.services.side_effect_convergence import (
+        check_gate_applicable_side_effect_convergence,
+        raise_side_effect_convergence_error,
+    )
+
+    if ctx.side_effect_convergence is not None:
+        convergence_violation = check_gate_applicable_side_effect_convergence(
+            ctx.side_effect_convergence
+        )
+        if convergence_violation is not None:
+            raise_side_effect_convergence_error(convergence_violation)
 
     # disposition_policy=required — shared writeback predicate (ISSUE-171).
     violation = check_required_writeback_close_gate(ctx.applicable_required_actions)

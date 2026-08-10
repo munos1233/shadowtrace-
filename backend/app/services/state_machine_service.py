@@ -62,6 +62,10 @@ from app.services.degraded_flag_service import DegradedFlagService
 from app.services.event_audit_log_service import EventAuditLogService
 from app.services.event_service import _security_event_from_row
 from app.services.writeback_close_gate import build_closed_gate_actions
+from app.services.side_effect_convergence import (
+    build_side_effect_convergence_summary,
+    reconcile_stale_executions_before_close,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +216,12 @@ async def _build_authoritative_context(
         session, event_id, current_revision
     )
     current_closure_cycle = await _read_closure_cycle(session, event_id)
+    side_effect_convergence = await build_side_effect_convergence_summary(
+        session,
+        event_id,
+        current_revision=current_revision,
+        disposition_policy=DispositionPolicy(row.disposition_policy),
+    )
 
     # Derive disposition_is_mock from active config (ISSUE-227 CLOSED gate).
     from app.core.config import get_settings
@@ -232,6 +242,7 @@ async def _build_authoritative_context(
         terminal_event_writeback=terminal_event_writeback,
         current_plan_revision=current_revision,
         current_closure_cycle=current_closure_cycle,
+        side_effect_convergence=side_effect_convergence,
         need_investigation=caller.need_investigation,
         recommendation=caller.recommendation,
         escalated=caller.escalated,
@@ -423,6 +434,19 @@ class StateMachineService:
         """
         op = operator or _STATE_MACHINE_OPERATOR
         projection_id = ""
+
+        if target is EventStatus.CLOSED:
+            try:
+                await reconcile_stale_executions_before_close(
+                    self._session_factory,
+                    event_id,
+                )
+            except Exception:  # noqa: BLE001 - reconcile must not block close attempt
+                logger.warning(
+                    "stale execution reconcile before CLOSED failed event_id=%s",
+                    event_id,
+                    exc_info=True,
+                )
 
         async with self._session_factory() as session:
             async with session.begin():
@@ -948,6 +972,7 @@ class StateMachineService:
             else:
                 if not ttl_ok:
                     fail("closed_ttl", "returned_degraded")
+            await self._persist_side_effect_convergence_on_close(event_id, row, fail)
 
         outcome = PostCommitProjectionOutcome(
             committed=True,
@@ -957,6 +982,61 @@ class StateMachineService:
         if outcome.degraded:
             await self._mark_projection_degraded(event_id, outcome)
         return outcome
+
+    async def _persist_side_effect_convergence_on_close(
+        self,
+        event_id: str,
+        row: orm.SecurityEvent,
+        fail: Any,
+    ) -> None:
+        """Persist side-effect convergence summary and background flags (ISSUE-302)."""
+        try:
+            async with self._session_factory() as session:
+                current_revision = await session.scalar(
+                    select(func.max(orm.Action.plan_revision)).where(
+                        orm.Action.event_id == event_id
+                    )
+                )
+                summary = await build_side_effect_convergence_summary(
+                    session,
+                    event_id,
+                    current_revision=current_revision,
+                    disposition_policy=DispositionPolicy(row.disposition_policy),
+                )
+        except Exception as exc:  # noqa: BLE001
+            fail("side_effect_convergence", "returned_degraded", exc)
+            return
+
+        try:
+            await self._store.set(
+                event_id,
+                "side_effect_convergence",
+                summary.model_dump(mode="json"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            fail("side_effect_convergence", "returned_degraded", exc)
+
+        if summary.background_side_effects_pending and self._degraded is not None:
+            try:
+                await self._degraded.set_flag(
+                    event_id,
+                    "background_side_effects_pending",
+                    {
+                        "count": summary.background_outstanding_count,
+                        "action_ids": [
+                            view.action_id
+                            for view in summary.outstanding_actions
+                            if view.scope.value == "background_detached"
+                        ],
+                    },
+                    writer="StateMachineService",
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "failed to persist background_side_effects_pending event_id=%s",
+                    event_id,
+                    exc_info=True,
+                )
 
     async def _mark_projection_degraded(
         self,

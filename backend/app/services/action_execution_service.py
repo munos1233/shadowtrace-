@@ -920,69 +920,11 @@ class ActionExecutionService:
         event_id: str | None = None,
     ) -> int:
         """Reclaim lease-expired execution jobs and stale EXECUTING actions (ISSUE-173)."""
-        settings = get_settings()
-        if not settings.action_execution_reconcile_enabled:
-            return 0
-        now = datetime.now(UTC)
-        max_attempts = settings.action_execution_max_attempts
-        lease_seconds = settings.action_execution_lease_seconds
-        reconciled = 0
-        async with self._session_factory() as session:
-            async with session.begin():
-                job_query = (
-                    select(orm.ActionExecutionJob)
-                    .where(
-                        orm.ActionExecutionJob.status.in_(
-                            (
-                                ExecutionJobStatus.QUEUED.value,
-                                ExecutionJobStatus.RUNNING.value,
-                            )
-                        ),
-                        orm.ActionExecutionJob.lease_expires_at.is_not(None),
-                        orm.ActionExecutionJob.lease_expires_at < now,
-                    )
-                    .order_by(orm.ActionExecutionJob.updated_at.asc())
-                    .limit(limit)
-                    .with_for_update(skip_locked=True)
-                )
-                if event_id is not None:
-                    job_query = job_query.where(orm.ActionExecutionJob.event_id == event_id)
-                job_rows = (await session.scalars(job_query)).all()
-                for job_row in job_rows:
-                    if await self._reclaim_stale_job_row(
-                        session,
-                        job_row,
-                        now=now,
-                        max_attempts=max_attempts,
-                    ):
-                        reconciled += 1
-
-                action_query = (
-                    select(orm.Action)
-                    .where(
-                        orm.Action.status == ActionStatus.EXECUTING.value,
-                        orm.Action.execution_phase == ActionExecutionPhase.IMMEDIATE.value,
-                        orm.Action.action_category.in_(_RECLAIMABLE_ACTION_CATEGORIES),
-                    )
-                    .order_by(orm.Action.updated_at.asc())
-                    .limit(limit)
-                    .with_for_update(skip_locked=True)
-                )
-                if event_id is not None:
-                    action_query = action_query.where(orm.Action.event_id == event_id)
-                action_rows = (await session.scalars(action_query)).all()
-                for action_row in action_rows:
-                    if await self._reclaim_stale_executing_action(
-                        session,
-                        action_row,
-                        now=now,
-                        lease_seconds=lease_seconds,
-                        max_attempts=max_attempts,
-                    ):
-                        reconciled += 1
-        if reconciled:
-            logger.info("reconcile_stale_executions reclaimed=%s event_id=%s", reconciled, event_id)
-        return reconciled
+        return await reconcile_stale_executions_for_event(
+            self._session_factory,
+            event_id=event_id,
+            limit=limit,
+        )
 
     async def _reclaim_stale_job_row(
         self,
@@ -992,52 +934,12 @@ class ActionExecutionService:
         now: datetime,
         max_attempts: int,
     ) -> bool:
-        if job_row.lease_expires_at is None or job_row.lease_expires_at >= now:
-            return False
-        current = ExecutionJobStatus(job_row.status)
-        if current not in {ExecutionJobStatus.QUEUED, ExecutionJobStatus.RUNNING}:
-            return False
-        if await _has_active_outbox(session, job_row.action_id):
-            return False
-
-        if job_row.attempt >= max_attempts:
-            target = ExecutionJobStatus.TIMED_OUT
-            validate_job_status_transition(
-                current,
-                target,
-                lease_expired_reclaim=(current is ExecutionJobStatus.QUEUED),
-            )
-            job_row.status = target.value
-            job_row.claimed_by = None
-            job_row.lease_expires_at = None
-            job_row.provider_message = "lease_expired_max_attempts"
-            job_row.finished_at = now
-            job_row.updated_at = now
-            action_row = await session.get(orm.Action, job_row.action_id, with_for_update=True)
-            if action_row is not None and ActionStatus(action_row.status) is ActionStatus.EXECUTING:
-                validate_action_status_transition(
-                    ActionCategory(action_row.action_category),
-                    ActionStatus.EXECUTING,
-                    ActionStatus.FAILED,
-                )
-                action_row.status = ActionStatus.FAILED.value
-                action_row.execution_job_id = None
-                action_row.executed_at = now
-                action_row.updated_at = now
-            return True
-
-        if current is ExecutionJobStatus.RUNNING:
-            validate_job_status_transition(
-                current,
-                ExecutionJobStatus.QUEUED,
-                lease_expired_reclaim=True,
-            )
-            job_row.status = ExecutionJobStatus.QUEUED.value
-        job_row.claimed_by = None
-        job_row.lease_expires_at = None
-        job_row.attempt = int(job_row.attempt) + 1
-        job_row.updated_at = now
-        return True
+        return await _reclaim_stale_job_row(
+            session,
+            job_row,
+            now=now,
+            max_attempts=max_attempts,
+        )
 
     async def _reclaim_stale_executing_action(
         self,
@@ -1048,71 +950,13 @@ class ActionExecutionService:
         lease_seconds: float,
         max_attempts: int,
     ) -> bool:
-        if ActionStatus(action_row.status) is not ActionStatus.EXECUTING:
-            return False
-        if action_row.action_category not in _RECLAIMABLE_ACTION_CATEGORIES:
-            return False
-        if action_row.execution_phase != ActionExecutionPhase.IMMEDIATE.value:
-            return False
-
-        job_row = None
-        if action_row.execution_job_id:
-            job_row = await session.get(orm.ActionExecutionJob, action_row.execution_job_id)
-            if job_row is not None:
-                job_status = ExecutionJobStatus(job_row.status)
-                if job_status in {
-                    ExecutionJobStatus.SUCCESS,
-                    ExecutionJobStatus.PARTIAL_SUCCESS,
-                    ExecutionJobStatus.FAILED,
-                    ExecutionJobStatus.TIMED_OUT,
-                    ExecutionJobStatus.CANCELLED,
-                }:
-                    target = _map_job_to_action_status(job_status)
-                    validate_action_status_transition(
-                        ActionCategory(action_row.action_category),
-                        ActionStatus.EXECUTING,
-                        target,
-                    )
-                    action_row.status = target.value
-                    action_row.executed_at = now
-                    action_row.updated_at = now
-                    return True
-                if (
-                    job_row.lease_expires_at is not None
-                    and job_row.lease_expires_at >= now
-                    and job_status in {ExecutionJobStatus.QUEUED, ExecutionJobStatus.RUNNING}
-                ):
-                    return False
-
-        if await _has_active_outbox(session, action_row.action_id):
-            return False
-
-        if job_row is None:
-            stale_after = action_row.updated_at + timedelta(seconds=lease_seconds)
-            if stale_after > now:
-                return False
-        elif job_row.attempt >= max_attempts:
-            validate_action_status_transition(
-                ActionCategory(action_row.action_category),
-                ActionStatus.EXECUTING,
-                ActionStatus.FAILED,
-            )
-            action_row.status = ActionStatus.FAILED.value
-            action_row.execution_job_id = None
-            action_row.executed_at = now
-            action_row.updated_at = now
-            return True
-
-        validate_action_status_transition(
-            ActionCategory(action_row.action_category),
-            ActionStatus.EXECUTING,
-            ActionStatus.APPROVED,
-            lease_expired_reclaim=True,
+        return await _reclaim_stale_executing_action(
+            session,
+            action_row,
+            now=now,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
         )
-        action_row.status = ActionStatus.APPROVED.value
-        action_row.execution_job_id = None
-        action_row.updated_at = now
-        return True
 
     async def _build_summary(self, event_id: str, plan_revision: int) -> ExecutionSummary:
         async with self._session_factory() as session:
@@ -1187,6 +1031,208 @@ class ActionExecutionService:
         return summary
 
 
+async def reconcile_stale_executions_for_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    event_id: str | None = None,
+    limit: int = 20,
+) -> int:
+    """Module-level stale execution reconcile (ISSUE-173 / ISSUE-302 CLOSED gate)."""
+    settings = get_settings()
+    if not settings.action_execution_reconcile_enabled:
+        return 0
+    now = datetime.now(UTC)
+    max_attempts = settings.action_execution_max_attempts
+    lease_seconds = settings.action_execution_lease_seconds
+    reconciled = 0
+    async with session_factory() as session:
+        async with session.begin():
+            job_query = (
+                select(orm.ActionExecutionJob)
+                .where(
+                    orm.ActionExecutionJob.status.in_(
+                        (
+                            ExecutionJobStatus.QUEUED.value,
+                            ExecutionJobStatus.RUNNING.value,
+                        )
+                    ),
+                    orm.ActionExecutionJob.lease_expires_at.is_not(None),
+                    orm.ActionExecutionJob.lease_expires_at < now,
+                )
+                .order_by(orm.ActionExecutionJob.updated_at.asc())
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            if event_id is not None:
+                job_query = job_query.where(orm.ActionExecutionJob.event_id == event_id)
+            job_rows = (await session.scalars(job_query)).all()
+            for job_row in job_rows:
+                if await _reclaim_stale_job_row(
+                    session,
+                    job_row,
+                    now=now,
+                    max_attempts=max_attempts,
+                ):
+                    reconciled += 1
+
+            action_query = (
+                select(orm.Action)
+                .where(
+                    orm.Action.status == ActionStatus.EXECUTING.value,
+                    orm.Action.execution_phase == ActionExecutionPhase.IMMEDIATE.value,
+                    orm.Action.action_category.in_(_RECLAIMABLE_ACTION_CATEGORIES),
+                )
+                .order_by(orm.Action.updated_at.asc())
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            if event_id is not None:
+                action_query = action_query.where(orm.Action.event_id == event_id)
+            action_rows = (await session.scalars(action_query)).all()
+            for action_row in action_rows:
+                if await _reclaim_stale_executing_action(
+                    session,
+                    action_row,
+                    now=now,
+                    lease_seconds=lease_seconds,
+                    max_attempts=max_attempts,
+                ):
+                    reconciled += 1
+    if reconciled:
+        logger.info("reconcile_stale_executions reclaimed=%s event_id=%s", reconciled, event_id)
+    return reconciled
+
+
+async def _reclaim_stale_job_row(
+    session: AsyncSession,
+    job_row: orm.ActionExecutionJob,
+    *,
+    now: datetime,
+    max_attempts: int,
+) -> bool:
+    if job_row.lease_expires_at is None or job_row.lease_expires_at >= now:
+        return False
+    current = ExecutionJobStatus(job_row.status)
+    if current not in {ExecutionJobStatus.QUEUED, ExecutionJobStatus.RUNNING}:
+        return False
+    if await _has_active_outbox(session, job_row.action_id):
+        return False
+
+    if job_row.attempt >= max_attempts:
+        target = ExecutionJobStatus.TIMED_OUT
+        validate_job_status_transition(
+            current,
+            target,
+            lease_expired_reclaim=(current is ExecutionJobStatus.QUEUED),
+        )
+        job_row.status = target.value
+        job_row.claimed_by = None
+        job_row.lease_expires_at = None
+        job_row.provider_message = "lease_expired_max_attempts"
+        job_row.finished_at = now
+        job_row.updated_at = now
+        action_row = await session.get(orm.Action, job_row.action_id, with_for_update=True)
+        if action_row is not None and ActionStatus(action_row.status) is ActionStatus.EXECUTING:
+            validate_action_status_transition(
+                ActionCategory(action_row.action_category),
+                ActionStatus.EXECUTING,
+                ActionStatus.FAILED,
+            )
+            action_row.status = ActionStatus.FAILED.value
+            action_row.execution_job_id = None
+            action_row.executed_at = now
+            action_row.updated_at = now
+        return True
+
+    if current is ExecutionJobStatus.RUNNING:
+        validate_job_status_transition(
+            current,
+            ExecutionJobStatus.QUEUED,
+            lease_expired_reclaim=True,
+        )
+        job_row.status = ExecutionJobStatus.QUEUED.value
+    job_row.claimed_by = None
+    job_row.lease_expires_at = None
+    job_row.attempt = int(job_row.attempt) + 1
+    job_row.updated_at = now
+    return True
+
+
+async def _reclaim_stale_executing_action(
+    session: AsyncSession,
+    action_row: orm.Action,
+    *,
+    now: datetime,
+    lease_seconds: float,
+    max_attempts: int,
+) -> bool:
+    if ActionStatus(action_row.status) is not ActionStatus.EXECUTING:
+        return False
+    if action_row.action_category not in _RECLAIMABLE_ACTION_CATEGORIES:
+        return False
+    if action_row.execution_phase != ActionExecutionPhase.IMMEDIATE.value:
+        return False
+
+    job_row = None
+    if action_row.execution_job_id:
+        job_row = await session.get(orm.ActionExecutionJob, action_row.execution_job_id)
+        if job_row is not None:
+            job_status = ExecutionJobStatus(job_row.status)
+            if job_status in {
+                ExecutionJobStatus.SUCCESS,
+                ExecutionJobStatus.PARTIAL_SUCCESS,
+                ExecutionJobStatus.FAILED,
+                ExecutionJobStatus.TIMED_OUT,
+                ExecutionJobStatus.CANCELLED,
+            }:
+                target = _map_job_to_action_status(job_status)
+                validate_action_status_transition(
+                    ActionCategory(action_row.action_category),
+                    ActionStatus.EXECUTING,
+                    target,
+                )
+                action_row.status = target.value
+                action_row.executed_at = now
+                action_row.updated_at = now
+                return True
+            if (
+                job_row.lease_expires_at is not None
+                and job_row.lease_expires_at >= now
+                and job_status in {ExecutionJobStatus.QUEUED, ExecutionJobStatus.RUNNING}
+            ):
+                return False
+
+    if await _has_active_outbox(session, action_row.action_id):
+        return False
+
+    if job_row is None:
+        stale_after = action_row.updated_at + timedelta(seconds=lease_seconds)
+        if stale_after > now:
+            return False
+    elif job_row.attempt >= max_attempts:
+        validate_action_status_transition(
+            ActionCategory(action_row.action_category),
+            ActionStatus.EXECUTING,
+            ActionStatus.FAILED,
+        )
+        action_row.status = ActionStatus.FAILED.value
+        action_row.execution_job_id = None
+        action_row.executed_at = now
+        action_row.updated_at = now
+        return True
+
+    validate_action_status_transition(
+        ActionCategory(action_row.action_category),
+        ActionStatus.EXECUTING,
+        ActionStatus.APPROVED,
+        lease_expired_reclaim=True,
+    )
+    action_row.status = ActionStatus.APPROVED.value
+    action_row.execution_job_id = None
+    action_row.updated_at = now
+    return True
+
+
 def _map_job_to_action_status(status: ExecutionJobStatus) -> ActionStatus:
     if status is ExecutionJobStatus.SUCCESS:
         return ActionStatus.SUCCESS
@@ -1203,4 +1249,4 @@ def _map_job_to_action_status(status: ExecutionJobStatus) -> ActionStatus:
     return ActionStatus.EXECUTING
 
 
-__all__ = ["ActionExecutionService", "DbExecutionJobStore"]
+__all__ = ["ActionExecutionService", "DbExecutionJobStore", "reconcile_stale_executions_for_event"]

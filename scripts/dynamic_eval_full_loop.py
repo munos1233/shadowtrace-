@@ -299,11 +299,27 @@ def trigger_full_loop(
     return data
 
 
-def event_outcome_ok(status: str) -> bool:
+_STRICT_TERMINAL_STATUSES = frozenset({"closed"})
+
+
+def event_outcome_ok(status: str, *, require_closed: bool = False) -> bool:
     """True when status is an acceptable non-FAILED gold-path outcome."""
+    if require_closed:
+        return status in _STRICT_TERMINAL_STATUSES
     return status != "failed" and (
         status in SUCCESSISH_EVENT_STATUSES or status == "waiting_approval"
     )
+
+
+def assert_side_effect_convergence(client: DynamicEvalClient, event_id: str) -> None:
+    """Strict profile: CLOSED must not hide gate-applicable outstanding side effects."""
+    detail = client.get_json(f"/api/v1/events/{event_id}")
+    gate_count = int(detail.get("gate_applicable_outstanding_count") or 0)
+    if gate_count:
+        raise RuntimeError(
+            f"strict CLOSED gate failed for {event_id}: "
+            f"gate_applicable_outstanding_count={gate_count}"
+        )
 
 
 def run_gold_loop(
@@ -314,6 +330,7 @@ def run_gold_loop(
     generate_report: bool,
     poll_interval_s: float,
     max_wait_s: float,
+    require_closed: bool = False,
 ) -> dict[str, Any]:
     """Drive investigate → scripted approve/reject → non-FAILED assertion."""
     started = time.monotonic()
@@ -403,6 +420,8 @@ def run_gold_loop(
                     )
 
             if status in SUCCESSISH_EVENT_STATUSES and not pending:
+                if require_closed and status == "closed":
+                    assert_side_effect_convergence(client, event_id)
                 # Terminal-enough for gold path (reporting/contained/closed/…).
                 continue
 
@@ -412,7 +431,9 @@ def run_gold_loop(
                 if status in _IN_FLIGHT or status == "new":
                     all_done = False
                     break
-                if status == "failed" or not event_outcome_ok(status):
+                if status == "failed" or not event_outcome_ok(
+                    status, require_closed=require_closed
+                ):
                     raise RuntimeError(
                         f"unacceptable final status for {event_id}: {status}"
                     )
@@ -494,6 +515,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=float(os.environ.get("DYNAMIC_EVAL_MAX_WAIT_S", "240")),
         help="Hard wall clock (default 240s). Must stay << production approval timeout.",
     )
+    parser.add_argument(
+        "--require-closed",
+        action="store_true",
+        help="Strict profile: final status must be closed with zero gate-applicable side effects",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -569,6 +595,7 @@ def main(argv: list[str] | None = None) -> int:
         generate_report=bool(args.generate_report),
         poll_interval_s=float(args.poll_interval_s),
         max_wait_s=float(args.max_wait_s),
+        require_closed=bool(args.require_closed),
     )
     result["seed_summary"] = seed_summary
     result["scenario"] = args.scenario
