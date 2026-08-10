@@ -461,6 +461,49 @@
         }
       }
     },
+    "/api/v1/events/{event_id}/projection-repair": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Repair Event Projection",
+        "description": "Admin-only ISSUE-285 repair of a committed transition's context projection.",
+        "operationId": "repair_event_projection_api_v1_events__event_id__projection_repair_post",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionRepairResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{event_id}/close": {
       "post": {
         "tags": [
@@ -7500,6 +7543,76 @@
         ],
         "title": "ProcessEntity"
       },
+      "ProjectionRepairFailure": {
+        "properties": {
+          "step": {
+            "type": "string",
+            "title": "Step"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step",
+          "mode"
+        ],
+        "title": "ProjectionRepairFailure"
+      },
+      "ProjectionRepairResponse": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "committed": {
+            "type": "boolean",
+            "title": "Committed"
+          },
+          "degraded": {
+            "type": "boolean",
+            "title": "Degraded"
+          },
+          "projection_id": {
+            "type": "string",
+            "title": "Projection Id"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectionRepairFailure"
+            },
+            "type": "array",
+            "title": "Failures",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "committed",
+          "degraded",
+          "projection_id",
+          "attempts"
+        ],
+        "title": "ProjectionRepairResponse"
+      },
       "RateStat": {
         "properties": {
           "rate": {
@@ -7706,6 +7819,18 @@
               }
             ],
             "title": "Evidence Ref"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id",
+            "description": "Optional idempotency key for manual resolution resume (ISSUE-277)."
           }
         },
         "additionalProperties": false,
@@ -7741,6 +7866,18 @@
               }
             ],
             "title": "Evidence Ref"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id",
+            "description": "Optional idempotency key for manual resolution resume (ISSUE-277)."
           }
         },
         "additionalProperties": false,

@@ -2022,6 +2022,19 @@
       "$ref": "#/$defs/ExecutionSubstate",
       "default": "none"
     },
+    "manual_hold": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Manual Hold"
+    },
     "execution_summary": {
       "anyOf": [
         {
