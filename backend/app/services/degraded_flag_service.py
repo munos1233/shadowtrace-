@@ -52,6 +52,8 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "celery_redelivery_recovery_needed",
         # ISSUE-285 committed state with a degraded post-commit projection.
         "state_transition_projection_degraded",
+        # ISSUE-305 plan steps targeting non-graph agents (memory/tool/etc.)
+        "plan_step_not_executable",
     }
 )
 

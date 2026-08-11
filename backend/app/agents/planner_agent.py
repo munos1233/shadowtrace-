@@ -42,6 +42,7 @@ from app.models.agent_io import (
 )
 from app.models.agent_io import (
     ExecutionPlan,
+    PLAN_STEP_ASSIGNABLE_AGENTS,
     PlanBudget,
     PlannerAgentInput,
     PlanStep,
@@ -105,11 +106,26 @@ def _build_disposition_only_plan(event_id: str) -> ExecutionPlan:
     )
 
 
+def _wire_step_has_non_assignable_agent(wire_steps: list[PlanStepLLM]) -> bool:
+    """Return True when any LLM wire step names a known but non-executable agent."""
+    for step in wire_steps:
+        agent = step.assigned_agent
+        if agent in _VALID_AGENT_NAMES and agent not in PLAN_STEP_ASSIGNABLE_AGENTS:
+            return True
+    return False
+
+
 def _validate_plan_step(step: PlanStep) -> PlanStep | None:
     """Validate and sanitize a single PlanStep."""
     if step.assigned_agent not in _VALID_AGENT_NAMES:
         logger.warning(
             "PlannerAgent: dropping step with invalid assigned_agent=%r",
+            step.assigned_agent,
+        )
+        return None
+    if step.assigned_agent not in PLAN_STEP_ASSIGNABLE_AGENTS:
+        logger.warning(
+            "PlannerAgent: dropping step with non-executable assigned_agent=%r",
             step.assigned_agent,
         )
         return None
@@ -145,6 +161,12 @@ def _steps_from_wire(wire_steps: list[PlanStepLLM]) -> list[PlanStep]:
         if agent not in _VALID_AGENT_NAMES:
             logger.warning(
                 "PlannerAgent: dropping wire step with invalid assigned_agent=%r",
+                agent,
+            )
+            continue
+        if agent not in PLAN_STEP_ASSIGNABLE_AGENTS:
+            logger.warning(
+                "PlannerAgent: dropping wire step with non-executable assigned_agent=%r",
                 agent,
             )
             continue
@@ -413,6 +435,9 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
         else:
             raise ValueError("LLM did not return a valid PlanGenerateLLMResponse")
 
+        if _wire_step_has_non_assignable_agent(wire.steps):
+            raise ValueError("LLM plan contains non-executable agents")
+
         plan = ExecutionPlan(
             plan_id=_generate_plan_id(event_id, 0),
             event_id=event_id,
@@ -453,6 +478,9 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             wire = response.parsed
         else:
             raise ValueError("LLM did not return a valid PlanGenerateLLMResponse")
+
+        if _wire_step_has_non_assignable_agent(wire.steps):
+            raise ValueError("LLM plan contains non-executable agents")
 
         new_revision = previous_plan.revision + 1
         plan = ExecutionPlan(

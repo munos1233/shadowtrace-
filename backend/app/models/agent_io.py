@@ -848,6 +848,37 @@ class ToolAgentInput(AgentInput):
     action_id: str | None = None
 
 
+# P0 LangGraph node agents (ISSUE-305). ``memory_agent`` and ``tool_agent`` are
+# intentionally excluded — Memory runs post-close; tools run via ToolExecutor.
+GRAPH_EXECUTABLE_AGENTS: frozenset[str] = frozenset(
+    {
+        "triage_agent",
+        "planner_agent",
+        "evidence_agent",
+        "graph_agent",
+        "rag_agent",
+        "risk_agent",
+        "response_agent",
+        "verify_agent",
+        "report_agent",
+    }
+)
+
+# Agents that may appear in ``ExecutionPlan.steps`` and are honored by
+# orchestration (including deferred response/report steps and SuperAgent hooks).
+PLAN_STEP_ASSIGNABLE_AGENTS: frozenset[str] = frozenset(
+    {
+        "evidence_agent",
+        "graph_agent",
+        "rag_agent",
+        "risk_agent",
+        "response_agent",
+        "report_agent",
+        "storyline_service",
+        "react",
+    }
+)
+
 # Mapping of the 12 Agents (intro §4.4) to their locked input model — mirrors
 # the output-side mapping tests build against ``agent_io`` classes.
 AGENT_INPUT_MODELS: dict[AgentName, type[AgentInput]] = {

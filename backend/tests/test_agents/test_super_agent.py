@@ -1460,3 +1460,87 @@ class TestTransitionRetryPolicy:
             await agent._transition(_EVENT_ID, EventStatus.TRIAGING, ec=ec)
 
         assert event_service.attempts == 1
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-305: non-executable plan agents fail closed in execute_plan_steps
+# --------------------------------------------------------------------------- #
+
+
+class TestNonExecutablePlanAgents:
+    async def test_execute_single_step_fails_on_memory_agent(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.models.context import EventContext
+        from app.models.enums import FinalVerdict, WritebackReadiness
+        from app.models.security_event import EventSummary
+
+        degraded = MagicMock()
+        degraded.set_flag = AsyncMock(return_value=["plan_step_not_executable=true"])
+        agent = SuperAgent(degraded_flags=degraded)
+        ec = EventContext(
+            event=EventSummary(
+                event_id=_EVENT_ID,
+                event_type=EventType.INSIDER_THREAT,
+                title="Suspicious login",
+                status=EventStatus.NEW,
+                severity=Severity.MEDIUM,
+                risk_score=50,
+                final_verdict=FinalVerdict.NONE,
+                writeback_required=False,
+                writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+                disposition_policy=DispositionPolicy.NOT_REQUIRED,
+            )
+        )
+        step = PlanStep.model_construct(
+            step_order=2,
+            step_goal="Persist memory",
+            assigned_agent="memory_agent",  # type: ignore[arg-type]
+            required_tools=[],
+            success_criteria="memory updated",
+        )
+
+        with pytest.raises(ShadowTraceError) as exc:
+            await agent._execute_single_step(ec, step)
+
+        assert exc.value.error_code == "plan_step_not_executable"
+        degraded.set_flag.assert_awaited_once_with(
+            _EVENT_ID,
+            "plan_step_not_executable",
+            True,
+            writer="SuperAgent",
+        )
+
+    async def test_execute_single_step_fails_on_tool_agent(self) -> None:
+        from app.models.context import EventContext
+        from app.models.enums import FinalVerdict, WritebackReadiness
+        from app.models.security_event import EventSummary
+
+        agent = SuperAgent()
+        ec = EventContext(
+            event=EventSummary(
+                event_id=_EVENT_ID,
+                event_type=EventType.INSIDER_THREAT,
+                title="Suspicious login",
+                status=EventStatus.NEW,
+                severity=Severity.MEDIUM,
+                risk_score=50,
+                final_verdict=FinalVerdict.NONE,
+                writeback_required=False,
+                writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+                disposition_policy=DispositionPolicy.NOT_REQUIRED,
+            )
+        )
+        step = PlanStep.model_construct(
+            step_order=3,
+            step_goal="Standalone tool dispatch",
+            assigned_agent="tool_agent",  # type: ignore[arg-type]
+            required_tools=["query_dns"],
+            success_criteria="tool ok",
+        )
+
+        with pytest.raises(ShadowTraceError) as exc:
+            await agent._execute_single_step(ec, step)
+
+        assert exc.value.error_code == "plan_step_not_executable"
+        assert exc.value.details["assigned_agent"] == "tool_agent"

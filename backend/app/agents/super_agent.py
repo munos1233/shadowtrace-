@@ -46,6 +46,7 @@ from app.models.agent_io import (
     GraphOutput,
     InvestigationResult,
     MemoryAgentInput,
+    PLAN_STEP_ASSIGNABLE_AGENTS,
     PlanStep,
     RAGOutput,
     RiskAgentInput,
@@ -301,6 +302,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         output_quality_evaluator: Any | None = None,
         transition_max_retries: int | None = None,
         transition_retry_backoff_seconds: float | None = None,
+        degraded_flags: Any | None = None,
     ) -> None:
         super().__init__(
             working_memory=working_memory,
@@ -340,6 +342,7 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         self.memory_agent = memory_agent
         self._output_quality_evaluator = output_quality_evaluator
         self._memory_tasks: set[asyncio.Task[None]] = set()
+        self._degraded_flags = degraded_flags
 
     # ------------------------------------------------------------------ #
     # Public entry point
@@ -936,14 +939,46 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             case "react":
                 await self._run_react_step(ec, step)
             case _:
-                logger.warning(
-                    "SuperAgent: unknown agent %r in plan step %d for event=%s",
-                    agent_name,
-                    step.step_order,
-                    event_id,
-                )
+                await self._fail_non_executable_plan_step(event_id, agent_name, step.step_order)
 
         await self._check_convergence_stop(event_id, agent_name)
+
+    async def _fail_non_executable_plan_step(
+        self,
+        event_id: str,
+        agent_name: str,
+        step_order: int,
+    ) -> None:
+        """Fail closed when a plan step targets a non-executable agent (ISSUE-305)."""
+        logger.warning(
+            "SuperAgent: non-executable agent %r in plan step %d for event=%s — step failed",
+            agent_name,
+            step_order,
+            event_id,
+        )
+        degraded = getattr(self, "_degraded_flags", None)
+        if degraded is not None:
+            try:
+                await degraded.set_flag(
+                    event_id,
+                    "plan_step_not_executable",
+                    True,
+                    writer=_SUPER_AGENT_OPERATOR,
+                )
+            except Exception:
+                logger.exception(
+                    "SuperAgent: failed to persist plan_step_not_executable flag event=%s",
+                    event_id,
+                )
+        raise ShadowTraceError(
+            f"plan step {step_order} assigned to non-executable agent {agent_name!r}",
+            error_code="plan_step_not_executable",
+            details={
+                "event_id": event_id,
+                "assigned_agent": agent_name,
+                "step_order": step_order,
+            },
+        )
 
     async def _run_evidence_step(self, ec: EventContext, step: PlanStep) -> None:
         event_id = _event_id_from_context(ec)

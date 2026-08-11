@@ -837,3 +837,186 @@ async def test_idempotency_ignores_mismatched_event_id() -> None:
     )
     assert plan.event_id == "evt-idem-mismatch"
     assert plan.plan_id != wrong_event_plan.plan_id
+
+
+# --------------------------------------------------------------------------- #
+# ISSUE-305: non-executable plan agents (memory_agent / tool_agent)
+# --------------------------------------------------------------------------- #
+
+
+def test_validate_execution_plan_drops_memory_and_tool_agent_steps() -> None:
+    """Non-executable agents in persisted plans are dropped like invalid agents."""
+    memory_step = PlanStep.model_construct(
+        step_order=2,
+        step_goal="Persist investigation memory",
+        assigned_agent="memory_agent",  # type: ignore[arg-type]
+        required_tools=[],
+        success_criteria="memory updated",
+    )
+    tool_step = PlanStep.model_construct(
+        step_order=3,
+        step_goal="Run standalone tool",
+        assigned_agent="tool_agent",  # type: ignore[arg-type]
+        required_tools=["query_dns"],
+        success_criteria="tool ok",
+    )
+    valid_step = PlanStep(
+        step_order=1,
+        step_goal="Collect evidence",
+        assigned_agent="evidence_agent",
+        required_tools=["query_threat_intel"],
+        success_criteria="ok",
+    )
+    risk_step = PlanStep(
+        step_order=4,
+        step_goal="Score risk",
+        assigned_agent="risk_agent",
+        required_tools=[],
+        success_criteria="score",
+    )
+
+    plan = ExecutionPlan(
+        plan_id="pln-nonexec01",
+        event_id="evt-nonexec",
+        steps=[valid_step, memory_step, tool_step, risk_step],
+        budget=PlanBudget(),
+        revision=0,
+    )
+    clean = _validate_execution_plan(plan)
+    assert [s.assigned_agent for s in clean.steps] == ["evidence_agent", "risk_agent"]
+    assert clean.steps[0].step_order == 1
+    assert clean.steps[1].step_order == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_plan_with_memory_agent_falls_back_to_default(tmp_path: Path) -> None:
+    """LLM output naming memory_agent must trigger DEFAULT_PLANS fallback."""
+    from app.agents.rules.default_plans import get_default_plan
+
+    _write_golden(
+        tmp_path,
+        "plan_generate",
+        {
+            "content": {
+                "plan_id": "pln-mem0001",
+                "event_id": "evt-mem-fallback",
+                "steps": [
+                    {
+                        "step_order": 1,
+                        "step_goal": "Collect evidence",
+                        "assigned_agent": "evidence_agent",
+                        "required_tools": ["query_threat_intel"],
+                        "success_criteria": "ok",
+                    },
+                    {
+                        "step_order": 2,
+                        "step_goal": "Persist memory",
+                        "assigned_agent": "memory_agent",
+                        "required_tools": [],
+                        "success_criteria": "memory updated",
+                    },
+                    {
+                        "step_order": 3,
+                        "step_goal": "Risk scoring",
+                        "assigned_agent": "risk_agent",
+                        "required_tools": [],
+                        "success_criteria": "score computed",
+                    },
+                    {
+                        "step_order": 4,
+                        "step_goal": "Response plan",
+                        "assigned_agent": "response_agent",
+                        "required_tools": [],
+                        "success_criteria": "actions generated",
+                    },
+                ],
+                "budget": {"max_tool_calls": 30, "max_llm_calls": 20, "max_duration_s": 300},
+                "revision": 0,
+                "revise_reason": None,
+                "degraded": False,
+            },
+            "model_name": "mock-model",
+            "prompt_tokens": 100,
+            "completion_tokens": 200,
+            "total_tokens": 300,
+        },
+    )
+
+    llm = _make_mock_llm(tmp_path)
+    agent = PlannerAgent(llm_client=llm)
+    plan = await agent._plan_impl("evt-mem-fallback", _make_triage())
+    expected = get_default_plan(
+        "evt-mem-fallback",
+        EventType.DATA_EXFILTRATION,
+        _generate_plan_id("evt-mem-fallback", 0),
+    )
+    assert plan.degraded is True
+    assert {s.assigned_agent for s in plan.steps} == {s.assigned_agent for s in expected.steps}
+    assert "memory_agent" not in {s.assigned_agent for s in plan.steps}
+
+
+@pytest.mark.asyncio
+async def test_llm_plan_with_tool_agent_falls_back_to_default(tmp_path: Path) -> None:
+    """LLM output naming tool_agent must trigger DEFAULT_PLANS fallback."""
+    from app.agents.rules.default_plans import get_default_plan
+
+    _write_golden(
+        tmp_path,
+        "plan_generate",
+        {
+            "content": {
+                "plan_id": "pln-tool001",
+                "event_id": "evt-tool-fallback",
+                "steps": [
+                    {
+                        "step_order": 1,
+                        "step_goal": "Collect evidence",
+                        "assigned_agent": "evidence_agent",
+                        "required_tools": ["query_threat_intel"],
+                        "success_criteria": "ok",
+                    },
+                    {
+                        "step_order": 2,
+                        "step_goal": "Standalone tool dispatch",
+                        "assigned_agent": "tool_agent",
+                        "required_tools": ["query_dns"],
+                        "success_criteria": "tool ok",
+                    },
+                    {
+                        "step_order": 3,
+                        "step_goal": "Risk scoring",
+                        "assigned_agent": "risk_agent",
+                        "required_tools": [],
+                        "success_criteria": "score computed",
+                    },
+                    {
+                        "step_order": 4,
+                        "step_goal": "Response plan",
+                        "assigned_agent": "response_agent",
+                        "required_tools": [],
+                        "success_criteria": "actions generated",
+                    },
+                ],
+                "budget": {"max_tool_calls": 30, "max_llm_calls": 20, "max_duration_s": 300},
+                "revision": 0,
+                "revise_reason": None,
+                "degraded": False,
+            },
+            "model_name": "mock-model",
+            "prompt_tokens": 100,
+            "completion_tokens": 200,
+            "total_tokens": 300,
+        },
+    )
+
+    llm = _make_mock_llm(tmp_path)
+    agent = PlannerAgent(llm_client=llm)
+    plan = await agent._plan_impl("evt-tool-fallback", _make_triage())
+    expected = get_default_plan(
+        "evt-tool-fallback",
+        EventType.DATA_EXFILTRATION,
+        _generate_plan_id("evt-tool-fallback", 0),
+    )
+    assert plan.degraded is True
+    assert {s.assigned_agent for s in plan.steps} == {s.assigned_agent for s in expected.steps}
+    assert "tool_agent" not in {s.assigned_agent for s in plan.steps}
