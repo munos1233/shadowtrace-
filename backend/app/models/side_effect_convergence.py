@@ -1,4 +1,18 @@
-"""Side-effect convergence projections (ISSUE-302)."""
+"""Side-effect convergence projections (ISSUE-302 / ISSUE-312).
+
+Convergence policy (required ``disposition_policy``):
+
+- ``TERMINAL_WRITEBACK`` (``writeback_applicable=true``, e.g. ``EVENT_STATUS_UPDATE``):
+  active outbox must be delivered with ``WritebackStatus.CONFIRMED`` and
+  readback-verified evidence on the terminal disposition path.
+- ``INDEPENDENT_ENTITY_EFFECT`` (``entity_action_submit``,
+  ``writeback_applicable=false``): terminal execution job success plus an
+  independent provider effect observation ``EffectStatus.VERIFIED`` (VerifyAgent
+  phase ``effect``). Entity submit receipts may remain ``ACCEPTED``.
+- ``EXECUTION_JOB_ONLY`` (``writeback_applicable=false`` direct-tool paths without
+  entity outbox): terminal job / action success; outbox receipts are not gate
+  inputs.
+"""
 
 from __future__ import annotations
 
@@ -22,9 +36,21 @@ class SideEffectScope(StrEnum):
     BACKGROUND_DETACHED = "background_detached"
 
 
+class SideEffectConvergencePolicy(StrEnum):
+    """Structured convergence contract per side-effect kind (ISSUE-312)."""
+
+    TERMINAL_WRITEBACK = "terminal_writeback"
+    INDEPENDENT_ENTITY_EFFECT = "independent_entity_effect"
+    EXECUTION_JOB_ONLY = "execution_job_only"
+
+
 class SideEffectConvergenceReason(StrEnum):
+    """Outstanding side-effect blocking reasons exposed on API / state machine."""
+
     IN_FLIGHT_JOB = "in_flight_job"
     EXECUTING_ACTION = "executing_action"
+    EFFECT_UNVERIFIED = "effect_unverified"
+    TERMINAL_WRITEBACK_UNCONFIRMED = "terminal_writeback_unconfirmed"
     OUTBOX_NOT_CONFIRMED = "outbox_not_confirmed"
     OUTBOX_UNDELIVERED = "outbox_undelivered"
 
@@ -37,6 +63,7 @@ class OutstandingSideEffectView(BaseModel):
     action_status: ActionStatus
     execution_phase: ActionExecutionPhase
     writeback_applicable: bool
+    convergence_policy: SideEffectConvergencePolicy | None = None
     job_status: ExecutionJobStatus | None = None
     outbox_delivery_status: OutboxDeliveryStatus | None = None
     outbox_writeback_status: WritebackStatus | None = None

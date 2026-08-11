@@ -484,6 +484,12 @@ class EventDispositionService:
         context: EventContext,
         plan_revision: int,
     ) -> bool:
+        """Return True when POST_VERIFY terminal disposition may activate.
+
+        Uses the same VerifyAgent ``effect`` phase facts that ISSUE-312 relies on
+        for entity side-effect CLOSED convergence; entity submit receipts may
+        remain ``ACCEPTED`` while this gate waits for independent effect proof.
+        """
         if context.disposition_only_intent:
             if FinalVerdict(event_row.final_verdict) is not FinalVerdict.FALSE_POSITIVE:
                 return False

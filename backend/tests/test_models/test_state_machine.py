@@ -22,6 +22,7 @@ from app.models.enums import (
     WritebackReadiness,
     WritebackStatus,
 )
+from app.models.side_effect_convergence import SideEffectConvergenceSummary
 from app.models.workflow import (
     APPROVAL_TIMEOUT_MINUTES,
     FP_HIGH_THRESHOLD,
@@ -97,6 +98,10 @@ def _closed_ctx(**overrides: object) -> TransitionContext:
         "terminal_event_writeback": _terminal_ok(),
         "current_plan_revision": 1,
         "current_closure_cycle": 1,
+        "side_effect_convergence": SideEffectConvergenceSummary(
+            event_id="evt-closed-gate-test",
+            current_plan_revision=1,
+        ),
     }
     base.update(overrides)
     return TransitionContext(**base)  # type: ignore[arg-type]

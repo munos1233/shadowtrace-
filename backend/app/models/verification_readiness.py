@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.models.agent_io import (
     EffectStatus,
     VerificationActionResult,
+    VerificationPhase,
     VerificationResult,
 )
 
@@ -61,9 +62,31 @@ def has_unverified_applicable_effects(
     return not all(item.effect_status is EffectStatus.VERIFIED for item in applicable)
 
 
+def entity_effect_verified_for_action(
+    verification: VerificationResult | None,
+    action_id: str,
+) -> bool:
+    """True when VerifyAgent recorded an independent entity effect observation.
+
+    Only phase-``effect`` rows count — phase-``disposition`` writeback receipts
+    must not satisfy entity-effect convergence (ISSUE-312).
+    """
+    if verification is None:
+        return False
+    for item in verification.results:
+        if item.action_id != action_id:
+            continue
+        if item.verification_phase not in (VerificationPhase.EFFECT, None):
+            continue
+        if item.effect_status is EffectStatus.VERIFIED:
+            return True
+    return False
+
+
 __all__ = [
     "IMMEDIATE_PENDING_SKIP_DETAILS",
     "applicable_effect_results",
+    "entity_effect_verified_for_action",
     "has_immediate_effect_pending",
     "has_unverified_applicable_effects",
 ]
