@@ -8,7 +8,7 @@ observability never blocks business logic.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urljoin
@@ -16,6 +16,8 @@ from urllib.parse import urljoin
 from opentelemetry import metrics, trace
 from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.trace import NoOpTracerProvider, Span
+
+from app.core.sanitization import REDACTED, is_sensitive_key
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,56 @@ def _otlp_metrics_endpoint(base: str) -> str:
     if base.endswith("/v1/metrics"):
         return base
     return urljoin(f"{base}/", "v1/metrics")
+
+
+def _redact_httpx_span_header_attributes(
+    span: Span | None,
+    headers: Any,
+    *,
+    normalize_header_name: Callable[[str], str],
+) -> None:
+    """Overwrite sensitive HTTP header span attributes; never mutates the live request."""
+
+    if span is None or not span.is_recording() or headers is None:
+        return
+    try:
+        header_keys = headers.keys()
+    except AttributeError:
+        return
+    for key in header_keys:
+        key_str = key.decode("latin-1") if isinstance(key, bytes) else str(key)
+        if not is_sensitive_key(key_str):
+            continue
+        span.set_attribute(normalize_header_name(key_str), [REDACTED])
+
+
+def _httpx_request_hook(span: Span, request: Any) -> None:
+    from opentelemetry.util.http import normalise_request_header_name
+
+    _redact_httpx_span_header_attributes(
+        span,
+        request.headers,
+        normalize_header_name=normalise_request_header_name,
+    )
+
+
+def _httpx_response_hook(span: Span, request: Any, response: Any) -> None:
+    del request
+    from opentelemetry.util.http import normalise_response_header_name
+
+    _redact_httpx_span_header_attributes(
+        span,
+        response.headers,
+        normalize_header_name=normalise_response_header_name,
+    )
+
+
+async def _httpx_async_request_hook(span: Span, request: Any) -> None:
+    _httpx_request_hook(span, request)
+
+
+async def _httpx_async_response_hook(span: Span, request: Any, response: Any) -> None:
+    _httpx_response_hook(span, request, response)
 
 
 def setup_telemetry(
@@ -130,7 +182,12 @@ def setup_telemetry(
         try:
             from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
-            HTTPXClientInstrumentor().instrument()
+            HTTPXClientInstrumentor().instrument(
+                request_hook=_httpx_request_hook,
+                response_hook=_httpx_response_hook,
+                async_request_hook=_httpx_async_request_hook,
+                async_response_hook=_httpx_async_response_hook,
+            )
         except Exception:
             logger.warning("httpx auto-instrumentation failed", exc_info=True)
 

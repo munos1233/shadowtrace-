@@ -587,3 +587,5 @@ make bootstrap   # 产生写回与研判流量
 在 Grafana「ShadowTrace Writeback Observability」看板查看四面板（积压、确认率、重试/冲突、UNKNOWN）。
 
 > Traces 当前由 collector 输出到 debug 日志；指标经 Prometheus 供 Grafana 使用。导出失败仅记日志，不阻塞业务。
+
+**安全（ISSUE-310）：** 启用 OTEL 时，httpx 出站 span 会对 `Authorization` / `Cookie` / `X-Api-Key` 等敏感请求头做与日志 `RedactingFormatter` 一致的脱敏后再导出；**实际 HTTP 请求头不受影响**。生产环境仍勿将 trace 导出到不可信或未审计的 OTLP collector；若需捕获额外 HTTP 头，请确认 collector 存储与访问控制符合安全基线。

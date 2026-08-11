@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 from opentelemetry import trace
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
@@ -31,7 +33,12 @@ from app.core.metrics import (
     record_writeback_retry,
     reset_metrics_for_tests,
 )
+from app.core.sanitization import REDACTED
 from app.core.telemetry import (
+    _httpx_async_request_hook,
+    _httpx_async_response_hook,
+    _httpx_request_hook,
+    _httpx_response_hook,
     disposition_span,
     is_telemetry_enabled,
     reset_telemetry_for_tests,
@@ -607,3 +614,123 @@ def test_manual_resolve_records_writeback_metric(
     _, metric_reader, _ = enabled_telemetry
     record_writeback(status="confirmed", adapter="mock_xdr")
     assert _metric_sum(metric_reader, "shadowtrace_writeback_total") >= 1.0
+
+
+@pytest.fixture
+def httpx_instrumentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[InMemorySpanExporter, TracerProvider]]:
+    """Wire ShadowTrace httpx redaction hooks with in-memory export and full header capture."""
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_REQUEST", ".*")
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_RESPONSE", ".*")
+    reset_telemetry_for_tests()
+
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+    try:
+        HTTPXClientInstrumentor().uninstrument()
+    except Exception:
+        pass
+
+    yield span_exporter, tracer_provider
+
+    try:
+        HTTPXClientInstrumentor().uninstrument()
+    except Exception:
+        pass
+    span_exporter.clear()
+    reset_telemetry_for_tests()
+    monkeypatch.delenv("OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_REQUEST", raising=False)
+    monkeypatch.delenv("OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_RESPONSE", raising=False)
+
+
+def _instrument_httpx_client(
+    client: httpx.Client | httpx.AsyncClient,
+    tracer_provider: TracerProvider,
+) -> None:
+    HTTPXClientInstrumentor.instrument_client(
+        client,
+        tracer_provider=tracer_provider,
+        request_hook=_httpx_request_hook,
+        response_hook=_httpx_response_hook,
+    )
+
+
+def _header_attr_value(attrs: dict[str, Any], key: str) -> list[str]:
+    value = attrs.get(key)
+    assert value is not None
+    return list(value)
+
+
+def test_httpx_span_redacts_authorization_without_mutating_request(
+    httpx_instrumentation: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    span_exporter, tracer_provider = httpx_instrumentation
+    secret = "super-secret-bearer-token-xyz"
+    observed_auth: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed_auth.append(request.headers.get("Authorization", ""))
+        return httpx.Response(
+            200,
+            headers={"Set-Cookie": "session=abc123"},
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as client:
+        _instrument_httpx_client(client, tracer_provider)
+        response = client.get(
+            "https://example.com/disposition",
+            headers={
+                "Authorization": f"Bearer {secret}",
+                "X-Api-Key": "api-key-must-not-export",
+            },
+        )
+    assert response.status_code == 200
+    assert observed_auth == [f"Bearer {secret}"]
+
+    span_exporter.force_flush()
+    finished = span_exporter.get_finished_spans()
+    assert finished
+    attrs = dict(finished[0].attributes or {})
+    assert secret not in str(attrs)
+    assert "api-key-must-not-export" not in str(attrs)
+    assert _header_attr_value(attrs, "http.request.header.authorization") == [REDACTED]
+    assert _header_attr_value(attrs, "http.request.header.x_api_key") == [REDACTED]
+    assert _header_attr_value(attrs, "http.response.header.set_cookie") == [REDACTED]
+
+
+@pytest.mark.asyncio
+async def test_async_httpx_span_redacts_authorization(
+    httpx_instrumentation: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    span_exporter, tracer_provider = httpx_instrumentation
+    secret = "async-secret-bearer-token"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == f"Bearer {secret}"
+        return httpx.Response(200, request=request)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        HTTPXClientInstrumentor.instrument_client(
+            client,
+            tracer_provider=tracer_provider,
+            request_hook=_httpx_async_request_hook,
+            response_hook=_httpx_async_response_hook,
+        )
+        response = await client.get(
+            "https://example.com/async",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+    assert response.status_code == 200
+
+    span_exporter.force_flush()
+    finished = span_exporter.get_finished_spans()
+    assert finished
+    attrs = dict(finished[0].attributes or {})
+    assert secret not in str(attrs)
+    assert _header_attr_value(attrs, "http.request.header.authorization") == [REDACTED]
