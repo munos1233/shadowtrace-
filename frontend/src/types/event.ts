@@ -669,6 +669,33 @@ export interface InvestigationHealthConfig {
   approval_policy_version?: string;
 }
 
+/** POST /events/{event_id}/investigate — aligned with OpenAPI InvestigateResponse. */
+export interface InvestigateResponse {
+  event_id: string;
+  task_id: string;
+  intent_id?: string | null;
+  status: EventStatus;
+  include_response_execution?: boolean;
+  generate_report?: boolean;
+  full_loop_available?: boolean;
+}
+
+/** GET /tasks/{task_id} — Celery task state when TASK_MODE=celery. */
+export interface TaskResponse {
+  task_id: string;
+  /** Public Celery state (RETRY/REVOKED surfaced as UNKNOWN). */
+  state: string;
+  event_id?: string | null;
+}
+
+/** UI track for a durable investigation dispatched via celery. */
+export interface CeleryInvestigationTrack {
+  event_id: string;
+  task_id: string;
+  intent_id: string | null;
+  state: string;
+}
+
 export interface InvestigationResult {
   event_id: string;
   final_status: EventStatus;

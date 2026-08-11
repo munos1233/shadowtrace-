@@ -13,10 +13,12 @@ import type {
   ConnectorsResponse,
   DispositionListResponse,
   ExecutionJobResponse,
+  InvestigateResponse,
   InvestigationHealthConfig,
   SearchParams,
   SearchResponse,
   SourceRecordResponse,
+  TaskResponse,
   WritebackResponse,
 } from "../types/event";
 import type {
@@ -83,13 +85,7 @@ export function triggerInvestigation(
   eventId: string,
   options?: { includeResponseExecution?: boolean; generateReport?: boolean },
 ) {
-  return apiClient.post<{
-    event_id: string;
-    status: string;
-    include_response_execution?: boolean;
-    generate_report?: boolean;
-    full_loop_available?: boolean;
-  }>(
+  return apiClient.post<InvestigateResponse>(
     `/events/${eventId}/investigate`,
     {
       include_response_execution: options?.includeResponseExecution ?? false,
@@ -97,6 +93,10 @@ export function triggerInvestigation(
     },
     { skipGlobalErrorToast: true },
   );
+}
+
+export function getTask(taskId: string) {
+  return apiClient.get<TaskResponse>(`/tasks/${taskId}`);
 }
 
 export function getHealth() {
