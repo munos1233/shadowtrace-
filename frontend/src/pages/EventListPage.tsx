@@ -36,6 +36,12 @@ import type {
   Severity,
 } from "../types/event";
 import { listEvents, triggerInvestigation, getHealth } from "../services/eventApi";
+import { useCeleryInvestigationTasks } from "../hooks/useCeleryInvestigationTasks";
+import {
+  isCeleryTaskMode,
+  isTerminalTaskState,
+  labelTaskState,
+} from "../utils/investigationTaskTracking";
 import { socketClient } from "../services/socketClient";
 import { ApiError } from "../services/apiClient";
 import EventTable from "../components/event/EventTable";
@@ -100,6 +106,12 @@ export default function EventListPage() {
   // checked, triggerInvestigation sends generate_report=true so the backend
   // actually generates a report during the investigation.
   const [generateReport, setGenerateReport] = useState(false);
+
+  const celeryPollingEnabled = isCeleryTaskMode(investigationHealth?.task_mode);
+  const { tracksByEventId, registerTrack } = useCeleryInvestigationTasks(
+    celeryPollingEnabled,
+  );
+  const notifiedTerminalTasksRef = useRef<Set<string>>(new Set());
 
   // Keep latest items in a ref so the socket handler (registered once) can
   // mutate without stale-closure issues.
@@ -258,6 +270,33 @@ export default function EventListPage() {
     })();
   }, []);
 
+  // Surface terminal celery task states once (do not infer event success from task).
+  useEffect(() => {
+    if (!celeryPollingEnabled) return;
+    for (const track of tracksByEventId.values()) {
+      if (!isTerminalTaskState(track.state)) continue;
+      const key = `${track.task_id}:${track.state}`;
+      if (notifiedTerminalTasksRef.current.has(key)) continue;
+      notifiedTerminalTasksRef.current.add(key);
+      if (track.state === "SUCCESS") {
+        message.info(
+          `调查任务 ${track.task_id} 已完成（${labelTaskState(track.state)}），请关注事件状态更新。`,
+          4,
+        );
+      } else if (track.state === "FAILURE") {
+        message.warning(
+          `调查任务 ${track.task_id} 失败，请查看事件详情或后端日志。`,
+          5,
+        );
+      } else if (track.state === "UNKNOWN") {
+        message.warning(
+          `调查任务 ${track.task_id} 状态未知，请通过事件 ${track.event_id} 状态确认进度。`,
+          5,
+        );
+      }
+    }
+  }, [celeryPollingEnabled, tracksByEventId, message]);
+
   const runInvestigation = useCallback(
     async (eventId: string, withResponse: boolean, withReport: boolean) => {
       setTriggeringIds((prev) => new Set(prev).add(eventId));
@@ -266,17 +305,32 @@ export default function EventListPage() {
           includeResponseExecution: withResponse,
           generateReport: withReport,
         });
-        const newStatus = (res.data?.status as EventStatus) ?? "triaging";
+        const data = res.data;
+        const newStatus = (data?.status as EventStatus) ?? "triaging";
         setItems((prev) =>
           prev.map((it) =>
             it.event_id === eventId ? { ...it, status: newStatus } : it,
           ),
         );
-        message.success(
-          withResponse
-            ? `事件 ${eventId} 已触发完整调查（含处置方案）`
-            : `事件 ${eventId} 已触发仅分析调查`,
-        );
+        if (celeryPollingEnabled && data.task_id) {
+          registerTrack({
+            event_id: data.event_id,
+            task_id: data.task_id,
+            intent_id: data.intent_id ?? null,
+            state: "PENDING",
+          });
+          message.success(
+            withResponse
+              ? `事件 ${eventId} 已受理完整调查（task: ${data.task_id}）`
+              : `事件 ${eventId} 已受理仅分析调查（task: ${data.task_id}）`,
+          );
+        } else {
+          message.success(
+            withResponse
+              ? `事件 ${eventId} 已触发完整调查（含处置方案）`
+              : `事件 ${eventId} 已触发仅分析调查`,
+          );
+        }
       } catch (err: unknown) {
         if (
           err instanceof ApiError &&
@@ -304,7 +358,7 @@ export default function EventListPage() {
         });
       }
     },
-    [message],
+    [message, celeryPollingEnabled, registerTrack],
   );
 
   const handleTrigger = useCallback(
@@ -416,6 +470,7 @@ export default function EventListPage() {
           onPageChange={handlePageChange}
           onTriggerInvestigation={handleTrigger}
           triggeringIds={triggeringIds}
+          celeryTracksByEventId={tracksByEventId}
           onRowClick={handleRowClick}
         />
       </Card>

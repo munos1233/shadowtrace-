@@ -12,7 +12,7 @@ import { useMemo } from "react";
 import { Table, Button, Tag, Tooltip, Typography, Space } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ExperimentOutlined } from "@ant-design/icons";
-import type { EventListItem } from "../../types/event";
+import type { EventListItem, CeleryInvestigationTrack } from "../../types/event";
 import StatusBadge from "./StatusBadge";
 import SeverityTag from "./SeverityTag";
 import VerdictTag from "./VerdictTag";
@@ -38,6 +38,8 @@ export interface EventTableProps {
   onTriggerInvestigation: (eventId: string) => void;
   /** Optional set of event_ids currently triggering (for button loading). */
   triggeringIds?: Set<string>;
+  /** Celery task tracks keyed by event_id (ISSUE-306). */
+  celeryTracksByEventId?: ReadonlyMap<string, CeleryInvestigationTrack>;
   /** Navigate to event detail. */
   onRowClick?: (eventId: string) => void;
 }
@@ -51,6 +53,7 @@ export default function EventTable({
   onPageChange,
   onTriggerInvestigation,
   triggeringIds,
+  celeryTracksByEventId,
   onRowClick,
 }: EventTableProps) {
   const columns: ColumnsType<EventListItem> = useMemo(
@@ -113,15 +116,41 @@ export default function EventTable({
         width: 150,
         render: (status: EventListItem["status"], record) => {
           const unsynced = isListExternalUnsynced(record);
+          const celeryTrack = celeryTracksByEventId?.get(record.event_id);
           return (
-            <StatusBadge
-              status={status}
-              suffix={
-                status === "closed" && unsynced
-                  ? "本地已关/外部未确认"
-                  : undefined
-              }
-            />
+            <Space direction="vertical" size={2}>
+              <StatusBadge
+                status={status}
+                suffix={
+                  status === "closed" && unsynced
+                    ? "本地已关/外部未确认"
+                    : undefined
+                }
+              />
+              {celeryTrack ? (
+                <Tooltip
+                  title={`task_id: ${celeryTrack.task_id}${
+                    celeryTrack.intent_id ? ` · intent_id: ${celeryTrack.intent_id}` : ""
+                  }`}
+                >
+                  <Tag
+                    color={
+                      celeryTrack.state === "SUCCESS"
+                        ? "success"
+                        : celeryTrack.state === "FAILURE"
+                          ? "error"
+                          : celeryTrack.state === "UNKNOWN"
+                            ? "warning"
+                            : "processing"
+                    }
+                    style={{ marginInlineEnd: 0 }}
+                    data-testid={`celery-task-${record.event_id}`}
+                  >
+                    Celery {celeryTrack.state}
+                  </Tag>
+                </Tooltip>
+              ) : null}
+            </Space>
           );
         },
       },
@@ -259,7 +288,7 @@ export default function EventTable({
         },
       },
     ],
-    [onRowClick, onTriggerInvestigation, triggeringIds],
+    [onRowClick, onTriggerInvestigation, triggeringIds, celeryTracksByEventId],
   );
 
   return (
