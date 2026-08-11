@@ -154,12 +154,13 @@ def _mirror_writeback_status_to_action(action: orm.Action | None, status: str) -
         action.writeback_status = status
 
 
-# ISSUE-235 / ISSUE-290: intents that must re-check action approval at deliver time.
+# ISSUE-235 / ISSUE-290 / ISSUE-307: intents that must re-check action approval at deliver time.
 _DELIVERY_APPROVAL_RECHECK_INTENTS: frozenset[DispositionIntentKind] = frozenset(
     {
         DispositionIntentKind.ENTITY_ACTION_SUBMIT,
         DispositionIntentKind.EXECUTION_RESULT_RECORD,
         DispositionIntentKind.EVENT_STATUS_UPDATE,
+        DispositionIntentKind.COMPENSATION_RECORD,
     }
 )
 
@@ -1220,13 +1221,14 @@ class DispositionSyncService:
                         self._worker_id,
                     )
                     return
-                # ISSUE-235 / ISSUE-290 (SUS-301): TOCTOU 纵深防御 — deliver
-                # relies on the enqueue-time approved_action_ids snapshot and
-                # does not re-derive it; an approval revoked between enqueue
+                # ISSUE-235 / ISSUE-290 / ISSUE-307 (SUS-301): TOCTOU 纵深防御 —
+                # deliver relies on the enqueue-time approved_action_ids snapshot
+                # and does not re-derive it; an approval revoked between enqueue
                 # and delivery would still go out.  Re-check side-effect intents
-                # (entity-class + terminal EVENT_STATUS_UPDATE) right before
-                # delivery: the action must still be in the effective approved
-                # set (APPROVED/EXECUTING/SUCCESS, not superseded).
+                # (entity-class, EXECUTION_RESULT_RECORD, COMPENSATION_RECORD,
+                # terminal EVENT_STATUS_UPDATE) right before delivery: the bound
+                # action must still be in the effective approved set
+                # (APPROVED/EXECUTING/SUCCESS, not superseded).
                 # Fail-closed → DEAD_LETTER, never delivered.
                 if command.intent_kind in _DELIVERY_APPROVAL_RECHECK_INTENTS:
                     if not _action_still_approved_for_delivery(action_row):

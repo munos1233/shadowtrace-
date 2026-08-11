@@ -43,6 +43,7 @@ from app.models.enums import (
     ActionStatus,
     ConfirmationEvidence,
     DispositionPolicy,
+    DispositionIntentKind,
     EventStatus,
     EventType,
     ExecutionJobStatus,
@@ -322,6 +323,93 @@ def _sync_service(
         outbound_guard=OutboundDispositionGuard(),
         resume_investigation=resume,
     )
+
+
+async def _enqueue_compensation_record(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+) -> tuple[DispositionSyncService, str, str, orm.DispositionOutbox, str]:
+    """Seed rollback action and enqueue COMPENSATION_RECORD (ISSUE-307 tests)."""
+    (
+        event_id,
+        original_action_id,
+        source_record_id,
+        locator,
+        concurrency_token,
+    ) = await _seed_event_action_source(session_factory, store, mock_xdr_client)
+    rollback_action_id = f"act-rb-{_sfx()}"
+    parent_disposition_id = new_disposition_id()
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.Action(
+                    action_id=rollback_action_id,
+                    event_id=event_id,
+                    plan_revision=1,
+                    action_fingerprint=f"fp-rb-{_sfx()}",
+                    action_category=ActionCategory.ROLLBACK.value,
+                    action_name="unblock ip",
+                    tool_name="unblock_ip",
+                    action_level=ActionLevel.L2.value,
+                    execution_phase=ActionExecutionPhase.IMMEDIATE.value,
+                    status=ActionStatus.SUCCESS.value,
+                    execution_owner=ExecutionOwner.XDR_MANAGED.value,
+                    target_type="ip",
+                    target="203.0.113.88",
+                    source_action_id=original_action_id,
+                    writeback_required=False,
+                    writeback_applicable=False,
+                    writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
+                    disposition_source_ref=locator.model_dump(mode="json"),
+                    idempotency_key=f"idem-rb-{_sfx()}",
+                    executed_at=datetime.now(UTC),
+                )
+            )
+    sync = _sync_service(session_factory, store, mock_xdr_client)
+    factory = DispositionCommandFactory()
+    rollback_action = Action.model_validate(
+        {
+            "action_id": rollback_action_id,
+            "event_id": event_id,
+            "plan_revision": 1,
+            "action_fingerprint": "fp-compensation",
+            "action_category": ActionCategory.ROLLBACK,
+            "action_name": "unblock ip",
+            "tool_name": "unblock_ip",
+            "action_level": ActionLevel.L2,
+            "execution_owner": ExecutionOwner.XDR_MANAGED,
+            "status": ActionStatus.SUCCESS,
+            "target": "203.0.113.88",
+            "source_action_id": original_action_id,
+            "disposition_source_ref": locator,
+            "idempotency_key": f"idem-rb-action-{_sfx()}",
+        }
+    )
+    command = factory.build_compensation_record(
+        rollback_action,
+        source_locator=locator,
+        source_concurrency_token=concurrency_token,
+        operator_id="RollbackService",
+        disposition_id=new_disposition_id(),
+        closure_cycle=1,
+        parent_disposition_id=parent_disposition_id,
+    )
+    async with session_factory() as session:
+        async with session.begin():
+            record = await sync.enqueue_command(
+                session,
+                command=command,
+                event_id=event_id,
+                source_record_id=source_record_id,
+                logical_slot=f"compensation:{original_action_id}",
+                guard_context={"approved_action_ids": [rollback_action_id]},
+            )
+    assert record.intent_kind is DispositionIntentKind.COMPENSATION_RECORD
+    async with session_factory() as session:
+        row = await session.get(orm.DispositionOutbox, record.outbox_id)
+        assert row is not None
+    return sync, event_id, source_record_id, row, rollback_action_id
 
 
 @pytest.mark.asyncio
@@ -3695,6 +3783,130 @@ async def test_deliver_execution_result_rejected_after_supersede(
         assert row is not None
         assert row.delivery_status == OutboxDeliveryStatus.DEAD_LETTER.value
         assert row.last_error_code == WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+
+@pytest.mark.asyncio
+async def test_deliver_compensation_record_rejected_after_supersede(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+    cleanup: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-307: COMPENSATION_RECORD whose rollback action was superseded after
+    enqueue must not be delivered; delivery-time approval re-check fails closed."""
+    from app.services.writeback_side_effect_fence import WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+    sync, _event_id, _source_record_id, outbox_row, rollback_action_id = (
+        await _enqueue_compensation_record(session_factory, store, mock_xdr_client)
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.Action, rollback_action_id, with_for_update=True)
+            assert row is not None
+            row.status = ActionStatus.SUCCESS.value
+            row.superseded_by_revision = 2
+
+    submit_calls = 0
+    adapter = sync._adapters.get("mock_xdr")
+    assert adapter is not None
+    original_submit = adapter.submit
+
+    async def _tracked_submit(cmd):  # type: ignore[no-untyped-def]
+        nonlocal submit_calls
+        submit_calls += 1
+        return await original_submit(cmd)
+
+    monkeypatch.setattr(adapter, "submit", _tracked_submit)
+
+    await sync.deliver_outbox(outbox_row.outbox_id)
+
+    assert submit_calls == 0
+    async with session_factory() as session:
+        row = await session.get(orm.DispositionOutbox, outbox_row.outbox_id)
+        assert row is not None
+        assert row.delivery_status == OutboxDeliveryStatus.DEAD_LETTER.value
+        assert row.last_error_code == WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+        assert row.last_error_detail is not None
+        assert "approval revoked before delivery" in row.last_error_detail
+
+
+@pytest.mark.asyncio
+async def test_worker_deliver_compensation_record_rejected_after_supersede(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+    cleanup: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-307: worker lease path must fail-closed for superseded compensation."""
+    from app.services.writeback_side_effect_fence import WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+    sync, _event_id, _source_record_id, outbox_row, rollback_action_id = (
+        await _enqueue_compensation_record(session_factory, store, mock_xdr_client)
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.Action, rollback_action_id, with_for_update=True)
+            assert row is not None
+            row.status = ActionStatus.REJECTED.value
+            row.superseded_by_revision = 2
+
+    submit_calls = 0
+    adapter = sync._adapters.get("mock_xdr")
+    assert adapter is not None
+    original_submit = adapter.submit
+
+    async def _tracked_submit(cmd):  # type: ignore[no-untyped-def]
+        nonlocal submit_calls
+        submit_calls += 1
+        return await original_submit(cmd)
+
+    monkeypatch.setattr(adapter, "submit", _tracked_submit)
+
+    worker = OutboxWorker(sync)
+    assert await worker.run_once(limit=1) == 1
+    assert submit_calls == 0
+
+    async with session_factory() as session:
+        row = await session.get(orm.DispositionOutbox, outbox_row.outbox_id)
+        assert row is not None
+        assert row.delivery_status == OutboxDeliveryStatus.DEAD_LETTER.value
+        assert row.last_error_code == WRITEBACK_FENCE_BLOCKED_ERROR_CODE
+
+
+@pytest.mark.asyncio
+async def test_deliver_compensation_record_succeeds_when_rollback_still_approved(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    mock_xdr_client: httpx.AsyncClient,
+    cleanup: None,
+) -> None:
+    """ISSUE-307 regression: valid compensation still delivers when rollback action is approved."""
+    sync, _event_id, _source_record_id, outbox_row, _rollback_action_id = (
+        await _enqueue_compensation_record(session_factory, store, mock_xdr_client)
+    )
+
+    await sync.deliver_outbox(outbox_row.outbox_id)
+
+    async with session_factory() as session:
+        row = await session.get(orm.DispositionOutbox, outbox_row.outbox_id)
+        assert row is not None
+        assert row.delivery_status == OutboxDeliveryStatus.DELIVERED.value
+        assert row.latest_writeback_status in {
+            WritebackStatus.ACCEPTED.value,
+            WritebackStatus.CONFIRMED.value,
+        }
+        receipts = (
+            await session.scalars(
+                select(orm.DispositionReceipt).where(
+                    orm.DispositionReceipt.writeback_id == row.writeback_id
+                )
+            )
+        ).all()
+        assert receipts
 
 
 @pytest.mark.asyncio
