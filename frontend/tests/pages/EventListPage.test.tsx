@@ -12,11 +12,13 @@ import type { EventListItem, EventListResponse } from "../../src/types/event";
 const mockListEvents = vi.fn();
 const mockTriggerInvestigation = vi.fn();
 const mockGetHealth = vi.fn();
+const mockGetTask = vi.fn();
 
 vi.mock("../../src/services/eventApi", () => ({
   listEvents: (...args: unknown[]) => mockListEvents(...args),
   triggerInvestigation: (...args: unknown[]) => mockTriggerInvestigation(...args),
   getHealth: (...args: unknown[]) => mockGetHealth(...args),
+  getTask: (...args: unknown[]) => mockGetTask(...args),
 }));
 
 // Capture socket handler so tests can emit synthetic events.
@@ -115,7 +117,14 @@ describe("EventListPage", () => {
       data: { investigation: { orchestration_mode: "graph", full_loop_available: true } },
     });
     mockTriggerInvestigation.mockResolvedValue({
-      data: { event_id: "evt-1", status: "triaging" },
+      data: {
+        event_id: "evt-1",
+        status: "triaging",
+        task_id: "evt-1",
+      },
+    });
+    mockGetTask.mockResolvedValue({
+      data: { task_id: "task-celery-1", state: "STARTED", event_id: "evt-1" },
     });
     mockSocketIsConnected.current = true;
     socketHandler = undefined;
@@ -547,5 +556,93 @@ describe("EventListPage", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     await waitFor(() => expect(mockListEvents.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("tracks celery task_id/intent_id and polls GET /tasks in celery mode", async () => {
+    mockGetHealth.mockResolvedValue({
+      data: {
+        investigation: {
+          orchestration_mode: "graph",
+          full_loop_available: true,
+          task_mode: "celery",
+        },
+      },
+    });
+    mockTriggerInvestigation.mockResolvedValue({
+      data: {
+        event_id: "evt-1",
+        status: "new",
+        task_id: "task-celery-1",
+        intent_id: "iin-evt-1",
+      },
+    });
+    mockGetTask
+      .mockResolvedValueOnce({
+        data: { task_id: "task-celery-1", state: "STARTED", event_id: "evt-1" },
+      })
+      .mockResolvedValue({
+        data: { task_id: "task-celery-1", state: "SUCCESS", event_id: "evt-1" },
+      });
+
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    await user.click(screen.getByText("开始调查"));
+
+    await waitFor(() =>
+      expect(mockTriggerInvestigation).toHaveBeenCalledWith("evt-1", {
+        includeResponseExecution: false,
+        generateReport: false,
+      }),
+    );
+    expect(await screen.findByTestId("celery-task-evt-1")).toHaveTextContent(
+      "Celery PENDING",
+    );
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await waitFor(() => expect(mockGetTask).toHaveBeenCalledWith("task-celery-1"));
+    await waitFor(() =>
+      expect(screen.getByTestId("celery-task-evt-1")).toHaveTextContent("Celery STARTED"),
+    );
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await waitFor(() =>
+      expect(screen.getByTestId("celery-task-evt-1")).toHaveTextContent("Celery SUCCESS"),
+    );
+  });
+
+  it("does not poll celery tasks in background task_mode", async () => {
+    mockGetHealth.mockResolvedValue({
+      data: {
+        investigation: {
+          orchestration_mode: "graph",
+          full_loop_available: true,
+          task_mode: "background",
+        },
+      },
+    });
+    mockTriggerInvestigation.mockResolvedValue({
+      data: {
+        event_id: "evt-1",
+        status: "triaging",
+        task_id: "task-bg-1",
+        intent_id: "iin-evt-1",
+      },
+    });
+
+    renderPage();
+    expect(await screen.findByText("Suspicious login")).toBeInTheDocument();
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByTestId("trigger-investigation-evt-1"));
+    await user.click(screen.getByText("开始调查"));
+
+    await waitFor(() => expect(mockTriggerInvestigation).toHaveBeenCalled());
+    expect(screen.queryByTestId("celery-task-evt-1")).not.toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(mockGetTask).not.toHaveBeenCalled();
   });
 });

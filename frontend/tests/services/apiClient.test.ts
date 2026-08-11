@@ -82,6 +82,11 @@ describe("eventApi", () => {
     expect(mockGet).toHaveBeenCalledWith("/execution-jobs/job-1");
   });
 
+  it("getTask calls GET /tasks/:id", async () => {
+    await eventApi.getTask("task-1");
+    expect(mockGet).toHaveBeenCalledWith("/tasks/task-1");
+  });
+
   it("resolveUnknownAction calls POST /actions/:id/resolve-unknown", async () => {
     const body = {
       resolution: "manual_confirmed" as const,
