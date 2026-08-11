@@ -34,6 +34,8 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "decision_audit_degraded",
         "auto_investigate_dispatch_unavailable",
         "auto_response_dispatch_unavailable",
+        # ISSUE-309 output quality evaluator outage observability
+        "output_quality_evaluator_unavailable",
         # ISSUE-193 graph resume observability
         "graph_resume_failed",
         # ISSUE-197 triage event_type fallback audit
@@ -81,6 +83,8 @@ DEGRADED_FLAG_TRUSTED_CALLERS: frozenset[str] = frozenset(
         "ReportAgent",
         # ISSUE-275 — Celery redelivery exhaustion recovery signal
         "CeleryRedeliveryService",
+        # ISSUE-309 — output quality evaluator outage observability
+        "OutputQualityEvaluator",
     }
 )
 

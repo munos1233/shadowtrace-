@@ -803,6 +803,7 @@ class AnalysisOnlyPipeline:
         """Run OutputQualityEvaluator at pipeline completion (ISSUE-233)."""
         if self._output_quality_evaluator is None or self._context_store is None:
             return
+        from app.core.errors import OutputQualityEvaluationBlockedError
         from app.services.output_quality_evaluator import evaluate_investigation_quality_scores
 
         try:
@@ -811,6 +812,8 @@ class AnalysisOnlyPipeline:
                 self._output_quality_evaluator,
                 context,
             )
+        except OutputQualityEvaluationBlockedError:
+            raise
         except Exception:
             logger.warning(
                 "AnalysisOnlyPipeline: quality evaluation failed for event=%s",

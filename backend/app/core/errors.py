@@ -152,6 +152,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     # ISSUE-212 — report quality gate
     "report_quality_incomplete": ErrorCategory.USER_INPUT,
     "report_quality_conflict": ErrorCategory.PERMANENT,
+    "output_quality_evaluation_blocked": ErrorCategory.PERMANENT,
     "report_prerequisites_missing": ErrorCategory.USER_INPUT,
     "report_prerequisites_invalid": ErrorCategory.USER_INPUT,
     "report_generation_failed": ErrorCategory.LLM,
@@ -552,6 +553,15 @@ class ReportQualityConflictError(ShadowTraceError):
 
     status_code = 409
     default_error_code = "report_quality_conflict"
+    default_category = ErrorCategory.PERMANENT
+    default_retryable = False
+
+
+class OutputQualityEvaluationBlockedError(ShadowTraceError):
+    """Output quality evaluation failed while OUTPUT_QUALITY_BLOCKING is enabled (ISSUE-309)."""
+
+    status_code = 422
+    default_error_code = "output_quality_evaluation_blocked"
     default_category = ErrorCategory.PERMANENT
     default_retryable = False
 

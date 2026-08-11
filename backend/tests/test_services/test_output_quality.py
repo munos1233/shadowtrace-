@@ -20,10 +20,12 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.errors import OutputQualityEvaluationBlockedError
 from app.core.llm.base import LLMMessage, LLMResponse
 from app.models.agent_io import OutputQualityScore
 from app.models.enums import QualityVerdict
 from app.services.output_quality_evaluator import (
+    OUTPUT_QUALITY_EVALUATOR_UNAVAILABLE_FLAG,
     OutputQualityEvaluator,
     _completeness,
     _consistency,
@@ -590,23 +592,120 @@ class TestEvaluateAll:
         results = await evaluator.evaluate_all(context)
         assert set(results.keys()) == {"triage"}
 
-    async def test_eval_failure_defaults_pass(self) -> None:
-        """When evaluation of one agent fails, it defaults to pass so pipeline survives."""
-        evaluator = OutputQualityEvaluator(judge_enabled=False)
+    async def test_eval_failure_records_fail_not_pass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When evaluation of one agent fails, it must not masquerade as PASS (ISSUE-309)."""
+
+        def _boom(
+            _agent_name: str, _output: dict[str, Any], _context: dict[str, Any]
+        ) -> dict[str, float]:
+            raise RuntimeError("metric computation exploded")
+
+        monkeypatch.setattr(
+            "app.services.output_quality_evaluator._compute_rule_metrics",
+            _boom,
+        )
+        degraded = _MockDegradedFlags()
+        evaluator = OutputQualityEvaluator(degraded_flags=degraded, judge_enabled=False)
         context = {
             "event_id": "evt-022",
-            "triage_result": None,  # _to_dict(None) will break? No, it's caught
-            "report": "not_a_dict_nor_model",  # will be wrapped
+            "triage_result": _high_quality_triage(),
         }
-        # Force a scenario where the eval itself fails for one agent
         results = await evaluator.evaluate_all(context)
-        # Should not crash
-        assert len(results) >= 0
+
+        assert evaluator.eval_errors_encountered is True
+        assert set(results.keys()) == {"triage"}
+        score = results["triage"]
+        assert score.verdict == QualityVerdict.FAIL
+        assert score.score == 0.0
+        assert score.metrics == {
+            "completeness": 0.0,
+            "grounding_ratio": 0.0,
+            "consistency": 0.0,
+            "specificity": 0.0,
+        }
+        assert any("eval_error_defaulted" in reason for reason in score.reasons)
+        assert degraded.calls == [
+            {
+                "event_id": "evt-022",
+                "flag_name": OUTPUT_QUALITY_EVALUATOR_UNAVAILABLE_FLAG,
+                "value": True,
+                "writer": "OutputQualityEvaluator",
+            }
+        ]
+
+    async def test_eval_failure_default_does_not_block(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default blocking=false keeps investigation completion fail-soft."""
+
+        def _boom(
+            _agent_name: str, _output: dict[str, Any], _context: dict[str, Any]
+        ) -> dict[str, float]:
+            raise RuntimeError("metric computation exploded")
+
+        monkeypatch.setattr(
+            "app.services.output_quality_evaluator._compute_rule_metrics",
+            _boom,
+        )
+        evaluator = OutputQualityEvaluator(blocking_enabled=False, judge_enabled=False)
+        from app.models.context import EventContext
+
+        ec = EventContext(triage_result=_high_quality_triage())
+        scores = await evaluate_investigation_quality_scores(evaluator, ec)
+        assert scores["triage"].verdict == QualityVerdict.FAIL
+
+    async def test_eval_failure_blocks_when_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OUTPUT_QUALITY_BLOCKING=true raises to halt downstream nodes."""
+
+        def _boom(
+            _agent_name: str, _output: dict[str, Any], _context: dict[str, Any]
+        ) -> dict[str, float]:
+            raise RuntimeError("metric computation exploded")
+
+        monkeypatch.setattr(
+            "app.services.output_quality_evaluator._compute_rule_metrics",
+            _boom,
+        )
+        evaluator = OutputQualityEvaluator(blocking_enabled=True, judge_enabled=False)
+        from app.models.context import EventContext
+
+        ec = EventContext(triage_result=_high_quality_triage())
+        with pytest.raises(OutputQualityEvaluationBlockedError):
+            await evaluate_investigation_quality_scores(evaluator, ec)
 
 
 # ====================================================================== #
 # integration — quality_scores dict write-back
 # ====================================================================== #
+
+
+class _MockDegradedFlags:
+    """Capture degraded flag writes for ISSUE-309 tests."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def set_flag(
+        self,
+        event_id: str,
+        flag_name: str,
+        value: bool,
+        *,
+        writer: str,
+    ) -> list[str]:
+        self.calls.append(
+            {
+                "event_id": event_id,
+                "flag_name": flag_name,
+                "value": value,
+                "writer": writer,
+            }
+        )
+        return [f"{flag_name}={str(value).lower()}"]
 
 
 class _FakeWorkingMemory:
@@ -745,8 +844,14 @@ class TestEvaluateInvestigationQualityScores:
 
     async def test_fail_soft_on_evaluator_error(self) -> None:
         class _BrokenEvaluator:
+            _blocking_enabled = False
+            eval_errors_encountered = False
+
             async def evaluate_all(self, _ctx: dict[str, Any]) -> dict[str, OutputQualityScore]:
                 raise RuntimeError("evaluator exploded")
+
+            async def _persist_eval_degraded_flag(self, _ctx: dict[str, Any]) -> None:
+                return None
 
         from app.models.context import EventContext
 
@@ -754,6 +859,23 @@ class TestEvaluateInvestigationQualityScores:
         scores = await evaluate_investigation_quality_scores(_BrokenEvaluator(), ec)  # type: ignore[arg-type]
         assert scores == {}
         assert ec.quality_scores == []
+
+    async def test_blocking_on_evaluator_catastrophic_error(self) -> None:
+        class _BrokenBlockingEvaluator:
+            _blocking_enabled = True
+            eval_errors_encountered = False
+
+            async def evaluate_all(self, _ctx: dict[str, Any]) -> dict[str, OutputQualityScore]:
+                raise RuntimeError("evaluator exploded")
+
+            async def _persist_eval_degraded_flag(self, _ctx: dict[str, Any]) -> None:
+                return None
+
+        from app.models.context import EventContext
+
+        ec = EventContext(triage_result=_high_quality_triage())
+        with pytest.raises(OutputQualityEvaluationBlockedError):
+            await evaluate_investigation_quality_scores(_BrokenBlockingEvaluator(), ec)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

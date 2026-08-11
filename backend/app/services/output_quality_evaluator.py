@@ -13,10 +13,14 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from app.agents.prompts.quality_judge_prompt import build_quality_judge_messages
+from app.core.errors import OutputQualityEvaluationBlockedError
 from app.models.agent_io import OutputQualityScore
 from app.models.enums import QualityVerdict
 
 logger = logging.getLogger(__name__)
+
+OUTPUT_QUALITY_EVALUATOR_UNAVAILABLE_FLAG = "output_quality_evaluator_unavailable"
+_EVAL_ERROR_REASON = "eval_error_defaulted"
 
 # --------------------------------------------------------------------------- #
 # Fixed evaluation targets (ISSUE-065 spec)
@@ -59,6 +63,18 @@ def _verdict_from_score(score: float) -> QualityVerdict:
     return QualityVerdict.FAIL
 
 
+def _build_eval_error_score(agent_name: str, exc: BaseException) -> OutputQualityScore:
+    """Fail-closed score when rule evaluation raises — must not masquerade as PASS."""
+    return OutputQualityScore(
+        agent_name=agent_name,
+        score=0.0,
+        verdict=QualityVerdict.FAIL,
+        metrics={m: 0.0 for m in _METRIC_NAMES},
+        reasons=[f"{_EVAL_ERROR_REASON}: {exc}"],
+        evaluated_by="rule",
+    )
+
+
 def _quality_scores_list_payload(results: dict[str, OutputQualityScore]) -> list[dict[str, Any]]:
     """Serialize scores for ``EventContext.quality_scores`` (list, ISSUE-233)."""
     return [score.model_dump(mode="json") for score in results.values()]
@@ -87,6 +103,8 @@ class OutputQualityEvaluator:
         llm_client: Any | None = None,
         judge_enabled: bool = False,
         working_memory: Any | None = None,
+        degraded_flags: Any | None = None,
+        blocking_enabled: bool = False,
     ) -> None:
         self._llm_client = llm_client
         self._judge_enabled = judge_enabled and llm_client is not None
@@ -94,7 +112,10 @@ class OutputQualityEvaluator:
             self._bound_wm = working_memory.for_writer("OutputQualityEvaluator")
         else:
             self._bound_wm = None
+        self._degraded_flags = degraded_flags
+        self._blocking_enabled = blocking_enabled
         self.last_degraded_reason: str | None = None
+        self.eval_errors_encountered: bool = False
 
     # ------------------------------------------------------------------ #
     # evaluate_all
@@ -109,6 +130,7 @@ class OutputQualityEvaluator:
         ``quality_scores``.
         """
         results: dict[str, OutputQualityScore] = {}
+        self.eval_errors_encountered = False
         for agent_name in _EVALUATED_AGENTS:
             output_key = _output_key_for_agent(agent_name)
             output = event_context.get(output_key)
@@ -128,18 +150,34 @@ class OutputQualityEvaluator:
                     exc,
                 )
                 self.last_degraded_reason = f"eval_failed_{agent_name}: {exc}"
-                # Fail-safe: pass with minimal score so the main pipeline
-                # is never blocked by a broken evaluator.
-                results[agent_name] = OutputQualityScore(
-                    agent_name=agent_name,
-                    score=0.75,
-                    verdict=QualityVerdict.PASS,
-                    metrics={m: 0.75 for m in _METRIC_NAMES},
-                    reasons=[f"eval_error_defaulted: {exc}"],
-                    evaluated_by="rule",
-                )
+                self.eval_errors_encountered = True
+                results[agent_name] = _build_eval_error_score(agent_name, exc)
+        if self.eval_errors_encountered:
+            await self._persist_eval_degraded_flag(event_context)
         await self._persist_quality_scores(event_context, results)
         return results
+
+    async def _persist_eval_degraded_flag(self, event_context: dict[str, Any]) -> None:
+        """Sticky degraded flag when evaluation itself fails (ISSUE-309)."""
+        if self._degraded_flags is None:
+            return
+        event_id = event_context.get("event_id")
+        if not event_id:
+            return
+        try:
+            await self._degraded_flags.set_flag(
+                str(event_id),
+                OUTPUT_QUALITY_EVALUATOR_UNAVAILABLE_FLAG,
+                True,
+                writer="OutputQualityEvaluator",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to set %s for event=%s",
+                OUTPUT_QUALITY_EVALUATOR_UNAVAILABLE_FLAG,
+                event_id,
+                exc_info=True,
+            )
 
     async def _persist_quality_scores(
         self,
@@ -273,6 +311,8 @@ def build_output_quality_evaluator(
     working_memory: Any | None = None,
     llm_client: Any | None = None,
     judge_enabled: bool = False,
+    degraded_flags: Any | None = None,
+    blocking_enabled: bool = False,
 ) -> OutputQualityEvaluator:
     """Factory for production DI (ISSUE-233).
 
@@ -283,6 +323,8 @@ def build_output_quality_evaluator(
         llm_client=llm_client,
         judge_enabled=judge_enabled,
         working_memory=working_memory,
+        degraded_flags=degraded_flags,
+        blocking_enabled=blocking_enabled,
     )
 
 
@@ -319,13 +361,25 @@ async def evaluate_investigation_quality_scores(
 
     try:
         scores = await evaluator.evaluate_all(ctx_dict)
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "Investigation quality evaluation failed for event=%s",
             event_id,
             exc_info=True,
         )
+        await evaluator._persist_eval_degraded_flag(ctx_dict)  # noqa: SLF001
+        if evaluator._blocking_enabled:  # noqa: SLF001
+            raise OutputQualityEvaluationBlockedError(
+                f"output quality evaluation failed for event={event_id}",
+                details={"event_id": event_id, "cause": str(exc)},
+            ) from exc
         return {}
+
+    if evaluator.eval_errors_encountered and evaluator._blocking_enabled:  # noqa: SLF001
+        raise OutputQualityEvaluationBlockedError(
+            f"output quality evaluation degraded for event={event_id}",
+            details={"event_id": event_id},
+        )
 
     if isinstance(event_context, EventContext) and scores:
         event_context.quality_scores = _quality_scores_list_payload(scores)

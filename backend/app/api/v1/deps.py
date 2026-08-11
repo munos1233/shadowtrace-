@@ -1046,6 +1046,8 @@ async def _build_investigation_agents() -> dict[str, Any]:
         working_memory=wm,
         llm_client=llm_client,
         judge_enabled=settings.quality_judge_enabled,
+        degraded_flags=_get_degraded_flags(),
+        blocking_enabled=settings.output_quality_blocking,
     )
 
     return {

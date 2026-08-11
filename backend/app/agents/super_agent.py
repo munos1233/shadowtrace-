@@ -1143,11 +1143,14 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         """
         if self._output_quality_evaluator is None:
             return
+        from app.core.errors import OutputQualityEvaluationBlockedError
         from app.services.output_quality_evaluator import evaluate_investigation_quality_scores
 
         event_id = _event_id_from_context(ec)
         try:
             await evaluate_investigation_quality_scores(self._output_quality_evaluator, ec)
+        except OutputQualityEvaluationBlockedError:
+            raise
         except Exception:
             logger.warning(
                 "SuperAgent: quality evaluation failed for event=%s",

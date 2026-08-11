@@ -232,6 +232,14 @@ class Settings(BaseSettings):
     event_cost_budget_usd: float = Field(default=5.0, alias="EVENT_COST_BUDGET_USD")
     per_agent_token_cap: int = Field(default=20_000, alias="PER_AGENT_TOKEN_CAP")
     quality_judge_enabled: bool = Field(default=False, alias="QUALITY_JUDGE_ENABLED")
+    output_quality_blocking: bool = Field(
+        default=False,
+        alias="OUTPUT_QUALITY_BLOCKING",
+        description=(
+            "When true, OutputQualityEvaluator failures block downstream investigation "
+            "nodes. Default false — P0 must not halt on evaluator outages (ISSUE-309)."
+        ),
+    )
     guardrail_mode: str = Field(default="enforce", alias="GUARDRAIL_MODE")
     wm_strict: bool = Field(default=True, alias="WM_STRICT")
 
