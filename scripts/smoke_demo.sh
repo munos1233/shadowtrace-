@@ -44,6 +44,11 @@ EOF
 
 echo "[smoke-demo] core bootstrap smoke (requires make bootstrap-demo) ..."
 if ! BACKEND_PORT="${BACKEND_PORT}" FRONTEND_PORT="${FRONTEND_PORT}" MOCK_XDR_PORT="${MOCK_XDR_PORT}" \
+  BOOTSTRAP_AUTH_TOKEN="${BOOTSTRAP_AUTH_TOKEN:-bootstrap-token}" \
+  SMOKE_TERMINAL_MODE="${SMOKE_TERMINAL_MODE:-compat}" \
+  SMOKE_TERMINAL_TIMEOUT_S="${SMOKE_TERMINAL_TIMEOUT_S:-600}" \
+  SMOKE_TERMINAL_MIN_EVENTS="${SMOKE_TERMINAL_MIN_EVENTS:-3}" \
+  SMOKE_TERMINAL_POLL_S="${SMOKE_TERMINAL_POLL_S:-5}" \
   bash "${ROOT}/scripts/smoke_bootstrap.sh"; then
   echo "[smoke-demo] ERROR: bootstrap smoke failed — run: make bootstrap-demo" >&2
   exit 1

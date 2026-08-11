@@ -65,7 +65,7 @@ CELERY_SIGKILL_ARTIFACT_DIR ?= $(CURDIR)/artifacts/issue-283
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo smoke-demo demo-guard-test up-observability down-observability llm-smoke test lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
+.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo bootstrap-demo-full-loop smoke-demo demo-full-loop demo-guard-test up-observability down-observability llm-smoke test test-ci-lite lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
 	$(COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
@@ -99,7 +99,11 @@ bootstrap:
 	bash "$(CURDIR)/scripts/bootstrap.sh"
 
 smoke-bootstrap:
-	@bash "$(CURDIR)/scripts/smoke_bootstrap.sh"
+	@SMOKE_TERMINAL_MODE="$(if $(SMOKE_TERMINAL_MODE),$(SMOKE_TERMINAL_MODE),off)" \
+	SMOKE_TERMINAL_TIMEOUT_S="$(SMOKE_TERMINAL_TIMEOUT_S)" \
+	SMOKE_TERMINAL_MIN_EVENTS="$(SMOKE_TERMINAL_MIN_EVENTS)" \
+	SMOKE_TERMINAL_POLL_S="$(SMOKE_TERMINAL_POLL_S)" \
+	bash "$(CURDIR)/scripts/smoke_bootstrap.sh"
 
 # ---------------------------------------------------------------------------
 # ISSUE-256 gold-path dynamic eval (mock-xdr seed → full_loop → scripted approve)
@@ -135,6 +139,11 @@ EVAL_MATRIX_SCENARIOS ?= insider_data_exfiltration,account_anomaly_fp,suspicious
 EVAL_MATRIX_ARTIFACT_DIR ?=
 EVAL_MATRIX_REQUIRE_CLOSED ?=
 EVAL_MATRIX_FRESH_VOLUMES ?= 1
+# ISSUE-304 smoke terminal profiles (see scripts/smoke_event_terminal.py)
+SMOKE_TERMINAL_MODE ?=
+SMOKE_TERMINAL_TIMEOUT_S ?= 600
+SMOKE_TERMINAL_MIN_EVENTS ?= 3
+SMOKE_TERMINAL_POLL_S ?= 5
 eval-full-loop-matrix:
 	@echo "[eval-full-loop-matrix] scenarios=$(EVAL_MATRIX_SCENARIOS)"
 	@echo "[eval-full-loop-matrix] fresh project/volumes per scenario; in-network exec (no host ports)"
@@ -159,6 +168,19 @@ bootstrap-demo:
 	@bash "$(CURDIR)/scripts/demo_mock_guard.sh"
 	@$(MAKE) bootstrap
 
+# Full-loop bootstrap profile (ISSUE-304): response + report; pauses on waiting_approval.
+# Close with ``make eval-full-loop`` / ``dynamic_eval_approve.py`` — never APPROVAL_TIMEOUT.
+bootstrap-demo-full-loop:
+	@bash "$(CURDIR)/scripts/demo_mock_guard.sh"
+	@$(MAKE) bootstrap \
+		BOOTSTRAP_GENERATE_REPORT=true \
+		BOOTSTRAP_INCLUDE_RESPONSE=true
+
+# Official single-scenario CLOSED gold path (requires up-demo or WORKER=1).
+demo-full-loop:
+	@bash "$(CURDIR)/scripts/demo_mock_guard.sh"
+	@$(MAKE) eval-full-loop
+
 smoke-demo:
 	@bash "$(CURDIR)/scripts/demo_mock_guard.sh"
 	COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
@@ -166,6 +188,11 @@ smoke-demo:
 	MOCK_XDR_PORT="$(MOCK_XDR_PORT)" \
 	GRAFANA_PORT="$(GRAFANA_PORT)" PROMETHEUS_PORT="$(PROMETHEUS_PORT)" \
 	OTEL_HTTP_PORT="$(OTEL_HTTP_PORT)" \
+	BOOTSTRAP_AUTH_TOKEN="$(BOOTSTRAP_AUTH_TOKEN)" \
+	SMOKE_TERMINAL_MODE="$(if $(SMOKE_TERMINAL_MODE),$(SMOKE_TERMINAL_MODE),compat)" \
+	SMOKE_TERMINAL_TIMEOUT_S="$(SMOKE_TERMINAL_TIMEOUT_S)" \
+	SMOKE_TERMINAL_MIN_EVENTS="$(SMOKE_TERMINAL_MIN_EVENTS)" \
+	SMOKE_TERMINAL_POLL_S="$(SMOKE_TERMINAL_POLL_S)" \
 	PYTHON="$(PYTHON)" \
 	bash "$(CURDIR)/scripts/smoke_demo.sh"
 
@@ -205,6 +232,19 @@ load-kb:
 
 test:
 	cd backend && $(PYTHON) -m pytest tests/test_infra/test_health.py -v
+
+# ISSUE-304: lightweight local gate — health + contracts + gold-path guards + lint.
+# Full CI parity remains ``make ci-lint`` / ``make ci-test``.
+test-ci-lite:
+	$(MAKE) check-contract-drift
+	cd backend && $(PYTHON) -m pytest \
+		tests/test_infra/test_health.py \
+		tests/test_api/test_contracts.py \
+		tests/test_infra/test_dynamic_eval_gold_path.py \
+		tests/test_infra/test_compose_playbook_seed.py \
+		tests/test_infra/test_smoke_event_terminal.py \
+		-v --tb=short
+	$(MAKE) lint
 
 lint:
 	cd backend && $(PYTHON) -m ruff check app tests && $(PYTHON) -m mypy app

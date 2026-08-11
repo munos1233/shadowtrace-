@@ -14,20 +14,62 @@
 
 ---
 
-## 一键启动
+## 一键启动（官方推荐 — ISSUE-304）
+
+Mock 栈上**稳定可验收**的官方路径需要 **Celery investigation worker**（`TASK_MODE=celery`）。默认 `make up` 使用 `TASK_MODE=background`（进程内 BackgroundTasks，重启丢任务），仅适合短路径分析演示，**不是**全闭环金路径。
+
+### 官方 Demo 栈（分析终态 + worker + observability）
 
 ```bash
-# 1. 启动核心服务（postgres, redis, mock-xdr, backend, frontend）
-make up
+# 1. 启动 core + investigation worker + scheduler + observability（Mock-only）
+make up-demo
 
-# 2. 数据库迁移 + playbook release 激活 + 摄入演示数据 + 自动触发研判
-make bootstrap
+# 2. 迁移 + playbook + 三场景 seed/ingest + 自动 investigate（默认短路径剖面）
+make bootstrap-demo
 
-# 3. （可选）冒烟验证（含 playbook_resources 门禁）
-make smoke-bootstrap
+# 3. 冒烟：health + worker + 每场景终态（compat：analysis_only_complete 或非 failed）
+make smoke-demo
 
-# 4. 打开浏览器访问前端看板
+# 4. 打开浏览器
 #    http://localhost:3000
+```
+
+`make smoke-demo` 在事件超时未达约定终态时 **非零退出**，并打印 `event_id` 状态轨迹。
+
+### 全闭环金路径（seed → investigate → 脚本审批 → writeback → verify → CLOSED）
+
+单场景 CLOSED（含 report + 脚本审批，**禁止**空等 `APPROVAL_TIMEOUT`）：
+
+```bash
+make up-demo
+make demo-full-loop
+# 等价：make eval-full-loop
+# 单场景：make eval-full-loop SCENARIO=insider_data_exfiltration
+```
+
+三场景 matrix + strict CLOSED：
+
+```bash
+EVAL_MATRIX_REQUIRE_CLOSED=1 make eval-full-loop-matrix
+```
+
+可选 full-loop bootstrap 剖面（会停在 `waiting_approval`，需脚本审批）：
+
+```bash
+make bootstrap-demo-full-loop
+python3 scripts/dynamic_eval_approve.py --event-id evt-... --decision approve
+```
+
+### 短路径分析演示（legacy — 非官方全闭环）
+
+仅启动 core、无 worker；investigate 走 BackgroundTasks，三场景并行易排队/卡住；`make smoke-bootstrap` 默认 **不** 断言终态（`SMOKE_TERMINAL_MODE=off`）。
+
+```bash
+make up
+make bootstrap
+make smoke-bootstrap          # health + ≥3 事件；不含终态门禁
+# 可选终态门禁（需 worker 栈才有意义）：
+# SMOKE_TERMINAL_MODE=compat make smoke-bootstrap
 ```
 
 启动后在前端 **事件看板** 可见 3 个演示事件；`make bootstrap` 会自动对 `new` 状态事件 POST `/investigate`，也可在前端手动再次触发。
@@ -98,10 +140,13 @@ make smoke-demo        # exit 0 并打印 URL/端口表
 | `make up SCHEDULER=1` | 启动核心服务 + Mock XDR 摄取调度器（Beat + ingestion worker，见下文） |
 | `make bootstrap` | 迁移 + **playbook release 激活** + mock-xdr 种子 + 摄取 + 自动触发研判 |
 | `make bootstrap LOAD_KB=true` | 同上 + 加载 attack/case 知识库（约 30-60 秒） |
-| `make smoke-bootstrap` | bootstrap 后冒烟：health + **playbook_resources=ready** + ≥3 事件 + 前端反代 |
-| `make up-demo` | **Mock 全栈 demo**（core + worker + scheduler + observability，ISSUE-141） |
+| `make smoke-bootstrap` | bootstrap 后冒烟：health + **playbook_resources=ready** + ≥3 事件 + 前端反代（默认 **不含** 终态门禁） |
+| `SMOKE_TERMINAL_MODE=compat make smoke-bootstrap` | 同上 + 每场景 compat 终态（需 worker 栈；超时非零退出） |
+| `make up-demo` | **官方 Mock 全栈 demo**（core + worker + scheduler + observability，ISSUE-141 / ISSUE-304） |
 | `make bootstrap-demo` | 同 `make bootstrap`（demo guard + 迁移/种子） |
-| `make smoke-demo` | demo 全栈冒烟：bootstrap + worker + scheduler + OTEL/Prometheus/Grafana |
+| `make bootstrap-demo-full-loop` | bootstrap + `BOOTSTRAP_INCLUDE_RESPONSE=true` + `BOOTSTRAP_GENERATE_REPORT=true`（需脚本审批） |
+| `make smoke-demo` | **官方 demo 冒烟**：bootstrap 检查 + worker + scheduler + OTEL + **compat 终态门禁** |
+| `make demo-full-loop` | 单场景 CLOSED 金路径（`eval-full-loop` + demo guard） |
 | `make down-demo` | 停止 demo 栈（含 worker/scheduler/observability）——**up-demo 后必用** |
 | `make eval-full-loop` | **金标全闭环评测**（ISSUE-256）：mock-xdr seed → full_loop → **脚本审批** |
 | `make eval-full-loop-matrix` | **官方动态评测 matrix**（ISSUE-301）：每场景独立 Compose project + fresh volumes，可选 strict CLOSED |
@@ -109,7 +154,8 @@ make smoke-demo        # exit 0 并打印 URL/端口表
 | `make down-observability` | 停止 observability 栈 |
 | `make down` | 停止并移除容器（**数据卷保留**） |
 | `make down-v` | 停止并移除容器 + **删除所有数据卷** |
-| `make test` | 运行后端 pytest 健康检查测试 |
+| `make test` | 运行后端 pytest **健康检查**测试（`tests/test_infra/test_health.py`） |
+| `make test-ci-lite` | 轻量本地门禁：契约漂移 + health/contracts/gold-path/smoke 单测 + lint（非完整 CI） |
 
 ### 动态评测金标剖面（ISSUE-256）
 

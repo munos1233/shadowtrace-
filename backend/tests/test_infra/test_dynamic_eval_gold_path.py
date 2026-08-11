@@ -442,8 +442,12 @@ def test_deployment_docs_gold_path_honesty() -> None:
     text = DEPLOYMENT_DOC.read_text(encoding="utf-8")
     assert "ISSUE-256" in text
     assert "ISSUE-301" in text
+    assert "ISSUE-304" in text
     assert "eval-full-loop" in text
     assert "eval-full-loop-matrix" in text
+    assert "make up-demo" in text
+    assert "make smoke-demo" in text
+    assert "smoke_event_terminal" in text or "SMOKE_TERMINAL_MODE" in text
     assert "seed_mock_xdr_and_ingest" in text
     assert "POST /events" in text
     assert "APPROVAL_TIMEOUT_MINUTES" in text

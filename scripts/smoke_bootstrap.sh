@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
-# Lightweight post-bootstrap smoke check (ISSUE-088).
+# Lightweight post-bootstrap smoke check (ISSUE-088 / ISSUE-304).
 #
-# Usage (host, after ``make bootstrap``):
+# Usage (host, after ``make bootstrap`` or ``make bootstrap-demo``):
 #   bash scripts/smoke_bootstrap.sh
 #
-# Exits 0 when health is OK and at least three demo events are visible.
+# Exits 0 when health is OK, at least three demo events are visible, and
+# (when SMOKE_TERMINAL_MODE != off) each event reaches the agreed terminal
+# profile within SMOKE_TERMINAL_TIMEOUT_S.
+#
+# Terminal profiles (ISSUE-304):
+#   off    — health + event count only (legacy short-path analysis demo)
+#   compat — analysis_only_complete or closed/contained/reporting; never failed
+#   strict — CLOSED + report + writeback gate (full-loop / eval profile)
 
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 MOCK_XDR_PORT="${MOCK_XDR_PORT:-8100}"
 AUTH_TOKEN="${BOOTSTRAP_AUTH_TOKEN:-bootstrap-token}"
+SMOKE_TERMINAL_MODE="${SMOKE_TERMINAL_MODE:-off}"
+SMOKE_TERMINAL_TIMEOUT_S="${SMOKE_TERMINAL_TIMEOUT_S:-600}"
+SMOKE_TERMINAL_MIN_EVENTS="${SMOKE_TERMINAL_MIN_EVENTS:-3}"
+SMOKE_TERMINAL_POLL_S="${SMOKE_TERMINAL_POLL_S:-5}"
 
 BACKEND_HEALTH="http://127.0.0.1:${BACKEND_PORT}/api/v1/health"
 EVENTS_URL="http://127.0.0.1:${BACKEND_PORT}/api/v1/events?page_size=50"
@@ -67,4 +79,23 @@ if [ "${event_count}" -lt 3 ]; then
   exit 1
 fi
 echo "  ok: ${event_count} event(s)"
+
+if [[ "${SMOKE_TERMINAL_MODE}" != "off" ]]; then
+  echo "[smoke] terminal profile=${SMOKE_TERMINAL_MODE} timeout=${SMOKE_TERMINAL_TIMEOUT_S}s ..."
+  if ! python3 "${ROOT}/scripts/smoke_event_terminal.py" \
+    --base-url "http://127.0.0.1:${BACKEND_PORT}" \
+    --token "${AUTH_TOKEN}" \
+    --mode "${SMOKE_TERMINAL_MODE}" \
+    --timeout-s "${SMOKE_TERMINAL_TIMEOUT_S}" \
+    --min-events "${SMOKE_TERMINAL_MIN_EVENTS}" \
+    --poll-s "${SMOKE_TERMINAL_POLL_S}"; then
+    echo "[smoke] ERROR: terminal acceptance failed (mode=${SMOKE_TERMINAL_MODE})" >&2
+    echo "[smoke] Hint: official demo path requires Celery worker — use:" >&2
+    echo "[smoke]   make up-demo && make bootstrap-demo && make smoke-demo" >&2
+    echo "[smoke] Full CLOSED gold path:" >&2
+    echo "[smoke]   make eval-full-loop   # or EVAL_MATRIX_REQUIRE_CLOSED=1 make eval-full-loop-matrix" >&2
+    exit 1
+  fi
+fi
+
 echo "[smoke] bootstrap smoke passed"

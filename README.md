@@ -1,16 +1,40 @@
 # ShadowTrace AI Agent 工程实施简介
 
-## 快速开始（ISSUE-001）
+## 快速开始（ISSUE-001 / ISSUE-304）
+
+### 官方 Mock Demo（推荐）
+
+需要 Docker 24+。全栈 demo 含 Celery worker；`make smoke-demo` 会验证每场景终态（失败即非零退出）。
 
 ```bash
-# 拉起 PostgreSQL(pgvector) + Redis + backend + frontend
+make up-demo && make bootstrap-demo && make smoke-demo
+# 浏览器：http://localhost:3000
+```
+
+单场景 **CLOSED** 金路径（脚本审批，勿空等 `APPROVAL_TIMEOUT`）：
+
+```bash
+make up-demo && make demo-full-loop
+# 或：make eval-full-loop SCENARIO=insider_data_exfiltration
+```
+
+详见 [docs/deployment.md](docs/deployment.md)。
+
+### 最小 core 栈（短路径分析演示）
+
+```bash
+# 拉起 PostgreSQL(pgvector) + Redis + backend + frontend（默认 TASK_MODE=background）
 make up
 # 或：docker compose -f infra/docker-compose.yml up -d --build
 
 curl http://localhost:8000/api/v1/health
 
+make bootstrap          # 三场景 seed + investigate（无 worker 时任务在进程内，易失）
+make smoke-bootstrap    # health + 事件数；默认不含终态门禁
+
 # 后端单测 / 静态检查
-make test
+make test               # 仅 health 冒烟
+make test-ci-lite       # 契约 + 关键单测 + lint
 make lint
 
 # 后端依赖（ISSUE-112：Python 3.11 + frozen uv.lock，与 CI/Docker 一致）

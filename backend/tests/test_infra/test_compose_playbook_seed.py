@@ -91,3 +91,5 @@ def test_smoke_bootstrap_checks_playbook_ready() -> None:
     assert "playbook_resources" in text
     assert "status" in text
     assert "ready" in text
+    assert "smoke_event_terminal.py" in text
+    assert "SMOKE_TERMINAL_MODE" in text
