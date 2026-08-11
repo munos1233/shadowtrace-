@@ -32,6 +32,7 @@ _investigation_intent_enqueue_total: Any | None = None
 _graph_failed_transition_noop_total: Any | None = None
 _socketio_subscriber_failure_total: Any | None = None
 _socketio_subscriber_recovery_total: Any | None = None
+_force_close_total: Any | None = None
 _initialized = False
 _process_checkpoint_fallback_active = False
 _process_checkpoint_fallback_triggers = 0
@@ -55,6 +56,7 @@ def _ensure_metrics() -> None:
     global _state_projection_failure_total, _state_projection_repair_total
     global _investigation_intent_enqueue_total, _graph_failed_transition_noop_total
     global _socketio_subscriber_failure_total, _socketio_subscriber_recovery_total
+    global _force_close_total
 
     if not telemetry.is_telemetry_enabled():
         return
@@ -148,6 +150,11 @@ def _ensure_metrics() -> None:
         _socketio_subscriber_recovery_total = _meter.create_counter(
             name="shadowtrace_socketio_subscriber_recovery_total",
             description="Socket.IO Redis subscriber recovery outcomes",
+            unit="1",
+        )
+        _force_close_total = _meter.create_counter(
+            name="shadowtrace_force_close_total",
+            description="Admin force_close attempts by outcome",
             unit="1",
         )
     except Exception:
@@ -379,6 +386,20 @@ def get_state_projection_health() -> dict[str, object]:
     }
 
 
+def record_force_close(*, result: str) -> None:
+    """Increment ``shadowtrace_force_close_total{result=success|denied}``."""
+    normalized = result.strip().lower()
+    if normalized not in {"success", "denied"}:
+        return
+    _ensure_metrics()
+    if _force_close_total is None:
+        return
+    try:
+        _force_close_total.add(1, {"result": normalized})
+    except Exception:
+        logger.debug("force_close metric export failed", exc_info=True)
+
+
 def record_investigation_intent_enqueue(*, result: str) -> None:
     """Increment ``shadowtrace_investigation_intent_enqueue_total{result=...}``."""
     global \
@@ -559,6 +580,7 @@ __all__ = [
     "record_budget_redis_recovery",
     "record_checkpoint_fallback",
     "record_checkpoint_loop_rebind",
+    "record_force_close",
     "record_graph_failed_transition_noop",
     "record_investigation_intent_enqueue",
     "record_state_projection_failure",

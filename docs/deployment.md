@@ -429,6 +429,23 @@ Mock 模式下的 `ALLOW_*` 始终为 `false`。
 6. **生产环境禁止设置前端构建变量 `VITE_AUTH_ROLES` / `VITE_DEV_AUTH_TOKEN`**。真实用户角色由 trusted-proxy 按请求注入（`X-Auth-Roles`），前端构建时共享的角色配置无法代表请求级 principal；设置了这些变量会导致内联审批等按角色门控的 UI 在合法用户上被错误禁用（ISSUE-207）。它们仅用于 Mock/Compose 单 token 开发阶段。
 7. `SOCKETIO_CORS_ALLOWED_ORIGINS` 必须配置为允许访问实时通道的精确浏览器 Origin 列表（逗号分隔，例如 `https://soc.example.com`）；生产环境空值或通配符 `*` 会导致进程拒绝启动。
 
+### Compose / 开发令牌角色（ISSUE-308）
+
+`infra/docker-compose.yml` 预置两条 `DEV_AUTH_TOKENS`，角色职责应严格区分：
+
+| Token | 角色 | 用途 |
+|-------|------|------|
+| `bootstrap-token` | `analyst` + `approver` + `disposition_operator` + **`admin`** | **仅** bootstrap / 需 admin 的运维逃生（如 `force_local_close`）；脚本 `make bootstrap` 默认使用 |
+| `e2e-token` | `analyst` + `approver` | 日常 Mock 闭环、E2E、答辩演示；**不含** admin，无法 force-close |
+
+**硬性要求：**
+
+1. 日常 UI / API 调试优先使用 `e2e-token`（或自建仅含 analyst/approver 的 token），避免用宽权限 token 掩盖 RBAC 缺口。
+2. `bootstrap-token` 保留 admin 是为 seed / force-close 逃生舱；`StateMachineService.force_close` 在服务层校验 `admin` 角色（与 API 一致），Celery/脚本直调服务也无法绕过。
+3. **生产必须** `APP_ENV=production`：进程拒绝非空 `DEV_AUTH_TOKENS`，身份仅来自 trusted-proxy。
+
+前端 `VITE_DEV_AUTH_TOKEN` 默认 `bootstrap-token` 仅为 Compose 便利；本地若只跑 analyst 流程，可在 `infra/.env` 覆盖为 `e2e-token`。
+
 ### 生产前端镜像构建检查清单（ISSUE-221）
 
 独立构建生产 SPA / 前端 Docker 镜像时（**非** `infra/docker-compose.yml` 开发栈）：

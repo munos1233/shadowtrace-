@@ -130,6 +130,8 @@ services:
       ALLOW_XDR_WRITEBACK: "false"
 
       # --- Dev auth (ISSUE-088 bootstrap + ISSUE-077 e2e compatibility) ---
+      # bootstrap-token: all roles incl. admin — bootstrap/force-close escape hatch only.
+      # e2e-token: analyst+approver — daily demo/E2E without admin (ISSUE-308).
       DEV_AUTH_TOKENS: '{"bootstrap-token":{"subject":"bootstrap","roles":["analyst","admin","approver","disposition_operator"],"tenant_id":"tenant-a"},"e2e-token":{"subject":"e2e-operator","display_name":"E2E Operator","roles":["analyst","approver"],"tenant_id":"tenant-a"}}'
 
       # --- Playbook release seed + demo health gate (ISSUE-245 / #820) ---

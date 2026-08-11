@@ -23,6 +23,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.core.auth import ROLE_ADMIN, ROLE_ANALYST, AuthorizationError, Principal
 from app.core.errors import (
     EventNotFoundError,
     InvalidStateTransitionError,
@@ -44,9 +45,9 @@ from app.models.enums import (
     DispositionPolicy,
     EventStatus,
     EventType,
+    ExecutionJobStatus,
     ExecutionOwner,
     FinalVerdict,
-    ExecutionJobStatus,
     Severity,
     SourceDisposition,
     SourceObjectKind,
@@ -67,6 +68,14 @@ DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace",
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+
+def _admin_principal(subject: str = "admin1") -> Principal:
+    return Principal(subject=subject, roles=[ROLE_ADMIN])
+
+
+def _analyst_principal(subject: str = "analyst1") -> Principal:
+    return Principal(subject=subject, roles=[ROLE_ANALYST])
 
 # --------------------------------------------------------------------------- #
 # Module-level fixtures
@@ -716,7 +725,11 @@ async def test_force_close_sets_external_unsynced(
     event_id = await _create_event(session_factory, store, severity=Severity.LOW.value)
     await _walk_to_reporting(state_machine, event_id)
 
-    result = await state_machine.force_close(event_id, principal="admin1", reason="manual override")
+    result = await state_machine.force_close(
+        event_id,
+        principal=_admin_principal("admin1"),
+        reason="manual override",
+    )
     assert result.status == EventStatus.CLOSED
     assert result.external_unsynced is True
     assert result.closed_at is not None
@@ -742,7 +755,11 @@ async def test_force_close_syncs_event_context(
     event_id = await _create_event(session_factory, store, severity=Severity.LOW.value)
     await _walk_to_reporting(state_machine, event_id)
 
-    await state_machine.force_close(event_id, principal="admin", reason="emergency close")
+    await state_machine.force_close(
+        event_id,
+        principal=_admin_principal("admin"),
+        reason="emergency close",
+    )
 
     # Verify Redis state_history has the force-close entry.
     sh = await store.get(event_id, "state_history")
@@ -772,7 +789,11 @@ async def test_force_close_on_already_closed_raises(
     )
 
     with pytest.raises(InvalidStateTransitionError, match="already CLOSED"):
-        await state_machine.force_close(event_id, principal="admin1", reason="double")
+        await state_machine.force_close(
+            event_id,
+            principal=_admin_principal("admin1"),
+            reason="double",
+        )
 
 
 @pytest.mark.asyncio
@@ -784,7 +805,11 @@ async def test_force_close_from_new_raises(
     event_id = await _create_event(session_factory, store)
 
     with pytest.raises(InvalidStateTransitionError, match="illegal transition"):
-        await state_machine.force_close(event_id, principal="admin1", reason="bad")
+        await state_machine.force_close(
+            event_id,
+            principal=_admin_principal("admin1"),
+            reason="bad",
+        )
 
 
 # ===================================================================
@@ -1055,6 +1080,23 @@ async def test_closed_snapshot_has_correct_status(
 
 
 @pytest.mark.asyncio
+async def test_force_close_requires_admin_at_service_layer(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    event_id = await _create_event(session_factory, store, severity=Severity.LOW.value)
+    await _walk_to_reporting(state_machine, event_id)
+
+    with pytest.raises(AuthorizationError, match="admin"):
+        await state_machine.force_close(
+            event_id,
+            principal=_analyst_principal(),
+            reason="must fail",
+        )
+
+
+@pytest.mark.asyncio
 async def test_force_close_normalises_principal(
     state_machine: StateMachineService,
     session_factory: async_sessionmaker[AsyncSession],
@@ -1063,7 +1105,11 @@ async def test_force_close_normalises_principal(
     event_id = await _create_event(session_factory, store, severity=Severity.LOW.value)
     await _walk_to_reporting(state_machine, event_id)
 
-    await state_machine.force_close(event_id, principal="admin", reason="emergency")
+    await state_machine.force_close(
+        event_id,
+        principal=_admin_principal("admin"),
+        reason="emergency",
+    )
 
     history = await state_machine.get_transition_history(event_id)
     close_entry = [e for e in history if e["to_status"] == "closed"][-1]
@@ -1105,7 +1151,9 @@ async def test_force_close_without_optional_dependencies(
     await _walk_to_reporting(state_machine_minimal, event_id)
 
     result = await state_machine_minimal.force_close(
-        event_id, principal="admin", reason="no optionals"
+        event_id,
+        principal=_admin_principal("admin"),
+        reason="no optionals",
     )
     assert result.status == EventStatus.CLOSED
     assert result.external_unsynced is True

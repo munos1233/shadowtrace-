@@ -421,7 +421,7 @@ async def test_closed_ttl_returned_degraded(
     store.degraded_step = "closed_ttl"
     degraded = await service.force_close(
         state.row.event_id,
-        principal="admin-1",
+        principal=Principal(subject="admin-1", roles=[ROLE_ADMIN]),
         reason="ttl-degraded",
     )
     assert degraded.status is EventStatus.CLOSED

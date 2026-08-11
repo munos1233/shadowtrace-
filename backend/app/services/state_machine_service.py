@@ -25,12 +25,14 @@ from pydantic import ValidationError
 from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.auth import ROLE_ADMIN, AuthorizationError, Principal
 from app.core.errors import (
     EventNotFoundError,
     InvalidStateTransitionError,
 )
 from app.core.event_bus import EventBus
 from app.core.metrics import (
+    record_force_close,
     record_state_projection_failure,
     record_state_projection_repair,
 )
@@ -61,11 +63,11 @@ from app.services.context_service import (
 from app.services.degraded_flag_service import DegradedFlagService
 from app.services.event_audit_log_service import EventAuditLogService
 from app.services.event_service import _security_event_from_row
-from app.services.writeback_close_gate import build_closed_gate_actions
 from app.services.side_effect_convergence import (
     build_side_effect_convergence_summary,
     reconcile_stale_executions_before_close,
 )
+from app.services.writeback_close_gate import build_closed_gate_actions
 
 logger = logging.getLogger(__name__)
 
@@ -523,17 +525,22 @@ class StateMachineService:
     async def force_close(
         self,
         event_id: str,
-        principal: str,
+        principal: Principal,
         reason: str,
     ) -> SecurityEvent:
         """Admin-only forced local close with ``external_unsynced=true``.
 
-        Bypasses the normal CLOSED writeback gate.  The *principal* must be a
-        traceable identity; it is normalised to ``principal:{subject}`` if not
-        already prefixed.
+        Bypasses the normal CLOSED writeback gate.  Requires ``ROLE_ADMIN`` on
+        *principal* (fail-closed at the service layer).  The audit operator is
+        normalised to ``principal:{subject}``.
         """
-        if not principal.startswith("principal:"):
-            principal = f"principal:{principal}"
+        if not principal.has_any_role([ROLE_ADMIN]):
+            record_force_close(result="denied")
+            raise AuthorizationError([ROLE_ADMIN])
+
+        operator = principal.subject
+        if not operator.startswith("principal:"):
+            operator = f"principal:{operator}"
         projection_id = ""
 
         async with self._session_factory() as session:
@@ -572,9 +579,9 @@ class StateMachineService:
                 row.updated_at = now
 
                 reason_text = (
-                    f"force_close by {principal}: {reason}"
+                    f"force_close subject={principal.subject}: {reason}"
                     if reason
-                    else f"force_close by {principal}"
+                    else f"force_close subject={principal.subject}"
                 )
 
                 if self._audit_log is not None:
@@ -583,7 +590,7 @@ class StateMachineService:
                         event_id,
                         from_status=from_status,
                         to_status=EventStatus.CLOSED.value,
-                        operator=principal,
+                        operator=operator,
                         reason=reason_text,
                     )
                     projection_id = f"audit:{audit_id}"
@@ -605,7 +612,7 @@ class StateMachineService:
             row,
             current,
             EventStatus.CLOSED,
-            principal,
+            operator,
             reason_text,
             projection_id=projection_id,
         )
@@ -617,11 +624,12 @@ class StateMachineService:
             {
                 "from_status": current.value,
                 "to_status": EventStatus.CLOSED.value,
-                "operator": principal,
+                "operator": operator,
                 "external_unsynced": True,
             },
         )
 
+        record_force_close(result="success")
         return result
 
     async def get_current_status(self, event_id: str) -> EventStatus:
