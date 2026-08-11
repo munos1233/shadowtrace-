@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.adapters._util import sanitize_disposition_receipt
+from app.adapters._util import sanitize_disposition_receipt, sanitize_raw_result
 from app.adapters.disposition.base import BaseDispositionAdapter
 from app.adapters.disposition.error_classification import (
     DispositionDeliveryErrorKind,
@@ -43,21 +43,30 @@ from app.core.metrics import (
 )
 from app.core.telemetry import disposition_span
 from app.db import models as orm
-from app.models.disposition import DispositionCommand, DispositionOutboxRecord, DispositionReceipt
+from app.models.disposition import (
+    DispositionCommand,
+    DispositionOutboxRecord,
+    DispositionReceipt,
+    EntityEffectCompletion,
+)
 from app.models.enums import (
     ActionStatus,
     ConfirmationEvidence,
     DispositionIntentKind,
+    ExecutionJobStatus,
     ExecutionOwner,
     ExecutionSubstate,
     OutboxDeliveryStatus,
+    TargetExecutionStatus,
     WritebackStatus,
 )
+from app.models.execution import ActionExecutionJob, TargetExecutionResult
 from app.models.ids import new_writeback_id
 from app.models.workflow import (
     delivery_status_eligible_for_operator_retry_pause,
     is_operator_retry_terminal_success,
     operator_retry_writeback_status_blocked,
+    validate_job_status_transition,
     validate_outbox_delivery_transition,
     validate_writeback_status_transition,
 )
@@ -68,12 +77,23 @@ from app.services.context_service import (
 )
 from app.services.disposition_command_factory import DispositionCommandFactory
 from app.services.disposition_guard_context import resolve_approved_action_ids
+from app.services.execution_job_persistence import sync_target_results_in_tx
 from app.services.writeback_side_effect_fence import (
     WRITEBACK_FENCE_BLOCKED_ERROR_CODE,
     assert_writeback_side_effects_allowed,
 )
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_JOB_STATUSES = frozenset(
+    {
+        ExecutionJobStatus.PARTIAL_SUCCESS,
+        ExecutionJobStatus.SUCCESS,
+        ExecutionJobStatus.FAILED,
+        ExecutionJobStatus.TIMED_OUT,
+        ExecutionJobStatus.CANCELLED,
+    }
+)
 
 ResumeInvestigationHook = Callable[[str], Awaitable[None]]
 _DEFAULT_LEASE_SECONDS = 30
@@ -1340,10 +1360,13 @@ class DispositionSyncService:
                 if action is not None:
                     _mirror_writeback_status_to_action(action, receipt.status.value)
                     if receipt.status is not WritebackStatus.UNKNOWN:
-                        await self._apply_action_terminal_from_receipt(
+                        await self._apply_receipt_execution_projection(
                             session,
                             action,
+                            outbox,
+                            command,
                             receipt,
+                            adapter,
                             adapter_label=adapter_label,
                         )
         await self._sync_writeback_summary(event_id)
@@ -1471,6 +1494,220 @@ class DispositionSyncService:
         )
         action.status = target.value
         action.executed_at = datetime.now(UTC)
+
+    async def _apply_receipt_execution_projection(
+        self,
+        session: AsyncSession,
+        action: orm.Action,
+        outbox: orm.DispositionOutbox,
+        command: DispositionCommand,
+        receipt: DispositionReceipt,
+        adapter: BaseDispositionAdapter,
+        *,
+        adapter_label: str,
+    ) -> None:
+        await self._apply_action_terminal_from_receipt(
+            session,
+            action,
+            receipt,
+            adapter_label=adapter_label,
+        )
+        await self._persist_execution_job_from_receipt(
+            session,
+            action,
+            receipt,
+            command=command,
+            outbox=outbox,
+        )
+        await self._maybe_complete_entity_effect(
+            session,
+            action,
+            outbox,
+            command,
+            receipt,
+            adapter,
+        )
+
+    async def _persist_execution_job_from_receipt(
+        self,
+        session: AsyncSession,
+        action: orm.Action,
+        receipt: DispositionReceipt,
+        *,
+        command: DispositionCommand,
+        outbox: orm.DispositionOutbox,
+    ) -> ActionExecutionJob | None:
+        if ExecutionOwner(action.execution_owner) is not ExecutionOwner.XDR_MANAGED:
+            return None
+        job_id = action.execution_job_id
+        if not job_id:
+            return None
+        row = await session.get(orm.ActionExecutionJob, job_id, with_for_update=True)
+        if row is None:
+            return None
+        from app.providers.tools.mock_provider import map_disposition_receipt_to_job
+        from app.services.action_execution_service import _apply_job_row
+
+        current = ExecutionJobStatus(row.status)
+        mapped = map_disposition_receipt_to_job(
+            receipt,
+            event_id=outbox.event_id,
+            idempotency_key=row.idempotency_key,
+            job_id=job_id,
+            action_id=action.action_id,
+        ).model_copy(
+            update={
+                "attempt": row.attempt,
+                "claimed_by": row.claimed_by,
+                "lease_expires_at": row.lease_expires_at,
+                "poll_after_ms": row.poll_after_ms,
+                "provider_name": row.provider_name,
+            }
+        )
+        if mapped.status is not current:
+            validate_job_status_transition(
+                current,
+                mapped.status,
+                provider_confirmed_terminal=receipt.status is WritebackStatus.CONFIRMED,
+            )
+        if mapped.target_results:
+            synced = await sync_target_results_in_tx(
+                session,
+                job_id=job_id,
+                attempt=row.attempt,
+                targets=mapped.target_results,
+            )
+            if not synced:
+                logger.warning(
+                    "execution job target sync failed event=%s job=%s writeback=%s",
+                    outbox.event_id,
+                    job_id,
+                    receipt.writeback_id,
+                )
+        _apply_job_row(row, mapped)
+        _ = command  # correlation for future live adapters
+        return mapped
+
+    @staticmethod
+    def _mock_entity_effect_readback_enabled(
+        adapter: BaseDispositionAdapter,
+        receipt: DispositionReceipt,
+    ) -> bool:
+        settings = get_settings()
+        if "mock" not in settings.disposition_mode.strip().lower():
+            return False
+        if not receipt.simulated:
+            return False
+        caps = adapter.capabilities()
+        return caps.supports_entity_effect_readback
+
+    async def _maybe_complete_entity_effect(
+        self,
+        session: AsyncSession,
+        action: orm.Action,
+        outbox: orm.DispositionOutbox,
+        command: DispositionCommand,
+        receipt: DispositionReceipt,
+        adapter: BaseDispositionAdapter,
+    ) -> EntityEffectCompletion | None:
+        if command.intent_kind is not DispositionIntentKind.ENTITY_ACTION_SUBMIT:
+            return None
+        if receipt.status is not WritebackStatus.ACCEPTED:
+            return None
+        if not self._mock_entity_effect_readback_enabled(adapter, receipt):
+            return None
+        completion = await adapter.complete_entity_effect_readback(command, receipt)
+        if completion is None or not completion.verified:
+            return completion
+        await self._finalize_entity_effect_completion(
+            session,
+            action,
+            outbox,
+            receipt,
+            completion,
+        )
+        return completion
+
+    async def _finalize_entity_effect_completion(
+        self,
+        session: AsyncSession,
+        action: orm.Action,
+        outbox: orm.DispositionOutbox,
+        receipt: DispositionReceipt,
+        completion: EntityEffectCompletion,
+    ) -> None:
+        job_id = action.execution_job_id
+        if not job_id:
+            return
+        row = await session.get(orm.ActionExecutionJob, job_id, with_for_update=True)
+        if row is None:
+            return
+        current = ExecutionJobStatus(row.status)
+        if current in _TERMINAL_JOB_STATUSES:
+            return
+        now = datetime.now(UTC)
+        target_result = TargetExecutionResult(
+            canonical_target=completion.canonical_target,
+            status=TargetExecutionStatus.SUCCESS,
+            code=completion.provider_code or "effect_readback_verified",
+            message=completion.provider_message,
+            artifact_id=completion.provider_record_id or None,
+            raw_result={
+                "writeback_id": completion.writeback_id,
+                "disposition_id": completion.disposition_id,
+                "observed_version": completion.observed_version,
+                "entity_action_code": completion.entity_action_code,
+            },
+        )
+        validate_job_status_transition(
+            current,
+            ExecutionJobStatus.SUCCESS,
+            provider_confirmed_terminal=True,
+        )
+        synced = await sync_target_results_in_tx(
+            session,
+            job_id=job_id,
+            attempt=row.attempt,
+            targets=[target_result],
+        )
+        if not synced:
+            logger.warning(
+                "entity effect target sync failed event=%s job=%s writeback=%s",
+                outbox.event_id,
+                job_id,
+                completion.writeback_id,
+            )
+            return
+        row.status = ExecutionJobStatus.SUCCESS.value
+        row.finished_at = now
+        row.updated_at = now
+        row.provider_code = completion.provider_code
+        row.provider_message = completion.provider_message
+        row.raw_result = sanitize_raw_result(
+            {
+                **dict(row.raw_result or {}),
+                "effect_completion": completion.model_dump(mode="json"),
+                "writeback_id": receipt.writeback_id,
+                "simulated": receipt.simulated,
+            }
+        )
+        from app.providers.tools.mock_provider import (
+            get_mock_tool_provider,
+            write_xdr_entity_effect_observation,
+        )
+
+        await write_xdr_entity_effect_observation(
+            get_mock_tool_provider().state,
+            entity_action_code=completion.entity_action_code,
+            target_type=completion.target_type or (action.target_type or ""),
+            target=completion.target or (action.target or ""),
+            applied_status=completion.applied_status,
+            job_id=job_id,
+            action_id=action.action_id,
+            writeback_id=completion.writeback_id,
+            provider_record_id=completion.provider_record_id,
+            observed_version=completion.observed_version,
+        )
 
     @staticmethod
     def _operator_retry_pause_reason(reason: str | None) -> str:
@@ -2156,10 +2393,13 @@ class DispositionSyncService:
                 outbox.last_error_detail = None
                 _mirror_writeback_status_to_action(action, parsed_receipt.status.value)
                 if action is not None:
-                    await self._apply_action_terminal_from_receipt(
+                    await self._apply_receipt_execution_projection(
                         session,
                         action,
+                        outbox,
+                        claim.command,
                         parsed_receipt,
+                        claim.adapter,
                         adapter_label=claim.adapter.name,
                     )
                 record_writeback(

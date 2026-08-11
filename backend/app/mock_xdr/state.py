@@ -221,6 +221,62 @@ class ProviderJob:
 
 
 @dataclass
+class EntityAppliedEffect:
+    """Provider-side applied entity effect (separate from source disposition)."""
+
+    disposition_id: str
+    writeback_id: str
+    action_id: str
+    entity_action_code: str
+    canonical_target: str
+    target_type: str
+    target: str
+    applied_status: str
+    provider_record_id: str
+    version: int
+    applied_at: datetime
+
+
+_ENTITY_ACTION_APPLIED_STATUS: dict[str, str] = {
+    "block_ip": "blocked",
+    "block_domain": "blocked",
+    "block_process": "blocked",
+    "isolate_host": "isolated",
+    "quarantine_file": "quarantined",
+    "scan_host_for_virus": "completed",
+    "disable_account": "disabled",
+    "force_logout": "terminated",
+    "reset_password": "password_reset",
+    "revoke_token": "revoked",
+}
+
+_ENTITY_ACTION_TARGET_TYPE: dict[str, str] = {
+    "block_ip": "ip",
+    "block_domain": "domain",
+    "block_process": "process",
+    "isolate_host": "host",
+    "quarantine_file": "file",
+    "scan_host_for_virus": "host",
+    "disable_account": "account",
+    "force_logout": "account",
+    "reset_password": "account",
+    "revoke_token": "account",
+}
+
+
+def _split_canonical_target(
+    canonical_target: str,
+    *,
+    entity_action_code: str,
+) -> tuple[str, str]:
+    if ":" in canonical_target:
+        target_type, target = canonical_target.split(":", 1)
+        return target_type, target
+    target_type = _ENTITY_ACTION_TARGET_TYPE.get(entity_action_code, "unknown")
+    return target_type, canonical_target
+
+
+@dataclass
 class MockXDRState:
     """In-memory Mock XDR environment (virtual clock + stores + writeback)."""
 
@@ -239,6 +295,8 @@ class MockXDRState:
     disposition_by_id: dict[str, DispositionAttempt] = field(default_factory=dict)
     disposition_by_idem_hash: dict[str, str] = field(default_factory=dict)
     jobs: dict[str, ProviderJob] = field(default_factory=dict)
+    entity_applied_effects: dict[str, EntityAppliedEffect] = field(default_factory=dict)
+    entity_effect_seq: int = 0
     # (source_object_id, closure_cycle) -> active EVENT_STATUS_UPDATE disposition_id
     active_terminal_heads: dict[tuple[str, int], str] = field(default_factory=dict)
     writeback_seq: int = 0
@@ -292,6 +350,8 @@ class MockXDRState:
         self.disposition_by_id.clear()
         self.disposition_by_idem_hash.clear()
         self.jobs.clear()
+        self.entity_applied_effects.clear()
+        self.entity_effect_seq = 0
         self.active_terminal_heads.clear()
         self.writeback_seq = 0
         self.captured_requests.clear()
@@ -974,6 +1034,138 @@ class MockXDRState:
                 attempt.receipts.append(receipt)
                 job.terminal_writeback_status = wb_status
         return job
+
+    def complete_entity_effect(
+        self,
+        disposition_id: str,
+        *,
+        writeback_id: str,
+        action_id: str,
+    ) -> dict[str, Any]:
+        """Apply and read back provider-side entity effect (ISSUE-311).
+
+        The entity disposition receipt remains ``ACCEPTED``; this path only
+        materializes independent applied-state evidence for execution/verify.
+        """
+        attempt = self.disposition_by_id.get(disposition_id)
+        if attempt is None:
+            raise MockValidationError("disposition not found", error_code="not_found")
+        if attempt.command.intent_kind is not DispositionIntentKind.ENTITY_ACTION_SUBMIT:
+            raise MockValidationError("not an entity action", error_code="invalid_operation")
+        latest = attempt.receipts[-1]
+        if latest.status is not WritebackStatus.ACCEPTED:
+            raise MockValidationError(
+                f"entity effect completion requires ACCEPTED receipt, got {latest.status.value}",
+                error_code="invalid_state_transition",
+            )
+        if latest.provider_job_id is not None:
+            raise MockValidationError(
+                "async entity disposition requires provider job completion first",
+                error_code="invalid_operation",
+            )
+
+        existing = self.entity_applied_effects.get(disposition_id)
+        if existing is not None:
+            return self._entity_effect_payload(existing, verified=True)
+
+        params = attempt.command.operation_params
+        entity_action_code = getattr(params, "entity_action_code", None)
+        canonical_target = getattr(params, "canonical_target", None)
+        if not isinstance(entity_action_code, str) or not isinstance(canonical_target, str):
+            raise MockValidationError(
+                "entity action params missing",
+                error_code="validation_error",
+            )
+        expected_status = _ENTITY_ACTION_APPLIED_STATUS.get(entity_action_code)
+        if expected_status is None:
+            raise MockValidationError(
+                f"unsupported entity_action_code {entity_action_code}",
+                error_code="unsupported_operation",
+            )
+        target_type, target = _split_canonical_target(
+            canonical_target,
+            entity_action_code=entity_action_code,
+        )
+        self.entity_effect_seq += 1
+        effect = EntityAppliedEffect(
+            disposition_id=disposition_id,
+            writeback_id=writeback_id,
+            action_id=action_id,
+            entity_action_code=entity_action_code,
+            canonical_target=canonical_target,
+            target_type=target_type,
+            target=target,
+            applied_status=expected_status,
+            provider_record_id=f"entfx-{self.entity_effect_seq:08d}",
+            version=1,
+            applied_at=self.clock,
+        )
+        self.entity_applied_effects[disposition_id] = effect
+        readback = self.entity_applied_effects.get(disposition_id)
+        verified = (
+            readback is not None
+            and readback.applied_status == expected_status
+            and readback.canonical_target == canonical_target
+        )
+        if readback is None:
+            return {
+                "verified": False,
+                "disposition_id": disposition_id,
+                "writeback_id": writeback_id,
+                "action_id": action_id,
+                "entity_action_code": entity_action_code,
+                "canonical_target": canonical_target,
+                "target_type": target_type,
+                "target": target,
+                "applied_status": expected_status,
+                "provider_record_id": None,
+                "observed_version": 0,
+                "provider_code": "effect_not_applied",
+                "provider_message": "provider-side entity effect missing after apply",
+            }
+        return self._entity_effect_payload(readback, verified=verified)
+
+    def readback_entity_effect(self, disposition_id: str) -> dict[str, Any]:
+        effect = self.entity_applied_effects.get(disposition_id)
+        if effect is None:
+            return {
+                "verified": False,
+                "disposition_id": disposition_id,
+                "writeback_id": "",
+                "action_id": "",
+                "entity_action_code": "",
+                "canonical_target": "",
+                "target_type": "",
+                "target": "",
+                "applied_status": "",
+                "provider_record_id": None,
+                "observed_version": 0,
+                "provider_code": "effect_not_applied",
+                "provider_message": "provider-side entity effect not found",
+            }
+        return self._entity_effect_payload(effect, verified=True)
+
+    @staticmethod
+    def _entity_effect_payload(effect: EntityAppliedEffect, *, verified: bool) -> dict[str, Any]:
+        return {
+            "verified": verified,
+            "disposition_id": effect.disposition_id,
+            "writeback_id": effect.writeback_id,
+            "action_id": effect.action_id,
+            "entity_action_code": effect.entity_action_code,
+            "canonical_target": effect.canonical_target,
+            "target_type": effect.target_type,
+            "target": effect.target,
+            "applied_status": effect.applied_status,
+            "provider_record_id": effect.provider_record_id,
+            "observed_version": effect.version,
+            "provider_code": "effect_readback_verified" if verified else "effect_readback_mismatch",
+            "provider_message": (
+                "provider-side entity effect readback verified"
+                if verified
+                else "provider-side entity effect readback mismatch"
+            ),
+        }
 
     def readback_source_disposition(self, kind: ObjectKindName, object_id: str) -> dict[str, Any]:
         stored = self.objects.get((kind, object_id))

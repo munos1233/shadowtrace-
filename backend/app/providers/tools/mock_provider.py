@@ -1650,6 +1650,69 @@ def bind_tool_execution_context(context: ToolExecutionContext) -> Iterator[None]
         _execution_context.reset(token)
 
 
+async def write_xdr_entity_effect_observation(
+    state: MockEnvironmentState,
+    *,
+    entity_action_code: str,
+    target_type: str,
+    target: str,
+    applied_status: str,
+    job_id: str,
+    action_id: str,
+    writeback_id: str,
+    provider_record_id: str,
+    observed_version: int,
+    connector: str = DEFAULT_CONNECTOR,
+    observation_delay_ms: int | None = None,
+) -> None:
+    """Project Mock XDR entity applied-state readback onto verify observation surfaces."""
+
+    surface = _TOOL_OBSERVATION_SURFACE.get(entity_action_code)
+    if surface is None:
+        return
+    delay_ms = (
+        observation_delay_ms
+        if observation_delay_ms is not None
+        else get_mock_tool_provider().config.observation_delay_ms
+    )
+    now = _utc_now()
+    available_at = now + timedelta(milliseconds=delay_ms)
+    common: dict[str, Any] = {
+        "observed_at": available_at,
+        "available_at": available_at,
+        "observed_version": observed_version,
+        "action_id": action_id,
+        "job_id": job_id,
+        "provider": XDR_PROVIDER_NAME,
+        "connector": connector,
+        "value": {
+            "target_type": target_type,
+            "target": target,
+            "writeback_id": writeback_id,
+            "provider_record_id": provider_record_id,
+            "entity_action_code": entity_action_code,
+            "source": "xdr_entity_effect_readback",
+        },
+    }
+    await state.set_observation(
+        MockObservationRecord(
+            surface=surface,
+            target=target,
+            status=applied_status,
+            **common,
+        )
+    )
+    if entity_action_code in {"block_ip", "isolate_host"}:
+        await state.set_observation(
+            MockObservationRecord(
+                surface="traffic",
+                target=target,
+                status="dropped",
+                **common,
+            )
+        )
+
+
 async def execute_mock_response_tool(tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
     return await get_mock_tool_provider().execute(tool_name, params)
 
@@ -1668,4 +1731,5 @@ __all__ = [
     "execute_mock_response_tool",
     "get_mock_tool_provider",
     "map_disposition_receipt_to_job",
+    "write_xdr_entity_effect_observation",
 ]

@@ -217,6 +217,32 @@ class DispositionReceipt(BaseModel):
         return self
 
 
+class EntityEffectCompletion(BaseModel):
+    """Independent provider-side entity effect readback (ISSUE-311).
+
+    Produced after Mock XDR applies and readbacks entity applied state. This is
+    intentionally separate from ``DispositionReceipt``: entity receipts remain
+    ``ACCEPTED`` while the execution job may reach ``SUCCESS`` only after this
+    evidence exists.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    verified: bool
+    disposition_id: str
+    writeback_id: str
+    action_id: str
+    entity_action_code: str
+    canonical_target: str
+    target_type: str
+    target: str
+    applied_status: str
+    provider_record_id: str
+    observed_version: int
+    provider_code: str | None = None
+    provider_message: str | None = None
+
+
 class DispositionOutboxRecord(BaseModel):
     """PostgreSQL outbox record: the source of truth for writeback delivery.
 

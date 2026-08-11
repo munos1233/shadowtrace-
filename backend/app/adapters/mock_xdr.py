@@ -43,7 +43,7 @@ from app.core.errors import (
     ValidationError as ShadowTraceValidationError,
 )
 from app.mock_xdr.state import find_forbidden_analysis_keys, idempotency_key_hash
-from app.models.disposition import DispositionCommand, DispositionReceipt, SourceObjectLocator
+from app.models.disposition import DispositionCommand, DispositionReceipt, EntityEffectCompletion, SourceObjectLocator
 from app.models.enums import (
     CapabilityState,
     ConnectorCapability,
@@ -345,6 +345,7 @@ class MockXDRDispositionAdapter(BaseDispositionAdapter):
             supports_concurrency_token=True,
             supports_lookup_by_idempotency=True,
             supports_readback_confirmation=True,
+            supports_entity_effect_readback=True,
         )
 
     async def _http(self) -> httpx.AsyncClient:
@@ -588,6 +589,74 @@ class MockXDRDispositionAdapter(BaseDispositionAdapter):
             )
         receipt = DispositionReceipt.model_validate(resp.json())
         return sanitize_disposition_receipt(receipt)
+
+    async def complete_entity_effect_readback(
+        self,
+        command: DispositionCommand,
+        receipt: DispositionReceipt,
+    ) -> EntityEffectCompletion | None:
+        if command.intent_kind is not DispositionIntentKind.ENTITY_ACTION_SUBMIT:
+            return None
+        if not receipt.simulated:
+            return None
+        if receipt.status is not WritebackStatus.ACCEPTED:
+            return None
+        if receipt.provider_job_id is not None:
+            return None
+        client = await self._http()
+        try:
+            resp = await client.post(
+                f"/mock-xdr/v1/entity-effects/{command.disposition_id}/complete",
+                headers=self._auth_headers(),
+                json={
+                    "writeback_id": receipt.writeback_id,
+                    "action_id": command.action_id,
+                },
+            )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "entity effect completion transport failed for %s: %s",
+                command.disposition_id,
+                type(exc).__name__,
+            )
+            return EntityEffectCompletion(
+                verified=False,
+                disposition_id=command.disposition_id,
+                writeback_id=receipt.writeback_id,
+                action_id=command.action_id,
+                entity_action_code=getattr(
+                    command.operation_params, "entity_action_code", ""
+                ),
+                canonical_target=getattr(command.operation_params, "canonical_target", ""),
+                target_type="",
+                target="",
+                applied_status="",
+                provider_record_id="",
+                observed_version=0,
+                provider_code="transport_error",
+                provider_message=f"{type(exc).__name__}: {exc}",
+            )
+        if resp.status_code >= 400:
+            body = resp.json() if resp.content else {}
+            return EntityEffectCompletion(
+                verified=False,
+                disposition_id=command.disposition_id,
+                writeback_id=receipt.writeback_id,
+                action_id=command.action_id,
+                entity_action_code=getattr(
+                    command.operation_params, "entity_action_code", ""
+                ),
+                canonical_target=getattr(command.operation_params, "canonical_target", ""),
+                target_type="",
+                target="",
+                applied_status="",
+                provider_record_id="",
+                observed_version=0,
+                provider_code=body.get("error_code", "effect_completion_failed"),
+                provider_message=body.get("error_message"),
+            )
+        payload = resp.json()
+        return EntityEffectCompletion.model_validate(payload)
 
     async def health_check(self) -> ConnectorStatus:
         # Health is a read endpoint; use write token (also grants read on Mock).

@@ -288,6 +288,38 @@ def create_app(*, state: MockXDRState | None = None) -> FastAPI:
 
     # ---- test/demo control plane ------------------------------------------
 
+    @app.post("/mock-xdr/v1/entity-effects/{disposition_id}/complete")
+    def complete_entity_effect(
+        disposition_id: str,
+        payload: dict[str, Any],
+        _: None = Depends(_require_write),
+        st: MockXDRState = Depends(_state),
+    ) -> dict[str, Any]:
+        writeback_id = str(payload.get("writeback_id") or "")
+        action_id = str(payload.get("action_id") or "")
+        if not writeback_id or not action_id:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "validation_error",
+                    "error_message": "writeback_id and action_id are required",
+                    "details": {},
+                },
+            )
+        return st.complete_entity_effect(
+            disposition_id,
+            writeback_id=writeback_id,
+            action_id=action_id,
+        )
+
+    @app.get("/mock-xdr/v1/entity-effects/{disposition_id}")
+    def readback_entity_effect(
+        disposition_id: str,
+        _: None = Depends(_require_read),
+        st: MockXDRState = Depends(_state),
+    ) -> dict[str, Any]:
+        return st.readback_entity_effect(disposition_id)
+
     @app.post("/mock-xdr/v1/control/seed")
     def control_seed(
         scenario: dict[str, Any],
