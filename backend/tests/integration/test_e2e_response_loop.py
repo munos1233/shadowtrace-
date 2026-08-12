@@ -476,7 +476,7 @@ async def _submit_entity_action_once(
     event_id: str,
     action_id: str,
     mock_xdr_state: MockXDRState,
-    entity_action_code: str = "contain_device",
+    entity_action_code: str = "isolate_host",
     operator: str = "test",
 ) -> str:
     """Enqueue and deliver exactly one ENTITY_ACTION_SUBMIT via MockXDR."""
@@ -1974,7 +1974,7 @@ async def test_scenario_4b_http_5xx_triggers_retry_or_dead_letter(
                     "disposition_id": disp_id,
                     "operation_code": "submit_entity_action",
                     "operation_params": {
-                        "entity_action_code": "contain_device",
+                        "entity_action_code": "isolate_host",
                         "canonical_target": "host-1",
                     },
                 },
@@ -3214,7 +3214,7 @@ async def test_scenario_4b_http_5xx_via_mock_xdr_failure_profile(
         operation_code="submit_entity_action",
         operation_params=SubmitEntityActionParams(
             operation_code="submit_entity_action",
-            entity_action_code="contain_device",
+            entity_action_code="isolate_host",
             canonical_target="host-1",
         ),
         operator_id="test-scenario-4b",
@@ -3570,7 +3570,7 @@ async def test_scenario_unknown_disposition_no_auto_retry(
                     "disposition_id": disp_id,
                     "operation_code": "submit_entity_action",
                     "operation_params": {
-                        "entity_action_code": "contain_device",
+                        "entity_action_code": "isolate_host",
                         "canonical_target": "host-1",
                     },
                 },

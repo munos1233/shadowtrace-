@@ -357,7 +357,7 @@ async def submit_entity_action_once(
                 disposition_id=disposition_id,
                 writeback_id="pending",
                 closure_cycle=int(action.plan_revision),
-                entity_action_code="contain_device",
+                entity_action_code="isolate_host",
             )
             outbox_record = await disposition_sync_service.enqueue_command(
                 session,

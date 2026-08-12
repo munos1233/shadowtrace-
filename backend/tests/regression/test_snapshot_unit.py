@@ -14,7 +14,7 @@ def _base_snapshot() -> dict:
         "executed_actions": ["create_ticket", "isolate_host"],
         "dispositions": [
             {
-                "operation": "contain_device",
+                "operation": "isolate_host",
                 "execution_owner": "xdr_managed",
                 "writeback_status": "confirmed",
             }
@@ -56,7 +56,7 @@ def test_dispositions_mismatch_is_block() -> None:
     current = _base_snapshot()
     current["dispositions"] = [
         {
-            "operation": "contain_device",
+            "operation": "isolate_host",
             "execution_owner": "xdr_managed",
             "writeback_status": "failed",
         }

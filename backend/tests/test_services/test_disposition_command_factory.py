@@ -192,3 +192,44 @@ async def test_sanitized_command_passes_outbound_guard() -> None:
         },
     )
     assert result.passed is True
+
+
+def _xdr_managed_action(*, tool_name: str = "isolate_host") -> Action:
+    return Action(
+        action_id="act-xdr-1",
+        event_id="evt-1",
+        plan_revision=1,
+        action_fingerprint="fp",
+        action_category=ActionCategory.RESPONSE,
+        action_name="Isolate Host",
+        tool_name=tool_name,
+        action_level=ActionLevel.L3,
+        execution_owner=ExecutionOwner.XDR_MANAGED,
+        writeback_required=True,
+        writeback_applicable=True,
+        writeback_readiness=WritebackReadiness.READY,
+        target="host-1",
+        target_type="host",
+    )
+
+
+def test_build_entity_action_submit_unknown_code_lists_known_specs() -> None:
+    factory = DispositionCommandFactory()
+    with pytest.raises(ValueError, match=r"known codes: .*isolate_host"):
+        factory.build_entity_action_submit(
+            _xdr_managed_action(),
+            source_locator=_locator(),
+            source_concurrency_token=None,
+            operator_id="system",
+            disposition_id="disp-1",
+            writeback_id="wbk-1",
+            closure_cycle=1,
+            entity_action_code="contain_device",
+        )
+
+
+def test_entity_action_code_for_unknown_tool_lists_known_specs() -> None:
+    from app.services.disposition_command_factory import entity_action_code_for
+
+    with pytest.raises(ValueError, match=r"known codes: .*isolate_host"):
+        entity_action_code_for(_xdr_managed_action(tool_name="contain_device"))

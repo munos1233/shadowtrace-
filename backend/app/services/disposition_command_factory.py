@@ -24,6 +24,14 @@ from app.models.enums import (
 from app.models.execution import ActionExecutionJob
 
 
+def _unsupported_entity_action_message(entity_action_code: str) -> str:
+    known = ", ".join(sorted(ENTITY_ACTION_EFFECT_SPECS))
+    return (
+        f"unsupported XDR_MANAGED entity action {entity_action_code}; "
+        f"known codes: {known}"
+    )
+
+
 class DispositionCommandFactory:
     """Rebuild outbound commands from approved Action fields only.
 
@@ -47,7 +55,7 @@ class DispositionCommandFactory:
     ) -> DispositionCommand:
         spec = ENTITY_ACTION_EFFECT_SPECS.get(entity_action_code)
         if spec is None:
-            raise ValueError(f"unsupported XDR_MANAGED entity action {entity_action_code}")
+            raise ValueError(_unsupported_entity_action_message(entity_action_code))
         expected_target_type, _ = spec
         if not action.target:
             raise ValueError("XDR_MANAGED entity action requires a non-empty target")
@@ -193,7 +201,7 @@ def _execution_summary_code(job: ActionExecutionJob) -> str:
 def entity_action_code_for(action: Action) -> str:
     """Map approved tool metadata to a stable Mock operation code."""
     if action.tool_name not in ENTITY_ACTION_EFFECT_SPECS:
-        raise ValueError(f"unsupported XDR_MANAGED entity action {action.tool_name}")
+        raise ValueError(_unsupported_entity_action_message(action.tool_name))
     return action.tool_name
 
 

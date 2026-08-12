@@ -60,8 +60,8 @@ _INTENT_PAYLOADS = [
             "disposition_id": "disp-1",
             "operation_code": "submit_entity_action",
             "operation_params": {
-                "entity_action_code": "contain_device",
-                "canonical_target": "host-1",
+                "entity_action_code": "isolate_host",
+                "canonical_target": "host:host-1",
             },
         },
     ),
