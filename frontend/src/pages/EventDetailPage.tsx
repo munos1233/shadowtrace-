@@ -12,19 +12,21 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
 import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
-import { triageContextFromSnapshot } from "../utils/evidenceContext";
+import { resolveWritebackReceiptDisplay } from "../utils/actionWritebackDisplay";
 import ReportViewer from "../components/report/ReportViewer";
 import { coerceInvestigationReport } from "../types/report";
 import { ApiError } from "../services/apiClient";
 import { generateReport } from "../services/eventApi";
 import EventOverviewCard from "../components/event/EventOverviewCard";
 import EventOperationalInsights from "../components/event/EventOperationalInsights";
+import ActionWritebackStatus from "../components/event/ActionWritebackStatus";
 import EventTodoBar from "../components/event/EventTodoBar";
 import InvestigationPhaseBanner from "../components/event/InvestigationPhaseBanner";
 import EntityList from "../components/event/EntityList";
@@ -193,6 +195,30 @@ function ActionsPanel({
     },
     { title: "执行主体", dataIndex: "execution_owner", render: (value) => value || "暂无数据" },
     { title: "状态", dataIndex: "status", render: (value) => <Tag>{value}</Tag> },
+    {
+      title: "写回义务",
+      key: "writeback_obligation",
+      width: 120,
+      render: (_value, action) =>
+        action.writeback_required ? (
+          <Tag color="blue">事件级</Tag>
+        ) : (
+          <Tag>无</Tag>
+        ),
+    },
+    {
+      title: "写回状态",
+      key: "writeback_display",
+      width: 240,
+      render: (_value, action) => (
+        <ActionWritebackStatus
+          writeback_required={action.writeback_required}
+          writeback_applicable={action.writeback_applicable}
+          writeback_status={action.writeback_status}
+          data-testid={`action-writeback-${action.action_id}`}
+        />
+      ),
+    },
     { title: "目标", dataIndex: "target", render: (value) => value || "暂无数据" },
     {
       title: "审批",
@@ -248,7 +274,7 @@ function ActionsPanel({
       columns={columns}
       pagination={{ pageSize: 10, hideOnSinglePage: true }}
       locale={{ emptyText: "暂无数据" }}
-      scroll={{ x: 1100 }}
+      scroll={{ x: 1300 }}
     />
   );
 
@@ -403,22 +429,37 @@ function WritebackPanel({
     {
       title: "writeback_status",
       dataIndex: "status",
-      width: 160,
-      render: (value: WritebackStatus | null, row) => (
-        <Space direction="vertical" size={2}>
-          {value ? (
-            <Tag color={value === "confirmed" ? "green" : value === "failed" || value === "conflict" ? "red" : "blue"}>
-              {value}
-            </Tag>
-          ) : (
-            <Typography.Text type="secondary">暂无数据</Typography.Text>
-          )}
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            证据：{row.confirmation_evidence || "暂无数据"}
-            {row.evidence_tier ? `（${row.evidence_tier}）` : ""}
-          </Typography.Text>
-        </Space>
-      ),
+      width: 200,
+      render: (value: WritebackStatus | null, row) => {
+        const matchingAction = actions.find((item) => item.action_id === row.action_id);
+        const display = resolveWritebackReceiptDisplay({
+          status: value,
+          intentKind: row.intent_kind,
+          matchingAction,
+          terminal: row.terminal,
+        });
+        const color =
+          display.tone === "success"
+            ? "green"
+            : display.tone === "error"
+              ? "red"
+              : display.tone === "warning"
+                ? "gold"
+                : "blue";
+        return (
+          <Space direction="vertical" size={2}>
+            <Tooltip title={display.tooltip}>
+              <Tag color={display.tone === "neutral" ? "default" : color}>
+                {display.label}
+              </Tag>
+            </Tooltip>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              证据：{row.confirmation_evidence || "暂无数据"}
+              {row.evidence_tier ? `（${row.evidence_tier}）` : ""}
+            </Typography.Text>
+          </Space>
+        );
+      },
     },
     {
       title: "provider_job_id",

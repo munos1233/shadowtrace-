@@ -76,6 +76,12 @@ export default function EventOperationalInsights({
         </div>
 
         <Descriptions size="small" column={{ xs: 1, md: 2 }} title="写回汇总">
+          <Descriptions.Item label="required_actions">
+            {summary?.required_action_count ?? "暂无数据"}
+          </Descriptions.Item>
+          <Descriptions.Item label="applicable_actions">
+            {summary?.applicable_action_count ?? "暂无数据"}
+          </Descriptions.Item>
           <Descriptions.Item label="aggregate_status">
             {summary?.aggregate_status ?? detail.writeback_overall_status ?? "暂无数据"}
           </Descriptions.Item>
