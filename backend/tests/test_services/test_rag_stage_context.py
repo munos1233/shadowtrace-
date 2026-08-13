@@ -14,7 +14,7 @@ from app.models.agent_io import (
     TriageResult,
 )
 from app.models.enums import EventType, Severity
-from app.services.analysis_only_pipeline import run_rag_stage
+from app.services.rag_stage import run_rag_stage
 
 
 def _triage() -> TriageResult:

@@ -82,12 +82,12 @@ from app.services.agent_task_coordinator import (
 from app.services.analysis_only_complete_persistence import (
     persist_analysis_only_complete_authoritative,
 )
-from app.services.analysis_only_pipeline import run_rag_stage
 from app.services.context_service import EventContextStore
 from app.services.degraded_flag_service import DegradedFlagService, apply_flag_to_list
 from app.services.evidence_query_plan_service import extract_evidence_plan_inputs
 from app.services.false_positive_matcher import build_fp_close_reason
 from app.services.fp_adjudication_runner import run_post_evidence_fp_adjudication
+from app.services.rag_stage import run_rag_stage
 from app.services.report_input_builder import build_report_agent_input
 from app.services.state_machine_service import StateMachineService
 from app.services.tenant_resolution import resolve_tenant_id
