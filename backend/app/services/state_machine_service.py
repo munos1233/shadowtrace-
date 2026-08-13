@@ -41,6 +41,7 @@ from app.models.disposition import DispositionCommand, SetEventDispositionParams
 from app.models.enums import (
     ActionCategory,
     ActionExecutionPhase,
+    ConfirmationEvidence,
     DispositionIntentKind,
     DispositionPolicy,
     EventStatus,
@@ -322,6 +323,7 @@ async def _build_terminal_writeback_view(
 
     # Read simulated flag from the latest receipt for this writeback (ISSUE-227).
     simulated: bool | None = None
+    confirmation_evidence: ConfirmationEvidence | None = None
     latest_receipt = await session.scalar(
         select(orm.DispositionReceipt)
         .where(orm.DispositionReceipt.writeback_id == outbox.writeback_id)
@@ -330,6 +332,13 @@ async def _build_terminal_writeback_view(
     )
     if latest_receipt is not None:
         simulated = bool(latest_receipt.simulated)
+        if latest_receipt.confirmation_evidence:
+            try:
+                confirmation_evidence = ConfirmationEvidence(
+                    latest_receipt.confirmation_evidence
+                )
+            except ValueError:
+                confirmation_evidence = None
 
     return TerminalEventWritebackView(
         action_id=deferred_action.action_id,
@@ -342,6 +351,7 @@ async def _build_terminal_writeback_view(
         receipt_status=wb_status,
         plan_revision=current_revision,
         simulated=simulated,
+        confirmation_evidence=confirmation_evidence,
     )
 
 

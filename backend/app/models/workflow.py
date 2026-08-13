@@ -537,6 +537,15 @@ class ClosedGateActionView(BaseModel):
     has_job_or_outbox: bool = False
 
 
+# ISSUE-333: non-mock CLOSED must align with VerifyAgent strong-evidence tiers.
+CLOSED_TERMINAL_STRONG_CONFIRMATION_EVIDENCE: frozenset[ConfirmationEvidence] = frozenset(
+    {
+        ConfirmationEvidence.READBACK_VERIFIED,
+        ConfirmationEvidence.MANUAL_CONFIRMED,
+    }
+)
+
+
 class TerminalEventWritebackView(BaseModel):
     """The single EVENT_STATUS_UPDATE that must close a required cycle."""
 
@@ -555,6 +564,9 @@ class TerminalEventWritebackView(BaseModel):
     # Only meaningful when disposition_is_mock=False; mock receipts are always
     # simulated=True and the CLOSED gate accepts them unconditionally.
     simulated: bool | None = None
+    # Projected from the latest DispositionReceipt (ISSUE-333).  Non-mock CLOSED
+    # requires strong evidence tiers aligned with VerifyAgent routing.
+    confirmation_evidence: ConfirmationEvidence | None = None
 
 
 class TransitionContext(BaseModel):
@@ -1043,6 +1055,29 @@ def validate_closed_gate(ctx: TransitionContext) -> None:
                 "disposition_is_mock": False,
             },
             error_code="closed_simulated_receipt_rejected",
+        )
+
+    # ISSUE-333: non-mock CLOSED rejects adapter_acknowledged / missing evidence
+    # (VerifyAgent treats ACK as unconfirmed).  Mock P0 keeps ISSUE-227 simulated
+    # path and does not enforce evidence tiers.
+    if (
+        not ctx.disposition_is_mock
+        and terminal.confirmation_evidence
+        not in CLOSED_TERMINAL_STRONG_CONFIRMATION_EVIDENCE
+    ):
+        raise InvalidStateTransitionError(
+            "required CLOSED gate: non-mock disposition requires strong "
+            "confirmation_evidence on terminal receipt",
+            target=EventStatus.CLOSED,
+            details={
+                "confirmation_evidence": (
+                    terminal.confirmation_evidence.value
+                    if terminal.confirmation_evidence is not None
+                    else None
+                ),
+                "disposition_is_mock": False,
+            },
+            error_code="closed_weak_confirmation_evidence",
         )
 
 

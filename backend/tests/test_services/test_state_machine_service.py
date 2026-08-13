@@ -41,6 +41,7 @@ from app.models.enums import (
     ActionCategory,
     ActionExecutionPhase,
     ActionStatus,
+    ConfirmationEvidence,
     DispositionIntentKind,
     DispositionPolicy,
     EventStatus,
@@ -439,6 +440,7 @@ async def _seed_terminal_writeback_fixture(
     target_disposition: SourceDisposition = SourceDisposition.CONTAINED,
     command_payload: dict[str, object] | None = None,
     receipt_simulated: bool | None = None,
+    receipt_confirmation_evidence: ConfirmationEvidence | None = None,
     action_name: str = TERMINAL_DISPOSITION_TOOL,
 ) -> str:
     action_id = f"act-term-{_sfx()}"
@@ -515,6 +517,11 @@ async def _seed_terminal_writeback_fixture(
                         source_record_id=source_record_id,
                         status=WritebackStatus.CONFIRMED.value,
                         simulated=receipt_simulated,
+                        confirmation_evidence=(
+                            receipt_confirmation_evidence.value
+                            if receipt_confirmation_evidence is not None
+                            else None
+                        ),
                     )
                 )
     return action_id
@@ -1681,6 +1688,77 @@ async def test_build_terminal_writeback_view_projects_simulated_from_receipt(
 
     assert view is not None
     assert view.simulated is True
+
+
+@pytest.mark.asyncio
+async def test_build_terminal_writeback_view_projects_confirmation_evidence_from_receipt(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+) -> None:
+    """ISSUE-333: confirmation_evidence on TerminalEventWritebackView comes from receipt."""
+    event_id = await _create_event(
+        session_factory,
+        store,
+        disposition_policy=DispositionPolicy.REQUIRED.value,
+    )
+    await _seed_terminal_writeback_fixture(
+        session_factory,
+        event_id,
+        approved=SourceDisposition.CONTAINED,
+        target_disposition=SourceDisposition.CONTAINED,
+        receipt_simulated=False,
+        receipt_confirmation_evidence=ConfirmationEvidence.READBACK_VERIFIED,
+    )
+
+    async with session_factory() as session:
+        view = await _build_terminal_writeback_view(session, event_id, 1)
+
+    assert view is not None
+    assert view.confirmation_evidence is ConfirmationEvidence.READBACK_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_close_rejected_when_non_mock_and_weak_confirmation_evidence(
+    state_machine: StateMachineService,
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-333: live disposition mode must block CLOSED on adapter_acknowledged."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("DISPOSITION_MODE", "live_xdr")
+    get_settings.cache_clear()
+
+    event_id = await _create_event(
+        session_factory,
+        store,
+        disposition_policy=DispositionPolicy.REQUIRED.value,
+        severity=Severity.LOW.value,
+    )
+    await _walk_to_reporting(state_machine, event_id)
+    await _add_report(session_factory, event_id)
+    await _seed_applicable_confirmed_writeback_action(session_factory, event_id)
+    await _seed_terminal_writeback_fixture(
+        session_factory,
+        event_id,
+        approved=SourceDisposition.CONTAINED,
+        target_disposition=SourceDisposition.CONTAINED,
+        receipt_simulated=False,
+        receipt_confirmation_evidence=ConfirmationEvidence.ADAPTER_ACKNOWLEDGED,
+    )
+
+    with pytest.raises(
+        InvalidStateTransitionError, match="strong confirmation_evidence"
+    ) as exc:
+        await state_machine.transition(
+            event_id,
+            EventStatus.CLOSED,
+            operator="SuperAgent",
+            reason="weak evidence in live mode",
+        )
+    assert exc.value.error_code == "closed_weak_confirmation_evidence"
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio

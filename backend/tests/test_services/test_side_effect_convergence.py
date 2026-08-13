@@ -21,6 +21,7 @@ from app.models.enums import (
     ActionCategory,
     ActionExecutionPhase,
     ActionStatus,
+    ConfirmationEvidence,
     DispositionIntentKind,
     DispositionPolicy,
     EventStatus,
@@ -28,6 +29,7 @@ from app.models.enums import (
     FinalVerdict,
     OutboxDeliveryStatus,
     Severity,
+    SourceDisposition,
     WritebackReadiness,
     WritebackStatus,
 )
@@ -38,7 +40,12 @@ from app.models.side_effect_convergence import (
     SideEffectConvergenceSummary,
     SideEffectScope,
 )
-from app.models.workflow import TransitionContext, validate_closed_gate
+from app.models.workflow import (
+    ClosedGateActionView,
+    TerminalEventWritebackView,
+    TransitionContext,
+    validate_closed_gate,
+)
 from app.services.side_effect_convergence import (
     _action_side_effect_blocks_convergence,
     _build_jobs_by_action,
@@ -2220,3 +2227,92 @@ async def test_corrupt_journal_verification_does_not_fall_back_to_snapshot(
     violation = check_gate_applicable_side_effect_convergence(summary)
     assert violation is not None
     assert violation.reason is SideEffectConvergenceReason.EFFECT_UNVERIFIED
+
+
+def _closed_gate_terminal_ctx(**overrides: object) -> TransitionContext:
+    """Minimal required CLOSED context with converged side effects (ISSUE-333)."""
+    terminal = TerminalEventWritebackView(
+        action_id="act-disp",
+        disposition_id="disp-1",
+        writeback_id="wbk-1",
+        closure_cycle=1,
+        approved_disposition=SourceDisposition.CONTAINED,
+        actual_disposition=SourceDisposition.CONTAINED,
+        receipt_status=WritebackStatus.CONFIRMED,
+        plan_revision=1,
+        simulated=False,
+        confirmation_evidence=ConfirmationEvidence.READBACK_VERIFIED,
+    )
+    base: dict[str, object] = {
+        "disposition_policy": DispositionPolicy.REQUIRED,
+        "report_exists": True,
+        "applicable_required_actions": [
+            ClosedGateActionView(
+                action_id="act-1",
+                action_category=ActionCategory.RESPONSE,
+                writeback_required=True,
+                writeback_applicable=True,
+                writeback_readiness=WritebackReadiness.READY,
+                writeback_status=WritebackStatus.CONFIRMED,
+                has_command=True,
+                all_required_intents_confirmed=True,
+                tool_name="block_ip",
+            )
+        ],
+        "terminal_event_writeback": terminal,
+        "current_plan_revision": 1,
+        "current_closure_cycle": 1,
+        "side_effect_convergence": SideEffectConvergenceSummary(
+            event_id="evt-closed-evidence-test",
+            current_plan_revision=1,
+        ),
+    }
+    base.update(overrides)
+    return TransitionContext(**base)  # type: ignore[arg-type]
+
+
+def test_required_closed_gate_rejects_ack_confirmed_non_mock_terminal() -> None:
+    """ISSUE-333: ACK+CONFIRMED+non-mock must not pass CLOSED."""
+    with pytest.raises(InvalidStateTransitionError, match="strong confirmation_evidence"):
+        validate_closed_gate(
+            _closed_gate_terminal_ctx(
+                disposition_is_mock=False,
+                terminal_event_writeback=TerminalEventWritebackView(
+                    action_id="act-disp",
+                    disposition_id="disp-1",
+                    writeback_id="wbk-1",
+                    closure_cycle=1,
+                    approved_disposition=SourceDisposition.CONTAINED,
+                    actual_disposition=SourceDisposition.CONTAINED,
+                    receipt_status=WritebackStatus.CONFIRMED,
+                    plan_revision=1,
+                    simulated=False,
+                    confirmation_evidence=ConfirmationEvidence.ADAPTER_ACKNOWLEDGED,
+                ),
+            )
+        )
+
+
+def test_required_closed_gate_accepts_readback_verified_non_mock_terminal() -> None:
+    validate_closed_gate(_closed_gate_terminal_ctx(disposition_is_mock=False))
+
+
+def test_required_closed_gate_mock_accepts_ack_simulated_terminal() -> None:
+    """Mock P0: simulated CONFIRMED with adapter_acknowledged may still close."""
+    validate_closed_gate(
+        _closed_gate_terminal_ctx(
+            disposition_is_mock=True,
+            terminal_event_writeback=TerminalEventWritebackView(
+                action_id="act-disp",
+                disposition_id="disp-1",
+                writeback_id="wbk-1",
+                closure_cycle=1,
+                approved_disposition=SourceDisposition.CONTAINED,
+                actual_disposition=SourceDisposition.CONTAINED,
+                receipt_status=WritebackStatus.CONFIRMED,
+                plan_revision=1,
+                simulated=True,
+                confirmation_evidence=ConfirmationEvidence.ADAPTER_ACKNOWLEDGED,
+            ),
+        )
+    )
