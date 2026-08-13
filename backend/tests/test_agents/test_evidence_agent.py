@@ -1247,6 +1247,45 @@ async def test_sqlalchemy_evidence_upsert_keeps_higher_confidence() -> None:
         await engine.dispose()
 
 
+def test_build_params_query_dns_from_ioc_when_no_domain_entity() -> None:
+    """ISSUE-332: FQDN IOCs backfill query_dns when EntitySet.domains is empty."""
+    agent = EvidenceAgent(llm_client=None, tool_executor=None)
+    time_range = {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}
+    params = agent._build_params(
+        "query_dns",
+        EntitySet(),
+        time_range,
+        ioc_list=["storage-sync-cdn.example"],
+    )
+    assert params == {"domain": "storage-sync-cdn.example", "time_range": time_range}
+
+
+def test_build_params_query_dns_skips_ip_only_ioc() -> None:
+    """ISSUE-332: IP-only IOCs must not be sent as DNS domain queries."""
+    agent = EvidenceAgent(llm_client=None, tool_executor=None)
+    time_range = {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}
+    params = agent._build_params(
+        "query_dns",
+        EntitySet(),
+        time_range,
+        ioc_list=["203.0.113.10"],
+    )
+    assert params is None
+
+
+def test_build_params_query_dns_prefers_entity_domain_over_ioc() -> None:
+    agent = EvidenceAgent(llm_client=None, tool_executor=None)
+    time_range = {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}
+    entities = EntitySet(domains=[DomainEntity(entity_id="d1", fqdn="entity.example")])
+    params = agent._build_params(
+        "query_dns",
+        entities,
+        time_range,
+        ioc_list=["ioc.example"],
+    )
+    assert params == {"domain": "entity.example", "time_range": time_range}
+
+
 async def test_plan_driven_required_tools_limits_queries(
     tool_executor: Any,
     wm: _FakeWorkingMemory,

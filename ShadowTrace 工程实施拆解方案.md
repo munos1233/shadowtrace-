@@ -157,7 +157,7 @@ ShadowTrace 与深信服 XDR、安全 GPT 均保持解耦：
 
 1. `MAX_REPLAN_COUNT = 3`（单事件最多 3 轮重规划）
 2. `MAX_AGENT_RETRIES = 2`（单 Agent 最多重试 2 次）
-3. `MIN_EVIDENCE_SOURCES = 3`（至少 3 个数据源成功才可正常研判）
+3. `MIN_EVIDENCE_SOURCES = 3`（EvidenceAgent `collection_status` 的 PARTIAL_DONE 下限：parser-success 源 ≥3；`completed` 阈值为 5；CLOSED 门禁不看源数）
 4. `CONFIDENCE_THRESHOLD = 0.7`（置信度达标阈值）
 5. `GLOBAL_EVIDENCE_TIMEOUT_S = 30.0`（证据采集全局超时）
 6. `SINGLE_SOURCE_TIMEOUT_S = 10.0`（单数据源超时）

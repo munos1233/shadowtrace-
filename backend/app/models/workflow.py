@@ -55,6 +55,8 @@ from app.models.side_effect_convergence import SideEffectConvergenceSummary
 
 MAX_REPLAN_COUNT = 3
 MAX_AGENT_RETRIES = 2
+# EvidenceAgent collection_status PARTIAL_DONE floor (parser-success sources >= 3).
+# CLOSED gate does not consult this constant (see validate_closed_gate).
 MIN_EVIDENCE_SOURCES = 3
 CONFIDENCE_THRESHOLD = 0.7
 GLOBAL_EVIDENCE_TIMEOUT_S = 30.0
