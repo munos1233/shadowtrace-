@@ -101,6 +101,7 @@ GROUND_TRUTH: dict[str, Any] = {
     "must_response_targets": [
         ACCOUNT,
         HOST_WORKSTATION,
+        HOST_DB,
         VPN_SRC_IP,
     ],
     "key_processes": [PROC_NTDS, PROC_MYSQL, PROC_RCLONE],

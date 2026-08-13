@@ -375,7 +375,9 @@ async def test_main_scenario_has_disable_account_and_block_ip() -> None:
     assert "create_ticket" in tool_names
     isolate = next(a for a in plan.actions if a.tool_name == "isolate_host")
     assert isolate.action_level is ActionLevel.L3
-    assert plan.generated_by is ResponsePlanGeneratedBy.LLM
+    assert plan.generated_by in {ResponsePlanGeneratedBy.LLM, ResponsePlanGeneratedBy.TEMPLATE}
+    if plan.generated_by is ResponsePlanGeneratedBy.TEMPLATE:
+        assert "containment_quality_gate" in plan.strategy_summary
 
 
 @pytest.mark.asyncio
