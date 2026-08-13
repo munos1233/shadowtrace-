@@ -16,6 +16,7 @@ from app.models.agent_io import (
     ResponsePlan,
     RiskAssessment,
     TriageResult,
+    VerificationActionResult,
     VerificationResult,
 )
 from app.models.detection_context_snapshot import DetectionContextSnapshot
@@ -77,6 +78,34 @@ def _fmt_ts(value: datetime | None) -> str:
     if value is None:
         return "unknown"
     return value.isoformat()
+
+
+def _action_writeback_report_fields(action: Action) -> str:
+    """Human-readable writeback obligation vs applicability (ISSUE-331)."""
+    parts = [
+        f"writeback_required={action.writeback_required}",
+        f"writeback_applicable={action.writeback_applicable}",
+    ]
+    if action.writeback_required and not action.writeback_applicable:
+        parts.append("writeback_not_applicable_reason=entity_side_effect")
+    wb = action.writeback_status.value if action.writeback_status is not None else "null"
+    parts.append(f"writeback_status={wb}")
+    return " | ".join(parts)
+
+
+def _verification_writeback_report_fields(item: VerificationActionResult) -> str:
+    """Split event-level obligation from per-action applicability in reports."""
+    if not item.writeback_required:
+        return "writeback_required=false | writeback_applicable=false"
+    if item.detail == "writeback_not_applicable":
+        return (
+            "writeback_required=true | writeback_applicable=false | "
+            "writeback_not_applicable_reason=entity_side_effect"
+        )
+    wb = item.writeback_status.value if item.writeback_status is not None else "null"
+    return (
+        f"writeback_required=true | writeback_applicable=true | writeback_status={wb}"
+    )
 
 
 def _bullet(lines: list[str], empty: str) -> str:
@@ -947,14 +976,11 @@ class ReportSectionBuilder:
         if response_actions:
             lines: list[str] = [summary_line]
             for action in response_actions:
-                wb = (
-                    action.writeback_status.value if action.writeback_status is not None else "null"
-                )
                 effect = action.effect_verification_status or "unset"
                 lines.append(
                     f"{action.action_id} | {action.action_name} | tool={action.tool_name} | "
                     f"status={action.status.value} | effect_verification={effect} | "
-                    f"writeback_status={wb} | target={action.target or '-'}"
+                    f"{_action_writeback_report_fields(action)} | target={action.target or '-'}"
                 )
             return "\n".join(lines)
         # ISSUE-205: no quotable RESPONSE actions — wording depends on whether
@@ -980,11 +1006,11 @@ class ReportSectionBuilder:
                 f"verification_phase={verification_result.verification_phase.value}",
             ]
             for item in verification_result.results:
-                wb = item.writeback_status.value if item.writeback_status is not None else "null"
                 receipt = ",".join(item.writeback_ids) if item.writeback_ids else "-"
                 lines.append(
                     f"{item.action_id} | effect={item.effect_status.value} | "
-                    f"writeback_status={wb} | readiness={item.writeback_readiness.value} | "
+                    f"{_verification_writeback_report_fields(item)} | "
+                    f"readiness={item.writeback_readiness.value} | "
                     f"receipt_refs={receipt} | detail={item.detail or '-'}"
                 )
             return "\n".join(lines)

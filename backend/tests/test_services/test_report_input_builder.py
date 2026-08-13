@@ -50,6 +50,7 @@ from app.models.agent_io import (
 from app.models.context import EventContext
 from app.models.enums import (
     ActionCategory,
+    ActionExecutionPhase,
     ActionLevel,
     ActionStatus,
     ExecutionOwner,
@@ -585,3 +586,69 @@ async def test_builder_rejects_unknown_fields_via_model() -> None:
             risk_assessment=_risk(),
             response_phase_status="bogus",  # type: ignore[arg-type]
         )
+
+
+def test_report_executed_actions_splits_writeback_obligation_and_applicability() -> None:
+    """ISSUE-331: entity actions keep required=true/applicable=false in report prose."""
+    builder = ReportSectionBuilder()
+    entity = Action(
+        action_id="act-entity-331",
+        event_id=EVENT_ID,
+        plan_revision=1,
+        action_fingerprint="fp-entity",
+        action_category=ActionCategory.RESPONSE,
+        action_name="Block IP",
+        tool_name="block_ip",
+        action_level=ActionLevel.L3,
+        status=ActionStatus.SUCCESS,
+        execution_owner=ExecutionOwner.XDR_MANAGED,
+        writeback_required=True,
+        writeback_applicable=False,
+        writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+    )
+    terminal = Action(
+        action_id="act-terminal-331",
+        event_id=EVENT_ID,
+        plan_revision=1,
+        action_fingerprint="fp-terminal",
+        action_category=ActionCategory.RESPONSE,
+        action_name="Update disposition",
+        tool_name="update_source_event_disposition",
+        action_level=ActionLevel.L1,
+        execution_phase=ActionExecutionPhase.POST_VERIFY,
+        activation_condition="after_effect_resolution",
+        status=ActionStatus.APPROVED,
+        execution_owner=ExecutionOwner.XDR_MANAGED,
+        writeback_required=True,
+        writeback_applicable=True,
+        writeback_readiness=WritebackReadiness.READY,
+    )
+    text = builder._executed_actions([entity, terminal], ReportPhaseStatus.EXECUTED)
+    assert "writeback_required=True | writeback_applicable=False" in text
+    assert "writeback_not_applicable_reason=entity_side_effect" in text
+    assert "writeback_required=True | writeback_applicable=True" in text
+    assert "writeback_status=null" in text
+
+
+def test_report_verification_results_marks_writeback_not_applicable() -> None:
+    """ISSUE-331: verification chapter must not imply entity row completed terminal wb."""
+    builder = ReportSectionBuilder()
+    verification = VerificationResult(
+        overall_status=VerificationOverallStatus.SUCCESS,
+        verification_phase=VerificationPhase.DISPOSITION,
+        results=[
+            VerificationActionResult(
+                action_id="act-entity-331",
+                effect_status=EffectStatus.SKIPPED,
+                writeback_required=True,
+                writeback_readiness=WritebackReadiness.NOT_REQUIRED,
+                writeback_status=None,
+                detail="writeback_not_applicable",
+                verification_phase=VerificationPhase.DISPOSITION,
+            )
+        ],
+    )
+    text = builder._verification_results(verification, ReportPhaseStatus.EXECUTED)
+    assert "writeback_applicable=false" in text
+    assert "writeback_not_applicable_reason=entity_side_effect" in text
+    assert "detail=writeback_not_applicable" in text
