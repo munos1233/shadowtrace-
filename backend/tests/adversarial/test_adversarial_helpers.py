@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from tests.adversarial.audit_report import AdversarialAuditChecks
+from tests.adversarial.audit_report import (
+    AdversarialAuditChecks,
+    resolve_scorecard_llm_mode,
+    scorecard_contract_for_llm_mode,
+)
 from tests.adversarial.full_loop_runner import resolve_full_loop_timeout_s
 from tests.adversarial.helpers import (
     assert_opaque_alert_quality,
@@ -520,6 +524,35 @@ def test_resolve_full_loop_timeout_env_override(monkeypatch) -> None:
     assert resolve_full_loop_timeout_s() == 90.0
     monkeypatch.setenv("ADVERSARIAL_FULL_LOOP_TIMEOUT_S", "10")
     assert resolve_full_loop_timeout_s() == 30.0
+
+
+def test_resolve_scorecard_llm_mode_defaults_to_mock(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MODE", raising=False)
+    assert resolve_scorecard_llm_mode() == "mock"
+
+
+def test_resolve_scorecard_llm_mode_explicit_override(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MODE", "openai_compatible")
+    assert resolve_scorecard_llm_mode(llm_mode="mock") == "mock"
+
+
+def test_scorecard_contract_mock_plumbing() -> None:
+    contract = scorecard_contract_for_llm_mode("mock")
+    assert contract["kind"] == "mock_plumbing"
+    assert "scripted golden" in contract["interpretation"]
+
+
+def test_scorecard_contract_live_reasoning() -> None:
+    contract = scorecard_contract_for_llm_mode("openai_compatible")
+    assert contract["kind"] == "live_reasoning"
+    assert "Non-deterministic" in contract["interpretation"]
+
+
+def test_audit_scorecard_header_includes_llm_mode(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MODE", "mock")
+    report = _analysis_pass_checks().to_dict()
+    assert report["llm_mode"] == "mock"
+    assert report["scorecard_contract"]["kind"] == "mock_plumbing"
 
 
 def test_resolve_observed_severity_prefers_risk_over_triage() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Literal
 from app.models.enums import EventStatus, EventType, FinalVerdict, Severity
 
 AdversarialAuditMode = Literal["analysis_only", "full_loop"]
+ScorecardContractKind = Literal["mock_plumbing", "live_reasoning", "custom"]
 
 _ANALYSIS_SCORED_CHECKS = frozenset(
     {
@@ -22,6 +24,39 @@ _ANALYSIS_SCORED_CHECKS = frozenset(
     }
 )
 _FULL_LOOP_SCORED_CHECKS = _ANALYSIS_SCORED_CHECKS | frozenset({"closed_reached"})
+
+
+def resolve_scorecard_llm_mode(*, llm_mode: str | None = None) -> str:
+    """Resolve ``LLM_MODE`` for adversarial scorecard headers (ISSUE-350)."""
+    raw = (llm_mode if llm_mode is not None else os.environ.get("LLM_MODE", "mock")).strip()
+    return raw or "mock"
+
+
+def scorecard_contract_for_llm_mode(llm_mode: str) -> dict[str, str]:
+    """Human-facing contract for interpreting PASS/FAIL on the scorecard."""
+    mode = llm_mode.strip().lower()
+    if mode == "mock":
+        return {
+            "kind": "mock_plumbing",
+            "interpretation": (
+                "PASS validates pipeline wiring and scripted golden paths only; "
+                "not Live reasoning or autonomous containment coverage."
+            ),
+        }
+    if mode == "openai_compatible":
+        return {
+            "kind": "live_reasoning",
+            "interpretation": (
+                "Non-deterministic Live LLM evaluation; not a substitute for red-team review."
+            ),
+        }
+    return {
+        "kind": "custom",
+        "interpretation": (
+            f"Scorecard produced under LLM_MODE={llm_mode!r}; "
+            "interpret PASS relative to the configured provider."
+        ),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +84,7 @@ class AdversarialAuditChecks:
     status_sequence: list[str]
     triage_severity: str | None = None
     audit_mode: AdversarialAuditMode = "analysis_only"
+    llm_mode: str | None = None
 
     def __post_init__(self) -> None:
         if self.audit_mode not in {"analysis_only", "full_loop"}:
@@ -98,8 +134,11 @@ class AdversarialAuditChecks:
         analysis_passed = sum(
             1 for key, value in checks.items() if key in _ANALYSIS_SCORED_CHECKS and value is True
         )
+        resolved_llm_mode = resolve_scorecard_llm_mode(llm_mode=self.llm_mode)
         return {
             "generated_at": datetime.now(UTC).isoformat(),
+            "llm_mode": resolved_llm_mode,
+            "scorecard_contract": scorecard_contract_for_llm_mode(resolved_llm_mode),
             "audit_mode": self.audit_mode,
             "ground_truth": gt,
             "observed": {

@@ -86,7 +86,7 @@ This suite has **two layers**:
 | Layer | Role | Pass means |
 |-------|------|------------|
 | **Plumbing** | Agents run, traces persist, tools/LLM logs exist | Wiring works — not capability proof |
-| **Quality gate** (`test_agent_adversarial_full_loop.py`, ISSUE-203) | Hard asserts on terminal status, report, disposition targets, Mock writeback, no sunset shims | Production graph reached `REPORTING`/`CLOSED` with aligned containment + readback_verified |
+| **Quality gate** (`test_agent_adversarial_full_loop.py`, ISSUE-203) | Hard asserts on terminal status, report, disposition targets, Mock writeback, no sunset shims | Production graph reached `REPORTING`/`CLOSED` with aligned containment + readback_verified **on Mock plumbing only** (ISSUE-350) |
 
 Mock full loop typically finishes in **~20–40s** (see artifact `elapsed_s`). Runner default
 timeout is **120s**; set ``ADVERSARIAL_FULL_LOOP_TIMEOUT_S`` for Live runs (default 600s when
@@ -103,7 +103,14 @@ Do **not** claim autonomous investigation quality from Mock plumbing alone. Live
 | **Mock + scenario golden** | Regression / demo packs (e.g. `insider_data_exfiltration`, `adversarial_credential_db_staging_exfil`) | Same as Mock — golden content is scripted, not emergent reasoning |
 | **Live** (`LLM_MODE=openai_compatible` + API key) | Closer-to-production LLM behavior on unseen narratives | Vendor availability, cost, non-determinism |
 
-**Do not** interpret Mock adversarial audit **PASS** as proof of autonomous investigation quality. Mock results validate plumbing and scripted paths only; Live runs (or human red-team review) are required for capability claims. The `backend-closure-gates` CI job runs adversarial full-loop with default Mock LLM — a green gate is **not** Live investigation proof (ISSUE-334).
+**Do not** interpret Mock adversarial audit **PASS** as proof of autonomous investigation quality. Mock results validate plumbing and scripted paths only; Live runs (or human red-team review) are required for capability claims. CI runs two distinct cards (ISSUE-350):
+
+| Card | CI job | `LLM_MODE` | What green means |
+|------|--------|------------|------------------|
+| **Mock plumbing** | `backend-closure-gates-mock` | `mock` (pinned in workflow) | Pipeline wiring + scripted golden paths — **not** Live reasoning or containment coverage |
+| **Live reasoning** | *(nightly / manual only)* | `openai_compatible` | Closer-to-production LLM behavior — non-deterministic, does not block PR |
+
+Scorecard JSON artifacts include top-level `llm_mode` and `scorecard_contract` so reviewers cannot confuse Mock PASS with Live adjudication proof (ISSUE-334/350).
 
 ### Provenance-aware quality audit (ISSUE-334)
 

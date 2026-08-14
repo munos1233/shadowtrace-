@@ -81,8 +81,9 @@ jobs:
       - name: Mypy
         run: uv run --frozen mypy app
 
-  backend-closure-gates:
-    name: backend-closure-gates
+  backend-closure-gates-mock:
+    # ISSUE-350: Mock LLM plumbing only — not Live reasoning / containment proof.
+    name: backend-closure-gates-mock
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -114,6 +115,7 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace
       REDIS_URL: redis://localhost:6379/0
+      LLM_MODE: mock
     steps:
       - uses: actions/checkout@v4
 
@@ -132,8 +134,8 @@ jobs:
       - name: Install backend (frozen dev)
         run: uv sync --frozen --extra dev
 
-      - name: ISSUE-261 production and adversarial closure gates
-        # Mock LLM adversarial PASS validates plumbing/scripted paths only — not Live reasoning (ISSUE-334).
+      - name: ISSUE-261 Mock closure gates (plumbing only, ISSUE-350)
+        # Mock LLM adversarial PASS validates plumbing/scripted paths only — not Live reasoning (ISSUE-334/350).
         run: |
           production_rc=0
           adversarial_rc=0
@@ -149,11 +151,11 @@ jobs:
             exit 1
           fi
 
-      - name: Upload ISSUE-261 closure diagnostics
+      - name: Upload ISSUE-261 Mock closure diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-261-closure-diagnostics
+          name: issue-261-mock-closure-diagnostics
           path: |
             backend/issue-261-production.xml
             backend/issue-261-adversarial.xml
