@@ -112,7 +112,24 @@ class Settings(BaseSettings):
     disposition_credential_ref: str = Field(default="", alias="DISPOSITION_CREDENTIAL_REF")
 
     allow_xdr_writeback: bool = Field(default=False, alias="ALLOW_XDR_WRITEBACK")
-    allow_live_side_effects: bool = Field(default=False, alias="ALLOW_LIVE_SIDE_EFFECTS")
+    allow_live_side_effects: bool = Field(
+        default=False,
+        alias="ALLOW_LIVE_SIDE_EFFECTS",
+        description=(
+            "When true, permits registering non-simulated ToolProvider adapters "
+            "(TOOL_MODE live/mixed). Does not unblock ActionExecution; see "
+            "BLOCK_LIVE_ACTION_EXECUTION."
+        ),
+    )
+    block_live_action_execution: bool = Field(
+        default=False,
+        alias="BLOCK_LIVE_ACTION_EXECUTION",
+        description=(
+            "ISSUE-059 P0 freeze: when true, ActionExecution.execute_plan and "
+            "writeback side-effect delivery are fail-closed. Independent of "
+            "ALLOW_LIVE_SIDE_EFFECTS (tool adapter registration gate)."
+        ),
+    )
     writeback_field_allowlist: str = Field(
         default="status,disposition,comment",
         alias="WRITEBACK_FIELD_ALLOWLIST",

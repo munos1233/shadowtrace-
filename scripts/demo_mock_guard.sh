@@ -20,6 +20,7 @@ _live_conflict() {
 }
 
 _live_conflict "ALLOW_LIVE_SIDE_EFFECTS" "${ALLOW_LIVE_SIDE_EFFECTS:-false}"
+_live_conflict "BLOCK_LIVE_ACTION_EXECUTION" "${BLOCK_LIVE_ACTION_EXECUTION:-false}"
 _live_conflict "ALLOW_XDR_WRITEBACK" "${ALLOW_XDR_WRITEBACK:-false}"
 _live_conflict "AUTO_INVESTIGATE_ENABLED" "${AUTO_INVESTIGATE_ENABLED:-false}"
 _live_conflict "AUTO_RESPONSE_ENABLED" "${AUTO_RESPONSE_ENABLED:-false}"

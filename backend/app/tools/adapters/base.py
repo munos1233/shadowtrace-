@@ -291,6 +291,10 @@ async def configure_tool_registry(
 
     ``live`` never discovers Mock implementations. ``mixed`` loads only tools
     named in its route table, so a missing route cannot silently fall back.
+
+    ``allow_live_side_effects`` maps to ``ALLOW_LIVE_SIDE_EFFECTS`` (tool
+    registration only). ActionExecution freeze is ``BLOCK_LIVE_ACTION_EXECUTION``
+    in ``writeback_side_effect_fence`` — the two flags are independent.
     """
 
     from app.providers.tools.mock_provider import MockToolProvider

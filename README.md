@@ -114,8 +114,8 @@ ShadowTrace 与深信服 XDR、安全 GPT 均保持解耦：
 4. 默认存储为 PostgreSQL（含 pgvector 扩展）+ Redis。向量检索一律使用 pgvector，不引入独立向量数据库。**P0 把 Redis 视为硬依赖**（检查点、EventContext 热缓存、Pub/Sub）；无 Redis 时仅允许开发降级为内存检查点，但不得宣称满足可恢复执行验收。
 5. Neo4j、OpenSearch、Kafka（Redpanda）、Kubernetes、SOC 大屏均为可选增强（P2）。P0 不创建 Kafka/Redpanda skeleton，任何 P0/P1 能力不得以它们为硬前置；对应 Issue 必须提供降级路径。未来若引入消息总线，须作为独立可选 Issue，并复用同一推送信封与幂等契约。
 6. 单租户、PC 端浏览器、中文界面；不做移动端、国际化、生产级高可用。外部 tenant/customer/branch 只作为来源隔离与追溯字段，不扩展为完整多租户权限系统。
-7. `ALLOW_LIVE_SIDE_EFFECTS` 与 `ALLOW_XDR_WRITEBACK` 默认 false，只约束 live Provider。生产启用前必须完成权限、目标、幂等和审批校验。分析内容写回没有开关，始终禁止；事件处置写回只允许白名单字段。XDR 数据接入成功不代表具备联动或写回能力。
-8. live 的 `XDR_MANAGED` 只有在 Adapter 能力已验证且两个开关均为 true 时才是候选路径；live 的 `DIRECT_TOOL` 设备动作需要 `ALLOW_LIVE_SIDE_EFFECTS`，随后结果同步还需已验证写能力和 `ALLOW_XDR_WRITEBACK`。开关只是本地安全栅栏，不能证明厂商支持相应接口。Mock 仅在 `SIMULATION_ENABLED=true` 且环境栅栏确认为非生产时运行，回执必须标记 `simulated=true`；任一 live 权限或能力缺失都不得用本地 Mock 成功替代。
+7. `ALLOW_LIVE_SIDE_EFFECTS`、`BLOCK_LIVE_ACTION_EXECUTION` 与 `ALLOW_XDR_WRITEBACK` 默认 false。`ALLOW_LIVE_SIDE_EFFECTS` 仅允许注册 live ToolProvider（`TOOL_MODE=live/mixed`）；`BLOCK_LIVE_ACTION_EXECUTION` 为 ISSUE-059 执行冻结开关，true 时阻断 `ActionExecution.execute_plan` 与写回副作用投递；二者语义独立，禁止为启用 live 工具而打开后者（会停 Mock 执行）。`ALLOW_XDR_WRITEBACK` 约束 live Disposition 写回。生产启用前必须完成权限、目标、幂等和审批校验。分析内容写回没有开关，始终禁止；事件处置写回只允许白名单字段。XDR 数据接入成功不代表具备联动或写回能力。
+8. live 的 `XDR_MANAGED` 只有在 Adapter 能力已验证、`ALLOW_XDR_WRITEBACK=true` 且 `BLOCK_LIVE_ACTION_EXECUTION=false` 时才是候选路径；live 的 `DIRECT_TOOL` 设备动作需要 `ALLOW_LIVE_SIDE_EFFECTS=true`（注册 live adapter）、`BLOCK_LIVE_ACTION_EXECUTION=false`（执行未冻结），随后结果同步还需已验证写能力与 `ALLOW_XDR_WRITEBACK`。开关只是本地安全栅栏，不能证明厂商支持相应接口。Mock 仅在 `SIMULATION_ENABLED=true` 且环境栅栏确认为非生产时运行，回执必须标记 `simulated=true`；任一 live 权限或能力缺失都不得用本地 Mock 成功替代。
 
 优先级约定：
 

@@ -14,14 +14,19 @@ def assert_live_side_effects_allowed(
     settings: Settings | None = None,
     action_id: str | None = None,
 ) -> None:
-    """Block when ALLOW_LIVE_SIDE_EFFECTS is enabled (P0 fail-closed)."""
+    """Block when ``BLOCK_LIVE_ACTION_EXECUTION`` is enabled (ISSUE-059 P0 freeze).
+
+    Not to be confused with ``ALLOW_LIVE_SIDE_EFFECTS``, which only gates live
+    ToolProvider adapter registration (``configure_tool_registry``).
+    """
     resolved = settings or get_settings()
-    if resolved.allow_live_side_effects:
-        details: dict[str, object] = {"allow_live_side_effects": True}
+    if resolved.block_live_action_execution:
+        details: dict[str, object] = {"block_live_action_execution": True}
         if action_id is not None:
             details["action_id"] = action_id
         raise ValidationError(
-            "live side effects are disabled in ISSUE-059 P0",
+            "live action execution is frozen (ISSUE-059 P0); "
+            "set BLOCK_LIVE_ACTION_EXECUTION=false to allow execute_plan",
             details=details,
         )
 

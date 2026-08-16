@@ -15,9 +15,15 @@ from app.services.writeback_side_effect_fence import (
 
 
 def test_live_side_effects_fence_blocks_when_enabled() -> None:
-    settings = Settings.model_validate({"ALLOW_LIVE_SIDE_EFFECTS": True})
-    with pytest.raises(ValidationError, match="live side effects are disabled"):
+    settings = Settings.model_validate({"BLOCK_LIVE_ACTION_EXECUTION": True})
+    with pytest.raises(ValidationError, match="live action execution is frozen"):
         assert_live_side_effects_allowed(settings=settings, action_id="act-test")
+
+
+def test_allow_live_side_effects_does_not_block_execution_fence() -> None:
+    """ALLOW_LIVE_SIDE_EFFECTS gates tool registration only (ISSUE-369)."""
+    settings = Settings.model_validate({"ALLOW_LIVE_SIDE_EFFECTS": True})
+    assert_live_side_effects_allowed(settings=settings, action_id="act-test")
 
 
 def test_xdr_writeback_fence_blocks_live_mode_without_flag() -> None:
@@ -102,10 +108,10 @@ def test_combined_fence_blocks_live_side_effects() -> None:
     live_blocked = Settings.model_validate(
         {
             "DISPOSITION_MODE": "mock_xdr",
-            "ALLOW_LIVE_SIDE_EFFECTS": True,
+            "BLOCK_LIVE_ACTION_EXECUTION": True,
         }
     )
-    with pytest.raises(ValidationError, match="live side effects are disabled"):
+    with pytest.raises(ValidationError, match="live action execution is frozen"):
         assert_writeback_side_effects_allowed(
             settings=live_blocked,
             action_id="act-test",

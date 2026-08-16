@@ -3249,7 +3249,7 @@ async def test_deliver_outbox_sync_ready_blocked_when_writeback_fence_closed(
     blocked_settings = Settings.model_validate(
         {
             **get_settings().model_dump(),
-            "ALLOW_LIVE_SIDE_EFFECTS": True,
+            "BLOCK_LIVE_ACTION_EXECUTION": True,
         }
     )
     monkeypatch.setattr(
@@ -3275,7 +3275,7 @@ async def test_deliver_outbox_live_side_effects_blocked_via_worker(
     cleanup: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ISSUE-222: worker delivery must fail-closed when ALLOW_LIVE_SIDE_EFFECTS is on."""
+    """ISSUE-222: worker delivery must fail-closed when BLOCK_LIVE_ACTION_EXECUTION is on."""
     from app.core.config import Settings, get_settings
     from app.models.enums import OutboxDeliveryStatus
     from app.services.disposition_sync_service import OutboxWorker
@@ -3332,7 +3332,7 @@ async def test_deliver_outbox_live_side_effects_blocked_via_worker(
     blocked_settings = Settings.model_validate(
         {
             **get_settings().model_dump(),
-            "ALLOW_LIVE_SIDE_EFFECTS": True,
+            "BLOCK_LIVE_ACTION_EXECUTION": True,
         }
     )
     monkeypatch.setattr(
