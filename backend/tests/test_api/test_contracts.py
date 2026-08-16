@@ -459,8 +459,9 @@ class _MockDispositionSyncService:
         principal: str,
         comment: str,
         evidence_ref: str | None = None,
+        operation_id: str | None = None,
     ) -> WritebackStatus:
-        _ = (principal, comment)
+        _ = (principal, comment, operation_id)
         if writeback_id not in self._KNOWN_WRITEBACKS:
             raise EventNotFoundError(
                 f"writeback {writeback_id} not found",

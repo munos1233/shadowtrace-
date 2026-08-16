@@ -294,7 +294,7 @@ async def test_finalize_superseded_head_records_dead_letter_metric(
     monkeypatch.setattr(
         mod,
         "record_writeback_dead_letter",
-        lambda *, adapter: recorded.append(adapter),
+        lambda *, adapter, error_code=None: recorded.append(adapter),
     )
     prior = _prior_head()
     prior.delivery_status = OutboxDeliveryStatus.WAITING_RETRY.value
@@ -327,7 +327,7 @@ async def test_block_superseded_outbox_terminates_ready_and_leased(
     monkeypatch.setattr(
         mod,
         "record_writeback_dead_letter",
-        lambda *, adapter: recorded.append(adapter),
+        lambda *, adapter, error_code=None: recorded.append(adapter),
     )
     service = _service()
     service._resolve_adapter = lambda _outbox: SimpleNamespace(name="mock_xdr")  # type: ignore[method-assign]
@@ -455,10 +455,19 @@ async def test_deliver_after_supersede_never_calls_adapter_submit() -> None:
         async def __aexit__(self, *args: object) -> None:
             return None
 
-        async def scalar(self, stmt: Any) -> orm.DispositionOutbox:
+        async def scalar(self, stmt: Any) -> Any:
+            # First scalar resolves event_id for SecurityEvent lock; second loads outbox.
+            if not hasattr(self, "_scalar_calls"):
+                self._scalar_calls = 0
+            self._scalar_calls += 1
+            if self._scalar_calls == 1:
+                return outbox.event_id
             return outbox
 
-        async def get(self, *args: Any, **kwargs: Any) -> Any:
+        async def get(self, model: Any, pk: Any, **kwargs: Any) -> Any:
+            # Production locks SecurityEvent before the superseded early return (ISSUE-284).
+            if model is orm.SecurityEvent:
+                return SimpleNamespace(event_id=pk)
             raise AssertionError("action lock must not run after superseded early return")
 
     class _Factory:

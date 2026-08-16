@@ -70,7 +70,7 @@ async def test_build_investigation_agents_wires_event_bus(monkeypatch: pytest.Mo
         "app.services.budget_service.BudgetService",
         lambda **kwargs: MagicMock(),
     )
-    monkeypatch.setattr("app.core.guardrails.OutputGuard", lambda: MagicMock())
+    monkeypatch.setattr("app.core.guardrails.OutputGuard", lambda **kwargs: MagicMock())
     monkeypatch.setattr(
         "app.services.agent_trace_service.AgentTraceService",
         lambda *_a, **_k: MagicMock(),
