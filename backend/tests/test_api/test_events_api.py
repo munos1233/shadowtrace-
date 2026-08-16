@@ -504,6 +504,7 @@ async def _seed_reporting_not_required_with_running_side_effect(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> str:
     """NOT_REQUIRED REPORTING with background RUNNING job."""
+    import hashlib
     from uuid import uuid4
 
     sfx = uuid4().hex[:8]
@@ -525,12 +526,23 @@ async def _seed_reporting_not_required_with_running_side_effect(
                     final_verdict=FinalVerdict.FALSE_POSITIVE.value,
                     risk_score=10,
                     entities={},
+                    creation_source_ref={
+                        "source_kind": "incident",
+                        "source_product": "mock_xdr",
+                        "source_tenant_id": "t1",
+                        "connector_id": f"conn-{sfx}",
+                        "source_object_id": f"INC-{sfx}",
+                        "raw_payload_hash": hashlib.sha256(b"not-required-bg").hexdigest(),
+                        "ingested_at": now.isoformat(),
+                    },
+                    source_reference_snapshots=[],
                     disposition_policy=DispositionPolicy.NOT_REQUIRED.value,
                     source_type="mock_xdr",
                     occurred_at=now,
                     row_version=1,
                 )
             )
+            await session.flush()
             session.add(
                 orm.Action(
                     action_id=action_id,
@@ -547,6 +559,7 @@ async def _seed_reporting_not_required_with_running_side_effect(
                     status=ActionStatus.APPROVED.value,
                 )
             )
+            await session.flush()
             session.add(
                 orm.ActionExecutionJob(
                     job_id=job_id,

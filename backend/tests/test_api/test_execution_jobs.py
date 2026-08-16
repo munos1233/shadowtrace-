@@ -160,22 +160,7 @@ async def _seed_execution_job(
                     source_reference_snapshots=[_source_ref(tenant_id=tenant_id)],
                 )
             )
-            session.add(
-                orm.ActionExecutionJob(
-                    job_id=job_id,
-                    event_id=event_id,
-                    action_id=action_id,
-                    provider_name="mock_tool_provider",
-                    idempotency_key=f"idem-{job_id}",
-                    status=ExecutionJobStatus.PARTIAL_SUCCESS.value,
-                    attempt=2,
-                    raw_result=raw_result
-                    or {
-                        "outcome": "partial_success",
-                        "provider_secret": "must-not-leak",
-                    },
-                )
-            )
+            await session.flush()
             session.add(
                 orm.Action(
                     action_id=action_id,
@@ -194,15 +179,34 @@ async def _seed_execution_job(
                     parameters={"target_type": "ip", "target": "203.0.113.9"},
                     writeback_required=False,
                     writeback_applicable=False,
-                    writeback_readiness=WritebackReadiness.READY.value,
+                    writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
                     execution_job_id=job_id,
                     idempotency_key=f"idem-{action_id}",
                 )
             )
+            await session.flush()
+            session.add(
+                orm.ActionExecutionJob(
+                    job_id=job_id,
+                    event_id=event_id,
+                    action_id=action_id,
+                    provider_name="mock_tool_provider",
+                    idempotency_key=f"idem-{job_id}",
+                    status=ExecutionJobStatus.PARTIAL_SUCCESS.value,
+                    attempt=2,
+                    raw_result=raw_result
+                    or {
+                        "outcome": "partial_success",
+                        "provider_secret": "must-not-leak",
+                    },
+                )
+            )
+            await session.flush()
             if with_targets:
                 session.add(
                     orm.ActionTargetResult(
                         job_id=job_id,
+                        attempt=2,
                         canonical_target="ip:203.0.113.9",
                         status="success",
                         code="applied",
@@ -213,6 +217,7 @@ async def _seed_execution_job(
                 session.add(
                     orm.ActionTargetResult(
                         job_id=job_id,
+                        attempt=2,
                         canonical_target="ip:203.0.113.10",
                         status="failed",
                         code="permission_denied",

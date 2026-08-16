@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -22,15 +22,19 @@ from app.models.enums import (
     ActionExecutionPhase,
     ActionLevel,
     ActionStatus,
+    DispositionPolicy,
     EventStatus,
     EventType,
     ExecutionJobStatus,
     ExecutionOwner,
     FinalVerdict,
     Severity,
+    SourceObjectKind,
     TargetExecutionStatus,
     WritebackReadiness,
 )
+from app.models.source import SourceReference
+from tests.test_support.db_isolation import truncate_business_tables
 from app.models.execution import ActionExecutionJob, TargetExecutionResult
 from app.providers.tools.mock_provider import MockToolProvider, MockToolProviderConfig
 from app.services.action_execution_service import DbExecutionJobStore
@@ -53,6 +57,18 @@ def _alembic_config() -> Config:
 
 def _sfx() -> str:
     return uuid.uuid4().hex[:8]
+
+
+def _source_ref() -> dict[str, object]:
+    sfx = _sfx()
+    return SourceReference(
+        source_kind=SourceObjectKind.INCIDENT,
+        source_product="mock_xdr",
+        source_tenant_id="tenant-demo",
+        connector_id="conn-job-persist",
+        source_object_id=f"INC-{sfx}",
+        ingested_at=datetime.now(UTC),
+    ).model_dump(mode="json")
 
 
 def _job(**overrides: object) -> ActionExecutionJob:
@@ -127,16 +143,59 @@ async def job_store(
 
 @pytest_asyncio.fixture
 async def cleanup(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[None]:
+    await truncate_business_tables(session_factory)
     yield
-    async with session_factory() as session:
-        async with session.begin():
-            for table in (
-                orm.ActionTargetResult,
-                orm.ActionExecutionJob,
-                orm.Action,
-                orm.SecurityEvent,
-            ):
-                await session.execute(delete(table))
+    await truncate_business_tables(session_factory)
+
+
+async def _seed_job_fk_parents(
+    session: AsyncSession,
+    job: ActionExecutionJob,
+) -> None:
+    """Seed security_event + action before action_execution_job (FK order)."""
+    now = datetime.now(UTC)
+    ref = _source_ref()
+    session.add(
+        orm.SecurityEvent(
+            event_id=job.event_id,
+            event_type=EventType.OTHER.value,
+            title="execution job persistence fixture",
+            description="ISSUE-364 FK seed",
+            status=EventStatus.EXECUTING_RESPONSE.value,
+            severity=Severity.MEDIUM.value,
+            risk_score=50,
+            confidence=0.8,
+            final_verdict=FinalVerdict.NONE.value,
+            creation_source_ref=ref,
+            source_reference_snapshots=[ref],
+            disposition_policy=DispositionPolicy.NOT_REQUIRED.value,
+            occurred_at=now,
+        )
+    )
+    await session.flush()
+    session.add(
+        orm.Action(
+            action_id=job.action_id,
+            event_id=job.event_id,
+            plan_revision=1,
+            action_fingerprint=f"fp-{job.action_id}",
+            action_category=ActionCategory.RESPONSE.value,
+            action_name="block ip",
+            tool_name="block_ip",
+            action_level=ActionLevel.L2.value,
+            execution_owner=ExecutionOwner.DIRECT_TOOL.value,
+            execution_phase=ActionExecutionPhase.IMMEDIATE.value,
+            status=ActionStatus.APPROVED.value,
+            target_type="ip",
+            target="203.0.113.1",
+            parameters={},
+            writeback_required=False,
+            writeback_applicable=False,
+            writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
+            idempotency_key=f"idem-{job.action_id}",
+        )
+    )
+    await session.flush()
 
 
 async def _insert_job_row(
@@ -145,6 +204,7 @@ async def _insert_job_row(
 ) -> None:
     async with session_factory() as session:
         async with session.begin():
+            await _seed_job_fk_parents(session, job)
             session.add(
                 orm.ActionExecutionJob(
                     job_id=job.job_id,
@@ -487,10 +547,14 @@ async def test_direct_tool_partial_success_db_round_trip(
             "status": ActionStatus.APPROVED,
             "target_type": "host",
             "target": "host-a",
-            "parameters": {"targets": ["host-a", "host-b"]},
+            "parameters": {
+                "target_type": "host",
+                "target": "host-a",
+                "parameters": {"targets": ["host-a", "host-b"]},
+            },
             "writeback_required": False,
             "writeback_applicable": False,
-            "writeback_readiness": WritebackReadiness.READY,
+            "writeback_readiness": WritebackReadiness.NOT_REQUIRED,
             "idempotency_key": f"idem-{action_id}",
             "execution_phase": ActionExecutionPhase.IMMEDIATE,
         }
@@ -515,7 +579,7 @@ async def test_direct_tool_partial_success_db_round_trip(
                     parameters=action.parameters,
                     writeback_required=action.writeback_required,
                     writeback_applicable=action.writeback_applicable,
-                    writeback_readiness=action.writeback_readiness.value,
+                    writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
                     idempotency_key=action.idempotency_key,
                 )
             )
