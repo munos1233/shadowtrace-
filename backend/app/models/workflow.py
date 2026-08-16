@@ -849,7 +849,11 @@ def filter_applicable_required_writeback_actions(
 def check_required_writeback_close_gate(
     applicable_required_actions: list[ClosedGateActionView],
 ) -> WritebackCloseGateViolation | None:
-    """Shared REQUIRED writeback predicate for Close API pre-check and SM CLOSED gate."""
+    """Shared REQUIRED writeback predicate for Close API pre-check and SM CLOSED gate.
+
+    Evaluated only after side-effect convergence passes (ISSUE-302). Unconfirmed
+    outboxes are surfaced as ``closed_side_effects_pending`` upstream.
+    """
     applicable = filter_applicable_required_writeback_actions(applicable_required_actions)
     if not applicable:
         return WritebackCloseGateViolation(reason=WritebackCloseGateReason.NO_APPLICABLE)

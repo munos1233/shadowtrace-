@@ -1484,6 +1484,7 @@ async def test_close_reporting_writeback_pending_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """PENDING outbox is blocked by side-effect convergence before writeback predicate."""
     event_id = await _seed_reporting_required_event(
         session_factory,
         outbox_status=WritebackStatus.PENDING,
@@ -1496,7 +1497,9 @@ async def test_close_reporting_writeback_pending_rejected(
         headers=_hdr(),
     )
     assert resp.status_code == 409
-    assert resp.json()["error_code"] == "writeback_pending"
+    data = resp.json()
+    assert data["error_code"] == "closed_side_effects_pending"
+    assert data["details"]["action_id"].startswith("act-")
 
 
 @pytest.mark.asyncio
@@ -1579,9 +1582,11 @@ async def test_close_reporting_writeback_failed_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Convergence passed; writeback predicate rejects FAILED action status."""
     event_id = await _seed_reporting_required_event(
         session_factory,
-        outbox_status=WritebackStatus.FAILED,
+        outbox_status=WritebackStatus.CONFIRMED,
+        entity_action_writeback_status=WritebackStatus.FAILED,
     )
     await _seed_report_with_event(session_factory, event_id)
 
@@ -1599,9 +1604,11 @@ async def test_close_reporting_writeback_conflict_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Convergence passed; writeback predicate rejects CONFLICT action status."""
     event_id = await _seed_reporting_required_event(
         session_factory,
-        outbox_status=WritebackStatus.CONFLICT,
+        outbox_status=WritebackStatus.CONFIRMED,
+        entity_action_writeback_status=WritebackStatus.CONFLICT,
     )
     await _seed_report_with_event(session_factory, event_id)
 
@@ -1619,10 +1626,11 @@ async def test_close_reporting_writeback_unsupported_readiness_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Convergence passed; writeback predicate rejects non-READY readiness."""
     event_id = await _seed_reporting_required_event(
         session_factory,
         writeback_readiness=WritebackReadiness.CAPABILITY_UNKNOWN,
-        outbox_status=WritebackStatus.PENDING,
+        outbox_status=WritebackStatus.CONFIRMED,
     )
     await _seed_report_with_event(session_factory, event_id)
 
@@ -1640,6 +1648,7 @@ async def test_close_reporting_writeback_unknown_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """UNKNOWN outbox is blocked by side-effect convergence before writeback predicate."""
     event_id = await _seed_reporting_required_event(
         session_factory,
         outbox_status=WritebackStatus.UNKNOWN,
@@ -1652,7 +1661,9 @@ async def test_close_reporting_writeback_unknown_rejected(
         headers=_hdr(),
     )
     assert resp.status_code == 409
-    assert resp.json()["error_code"] == "writeback_pending"
+    data = resp.json()
+    assert data["error_code"] == "closed_side_effects_pending"
+    assert data["details"]["action_id"].startswith("act-")
 
 
 @pytest.mark.asyncio
@@ -1660,7 +1671,7 @@ async def test_close_reporting_outbox_accepted_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Outbox ACCEPTED must fail API pre-check (intents not all CONFIRMED)."""
+    """ACCEPTED outbox is blocked by side-effect convergence before writeback predicate."""
     event_id = await _seed_reporting_required_event(
         session_factory,
         outbox_status=WritebackStatus.ACCEPTED,
@@ -1673,7 +1684,9 @@ async def test_close_reporting_outbox_accepted_rejected(
         headers=_hdr(),
     )
     assert resp.status_code == 409
-    assert resp.json()["error_code"] == "writeback_pending"
+    data = resp.json()
+    assert data["error_code"] == "closed_side_effects_pending"
+    assert data["details"]["action_id"].startswith("act-")
 
 
 @pytest.mark.asyncio
@@ -1681,7 +1694,7 @@ async def test_close_reporting_action_status_not_confirmed_rejected(
     client: TestClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Action writeback_status must be CONFIRMED even when outbox rows are CONFIRMED."""
+    """Convergence passed; writeback predicate rejects non-CONFIRMED action status."""
     event_id = await _seed_reporting_required_event(
         session_factory,
         outbox_status=WritebackStatus.CONFIRMED,

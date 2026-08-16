@@ -441,7 +441,11 @@ async def _validate_side_effect_convergence_gate(
     event_id: str,
     event: Any,
 ) -> None:
-    """Pre-check gate-applicable side-effect convergence before close (ISSUE-302)."""
+    """Pre-check gate-applicable side-effect convergence before close (ISSUE-302).
+
+    Runs before ``_validate_writeback_gate`` so unconfirmed outboxes surface
+    ``closed_side_effects_pending`` rather than ``writeback_*`` codes.
+    """
     if event.disposition_policy != DispositionPolicy.REQUIRED:
         return
 
@@ -500,6 +504,10 @@ async def _validate_writeback_gate(
     change can still be rejected by the SM CLOSED gate (fail-closed).
 
     No-op for NOT_REQUIRED events.
+
+    ISSUE-302 ordering: only reached after side-effect convergence passes.
+    ``writeback_pending`` / ``writeback_failed`` / ``writeback_conflict`` apply
+    to the shared writeback predicate, not to outboxes still blocking convergence.
     """
     if event.disposition_policy != DispositionPolicy.REQUIRED:
         return

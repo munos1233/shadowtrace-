@@ -34,7 +34,12 @@ def raise_api_writeback_gate_error(
     *,
     event_id: str,
 ) -> NoReturn:
-    """Map a shared violation to Close API HTTP domain errors."""
+    """Map a shared violation to Close API HTTP domain errors.
+
+    Close API calls this only after side-effect convergence passes (ISSUE-302).
+    ``writeback_*`` codes here reflect the writeback predicate, not outstanding
+    convergence on unconfirmed outboxes.
+    """
     details: dict[str, str] = {"event_id": event_id}
     if violation.action_id is not None:
         details["action_id"] = violation.action_id
