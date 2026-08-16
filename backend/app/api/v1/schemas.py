@@ -598,6 +598,7 @@ class WritebackResponse(BaseModel):
     status: WritebackStatus
     confirmation_evidence: ConfirmationEvidence | None = None
     evidence_tier: Literal["strong", "medium", "weak"] | None = None
+    simulated: bool = False
     provider_code: str | None = None
     message_code: str | None = None
     target_results: list[TargetWritebackResult] = Field(default_factory=list)

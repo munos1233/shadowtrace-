@@ -9671,6 +9671,11 @@
             ],
             "title": "Evidence Tier"
           },
+          "simulated": {
+            "type": "boolean",
+            "title": "Simulated",
+            "default": false
+          },
           "provider_code": {
             "anyOf": [
               {
