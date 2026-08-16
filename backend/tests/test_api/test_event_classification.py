@@ -296,7 +296,7 @@ async def test_reinvestigate_true_on_new_starts_pipeline(
     assert body["reinvestigate_requested"] is True
     assert body["reinvestigate_started"] is True
     assert scheduled == [event_id]
-    assert any("investigation_lease_acquired" in s for s in body["side_effects"])
+    assert any("investigation_intent_accepted" in s for s in body["side_effects"])
     assert any("analysis_pipeline_scheduled" in s for s in body["side_effects"])
 
 

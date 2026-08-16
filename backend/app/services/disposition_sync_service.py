@@ -2414,9 +2414,12 @@ class DispositionSyncService:
                     resolution="writeback_progress",
                     principal="DispositionSyncService",
                 )
+                intent_id = getattr(resume_intent, "intent_id", None)
+                if not intent_id:
+                    raise AttributeError("resume intent missing intent_id")
                 self._manual_resolution.schedule_dispatch(
                     event_id=event_id,
-                    intent_id=resume_intent.intent_id,
+                    intent_id=intent_id,
                     trigger="writeback_progress",
                 )
             except Exception:

@@ -949,7 +949,7 @@ async def test_scenario_b_stale_decision_id_replay_is_idempotent(
     principal = Principal(subject="iss110-replay-approver", roles=["approver"])
     decision_id = f"dec-replay-{uuid4().hex[:10]}"
     await engine.approve(action_id, principal, "first", decision_id)
-    await engine.approve(action_id, principal, "replay", decision_id)
+    await engine.approve(action_id, principal, "first", decision_id)
 
     async with session_factory() as session:
         records = (

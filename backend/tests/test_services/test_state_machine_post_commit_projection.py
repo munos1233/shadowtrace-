@@ -42,6 +42,7 @@ class _Row:
     closed_at: Any = None
     updated_at: Any = None
     final_verdict: str = FinalVerdict.NONE.value
+    disposition_policy: str = "not_required"
 
 
 @dataclass
@@ -128,6 +129,9 @@ class _Session:
         return _Result([])
 
     async def flush(self) -> None:
+        return None
+
+    async def scalar(self, _statement: Any) -> Any:
         return None
 
     async def refresh(self, _row: _Row) -> None:
@@ -264,6 +268,10 @@ async def _authoritative_context(*_args: Any, **_kwargs: Any) -> TransitionConte
     return TransitionContext()
 
 
+async def _noop_reconcile_stale_executions(*_args: Any, **_kwargs: Any) -> int:
+    return 0
+
+
 def _build_service(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -272,6 +280,10 @@ def _build_service(
 ) -> tuple[StateMachineService, _DurableState, _ProjectionStore]:
     state = _DurableState(row=_Row(status=initial.value))
     store = _ProjectionStore()
+    monkeypatch.setattr(
+        "app.services.state_machine_service.reconcile_stale_executions_before_close",
+        _noop_reconcile_stale_executions,
+    )
     monkeypatch.setattr(
         "app.services.state_machine_service._build_authoritative_context",
         _authoritative_context,

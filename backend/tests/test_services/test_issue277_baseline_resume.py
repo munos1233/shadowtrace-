@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 
 import pytest
 
@@ -101,12 +102,30 @@ async def test_maybe_resume_manual_resolution_enqueues_durable_intent() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_resume_manual_resolution_requires_intent_id(
-    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing intent_id on resume intent must not silently schedule dispatch."""
     resume_calls: list[str] = []
     created: list[str] = []
     scheduled: list[str] = []
+    warning_messages: list[str] = []
+    warning_exc_types: list[type[BaseException] | None] = []
+
+    service_logger = logging.getLogger("app.services.disposition_sync_service")
+    original_warning = service_logger.warning
+
+    def _capture_warning(message: str, *args: object, **kwargs: object) -> None:
+        warning_messages.append(message % args if args else str(message))
+        exc_info = kwargs.get("exc_info")
+        if exc_info is True:
+            warning_exc_types.append(sys.exc_info()[0])
+        elif isinstance(exc_info, tuple) and exc_info:
+            warning_exc_types.append(exc_info[0])  # type: ignore[arg-type]
+        else:
+            warning_exc_types.append(None)
+        return original_warning(message, *args, **kwargs)
+
+    monkeypatch.setattr(service_logger, "warning", _capture_warning)
 
     async def _resume(event_id: str) -> None:
         resume_calls.append(event_id)
@@ -148,16 +167,12 @@ async def test_maybe_resume_manual_resolution_requires_intent_id(
         resume_investigation=_resume,
         manual_resolution=_Manual(),  # type: ignore[arg-type]
     )
-    with caplog.at_level(logging.WARNING, logger="app.services.disposition_sync_service"):
-        await svc._maybe_resume("evt-manual-missing-intent")
+    await svc._maybe_resume("evt-manual-missing-intent")
     assert created == ["evt-manual-missing-intent"]
     assert resume_calls == []
     assert scheduled == []
     assert any(
-        "failed to enqueue durable graph resume intent" in record.message
-        for record in caplog.records
+        "failed to enqueue durable graph resume intent" in message
+        for message in warning_messages
     )
-    assert any(
-        record.exc_info is not None and record.exc_info[0] is AttributeError
-        for record in caplog.records
-    )
+    assert AttributeError in warning_exc_types

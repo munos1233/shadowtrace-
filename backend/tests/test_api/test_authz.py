@@ -122,7 +122,7 @@ def test_body_cannot_forge_operator(client: TestClient) -> None:
 def test_retry_requires_disposition_operator(client: TestClient) -> None:
     forbidden = client.post("/api/v1/writebacks/wbk-0a1b2c3d/retry", headers=_hdr("analyst"))
     assert forbidden.status_code == 403
-    ok = client.post("/api/v1/writebacks/wbk-0a1b2c3d/retry", headers=_hdr("operator"))
+    ok = client.post("/api/v1/writebacks/wbk-failed-retry/retry", headers=_hdr("operator"))
     assert ok.status_code == 200
 
 

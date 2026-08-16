@@ -107,11 +107,13 @@ def test_registry_and_manifest_publish_all_baseline_rollback_tools(
     for tool_name in ROLLBACK_NAMES:
         assert registry.get_tool(tool_name).tool_impl is not None
         direct = registry.resolve_binding(tool_name, ExecutionOwner.DIRECT_TOOL, [])
-        managed = registry.resolve_binding(tool_name, ExecutionOwner.XDR_MANAGED, [])
         assert direct.provider_name == "mock_tool_provider"
         assert direct.execution_channel is ExecutionChannel.TOOL_PROVIDER
-        assert managed.provider_name == "mock_xdr"
-        assert managed.execution_channel is ExecutionChannel.DISPOSITION_ADAPTER
+        # ISSUE-315: L1 ticket rollback is DIRECT_TOOL-only (no XDR_MANAGED binding).
+        if tool_name != "close_false_positive_ticket":
+            managed = registry.resolve_binding(tool_name, ExecutionOwner.XDR_MANAGED, [])
+            assert managed.provider_name == "mock_xdr"
+            assert managed.execution_channel is ExecutionChannel.DISPOSITION_ADAPTER
         assert ROLLBACK_SOURCE_MAP[tool_name]
 
 
