@@ -120,8 +120,8 @@ def _settings(*, memory_enqueue_after_analysis: bool = True) -> MagicMock:
     settings.memory_enqueue_after_analysis = memory_enqueue_after_analysis
     settings.allow_live_side_effects = False
     settings.allow_xdr_writeback = False
-    settings.source_mode = "mock"
-    settings.disposition_mode = "mock"
+    settings.source_mode = "mock_xdr"
+    settings.disposition_mode = "mock_xdr"
     return settings
 
 

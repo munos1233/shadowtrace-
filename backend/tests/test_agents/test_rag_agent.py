@@ -21,6 +21,7 @@ from app.core.errors import (
     GuardrailViolationError,
     ShadowTraceError,
 )
+from tests.test_support.production_settings import production_settings
 from app.models.agent_io import (
     CollectionStatus,
     EvidenceOutput,
@@ -1432,24 +1433,13 @@ class TestRAGAgentReleasePinning:
     async def test_production_blocks_attack_kb_without_active_release(self):
         from unittest.mock import AsyncMock, MagicMock
 
-        from app.core.config import Settings
-
         release_service = MagicMock()
         release_service.get_active_release = AsyncMock(return_value=None)
 
         wm = _MockBoundWorkingMemory()
         results = _make_full_results()
         pipeline = _MockPipeline(results=results)
-        settings = Settings(
-            app_env="production",
-            simulation_enabled=False,
-            source_mode="live_xdr",
-            tool_mode="live",
-            disposition_mode="live_xdr",
-            disposition_adapter_kind="live",
-            llm_mode="openai_compatible",
-            embedding_mode="remote",
-        )
+        settings = production_settings()
         agent = RAGAgent(
             working_memory=wm,
             pipeline=pipeline,
@@ -1549,24 +1539,13 @@ class TestRAGAgentReleasePinning:
     async def test_production_blocks_playbook_kb_without_active_release(self):
         from unittest.mock import AsyncMock, MagicMock
 
-        from app.core.config import Settings
-
         playbook_release_service = MagicMock()
         playbook_release_service.get_active_release = AsyncMock(return_value=None)
 
         wm = _MockBoundWorkingMemory()
         results = _make_full_results()
         pipeline = _MockPipeline(results=results)
-        settings = Settings(
-            app_env="production",
-            simulation_enabled=False,
-            source_mode="live_xdr",
-            tool_mode="live",
-            disposition_mode="live_xdr",
-            disposition_adapter_kind="live",
-            llm_mode="openai_compatible",
-            embedding_mode="remote",
-        )
+        settings = production_settings()
         agent = RAGAgent(
             working_memory=wm,
             pipeline=pipeline,

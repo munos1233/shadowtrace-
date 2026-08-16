@@ -8,6 +8,7 @@ from app.core.config import Settings
 from app.models.agent_io import CollectionStatus, EvidenceOutput, RAGAgentInput, TriageResult
 from app.models.enums import EventType, Severity
 from app.rag.context import RetrievalContext
+from tests.test_support.production_settings import production_settings
 
 
 def _rag_input(**overrides: object) -> RAGAgentInput:
@@ -65,15 +66,7 @@ def test_from_rag_input_falls_back_to_settings_default_tenant() -> None:
 
 
 def test_from_rag_input_requires_tenant_in_production() -> None:
-    settings = Settings(
-        app_env="production",
-        simulation_enabled=False,
-        source_mode="live_xdr",
-        tool_mode="live",
-        disposition_mode="live_xdr",
-        disposition_adapter_kind="live",
-        llm_mode="openai_compatible",
-        embedding_mode="remote",
+    settings = production_settings(
         retrieval_default_tenant_id="local",
     )
     with pytest.raises(ValueError, match="tenant_id is required"):
@@ -95,16 +88,7 @@ def test_for_investigation_resolves_tenant_from_source_snapshot() -> None:
 
 
 def test_for_investigation_requires_tenant_in_production() -> None:
-    settings = Settings(
-        app_env="production",
-        simulation_enabled=False,
-        source_mode="live_xdr",
-        tool_mode="live",
-        disposition_mode="live_xdr",
-        disposition_adapter_kind="live",
-        llm_mode="openai_compatible",
-        embedding_mode="remote",
-    )
+    settings = production_settings()
     with pytest.raises(ValueError, match="tenant_id is required"):
         RetrievalContext.for_investigation(
             event_id="evt-prod",

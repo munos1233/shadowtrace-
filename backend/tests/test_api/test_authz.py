@@ -11,7 +11,9 @@ from app.api.v1 import schemas as s
 from app.api.v1.deps import get_approval_engine
 from app.core.config import get_settings
 from app.main import app
+from app.models.enums import ActionStatus
 from app.services.approval_engine import ApprovalOutcome
+from tests.test_support.production_settings import apply_production_env
 
 _DEV_TOKENS = json.dumps(
     {
@@ -46,10 +48,10 @@ def client() -> TestClient:
 
     class _StubApprovalEngine:
         async def approve(self, *args: object, **kwargs: object) -> ApprovalOutcome:
-            return ApprovalOutcome()
+            return ApprovalOutcome(persisted_status=ActionStatus.APPROVED)
 
         async def reject(self, *args: object, **kwargs: object) -> ApprovalOutcome:
-            return ApprovalOutcome()
+            return ApprovalOutcome(persisted_status=ActionStatus.REJECTED)
 
         async def scan_timeouts(self) -> list[str]:
             return []
@@ -238,21 +240,10 @@ def test_trusted_proxy_accepts_case_insensitive_roles(
 def test_dev_token_rejected_in_production(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("APP_ENV", "production")
-    # ISSUE-093 §5 + ISSUE-027: production Settings fail-closes on mock
-    # source/tool/disposition/LLM or simulation modes, so use live-shaped
-    # runtime modes to isolate the assertion from that unrelated gate.
-    monkeypatch.setenv("SOURCE_MODE", "live_edr")
-    monkeypatch.setenv("TOOL_MODE", "live")
-    monkeypatch.setenv("DISPOSITION_MODE", "live_xdr")
-    monkeypatch.setenv("DISPOSITION_ADAPTER_KIND", "http")
-    monkeypatch.setenv("LLM_MODE", "openai_compatible")
-    monkeypatch.setenv("EMBEDDING_MODE", "remote")
-    monkeypatch.setenv("SIMULATION_ENABLED", "false")
-    monkeypatch.setenv("TRUSTED_AUTH_PROXY_ENABLED", "false")
-    monkeypatch.setenv("SOCKETIO_CORS_ALLOWED_ORIGINS", "https://app.example")
+    apply_production_env(monkeypatch)
     # ISSUE-217: a non-empty DEV_AUTH_TOKENS is itself a production
     # fail-closed violation, so clear it to exercise the auth-layer gate here.
+    monkeypatch.setenv("TRUSTED_AUTH_PROXY_ENABLED", "false")
     monkeypatch.setenv("DEV_AUTH_TOKENS", "")
     get_settings.cache_clear()
     resp = client.get("/api/v1/events", headers=_hdr("admin"))
@@ -268,16 +259,8 @@ def test_dev_token_rejected_when_app_env_has_surrounding_whitespace(
     Settings.production_fail_closed_violations, so a padded APP_ENV cannot
     silently re-enable the DEV_AUTH_TOKENS path.
     """
-    monkeypatch.setenv("APP_ENV", "  production  ")
-    monkeypatch.setenv("SOURCE_MODE", "live_edr")
-    monkeypatch.setenv("TOOL_MODE", "live")
-    monkeypatch.setenv("DISPOSITION_MODE", "live_xdr")
-    monkeypatch.setenv("DISPOSITION_ADAPTER_KIND", "http")
-    monkeypatch.setenv("LLM_MODE", "openai_compatible")
-    monkeypatch.setenv("EMBEDDING_MODE", "remote")
-    monkeypatch.setenv("SIMULATION_ENABLED", "false")
+    apply_production_env(monkeypatch, APP_ENV="  production  ")
     monkeypatch.setenv("TRUSTED_AUTH_PROXY_ENABLED", "false")
-    monkeypatch.setenv("SOCKETIO_CORS_ALLOWED_ORIGINS", "https://app.example")
     monkeypatch.setenv("DEV_AUTH_TOKENS", "")
     get_settings.cache_clear()
     resp = client.get("/api/v1/events", headers=_hdr("admin"))
@@ -295,15 +278,8 @@ def test_is_production_strips_surrounding_whitespace(
     """
     from app.core import auth
 
-    monkeypatch.setenv("SOURCE_MODE", "live_edr")
-    monkeypatch.setenv("TOOL_MODE", "live")
-    monkeypatch.setenv("DISPOSITION_MODE", "live_xdr")
-    monkeypatch.setenv("DISPOSITION_ADAPTER_KIND", "http")
-    monkeypatch.setenv("LLM_MODE", "openai_compatible")
-    monkeypatch.setenv("EMBEDDING_MODE", "remote")
-    monkeypatch.setenv("SIMULATION_ENABLED", "false")
+    apply_production_env(monkeypatch)
     monkeypatch.setenv("TRUSTED_AUTH_PROXY_ENABLED", "false")
-    monkeypatch.setenv("SOCKETIO_CORS_ALLOWED_ORIGINS", "https://app.example")
     # The autouse _dev_auth fixture sets DEV_AUTH_TOKENS, which is itself a
     # production fail-closed violation; clear it to reach the production cases.
     monkeypatch.setenv("DEV_AUTH_TOKENS", "")

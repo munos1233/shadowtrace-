@@ -28,6 +28,7 @@ from app.core.errors import LLMError
 from app.core.llm.base import InMemoryLLMCallAuditRecorder
 from app.core.llm.mock_client import MockLLMClient
 from app.models.knowledge import KnowledgeChunk, RetrievalResult, RetrievedChunk
+from tests.test_support.production_settings import production_settings
 from app.rag.citation_tracer import CitationTracer
 from app.rag.context import RetrievalContext
 from app.rag.hybrid_retriever import HybridRetriever
@@ -612,16 +613,7 @@ class TestPipelineDegradation:
 
     @pytest.mark.asyncio
     async def test_rejects_release_pinned_kb_without_plan_in_production(self) -> None:
-        settings = Settings(
-            app_env="production",
-            simulation_enabled=False,
-            source_mode="live_xdr",
-            tool_mode="live",
-            disposition_mode="live_xdr",
-            disposition_adapter_kind="live",
-            llm_mode="openai_compatible",
-            embedding_mode="remote",
-        )
+        settings = production_settings()
         pipeline = RetrievalPipeline(
             rewriter=QueryRewriter(
                 MockLLMClient(audit_recorder=InMemoryLLMCallAuditRecorder()),
@@ -643,16 +635,7 @@ class TestPipelineDegradation:
     @pytest.mark.asyncio
     async def test_allows_case_kb_without_plan_in_production(self) -> None:
         chunks = [_make_chunk("chk-fp", "fp_case_kb", "benign admin tool", score=0.9)]
-        settings = Settings(
-            app_env="production",
-            simulation_enabled=False,
-            source_mode="live_xdr",
-            tool_mode="live",
-            disposition_mode="live_xdr",
-            disposition_adapter_kind="live",
-            llm_mode="openai_compatible",
-            embedding_mode="remote",
-        )
+        settings = production_settings()
         pipeline = RetrievalPipeline(
             rewriter=QueryRewriter(
                 MockLLMClient(audit_recorder=InMemoryLLMCallAuditRecorder()),
