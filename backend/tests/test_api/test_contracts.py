@@ -392,6 +392,7 @@ class _MockDispositionSyncService:
                 if status is WritebackStatus.CONFIRMED
                 else None
             ),
+            simulated=True,
         )
         from app.models.disposition import DispositionOutboxRecord
 
@@ -926,7 +927,9 @@ def test_disposition_command_outbound_keys_are_allowlisted() -> None:
 def test_writeback_response_never_exposes_raw_result(client: TestClient) -> None:
     resp = client.get("/api/v1/writebacks/wbk-0a1b2c3d", headers=_hdr("analyst"))
     assert resp.status_code == 200
-    assert "raw_result" not in resp.json()
+    body = resp.json()
+    assert "raw_result" not in body
+    assert body["simulated"] is True
 
 
 def test_execution_job_partial_success(client: TestClient) -> None:
