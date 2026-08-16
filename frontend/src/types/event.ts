@@ -843,6 +843,7 @@ export interface WritebackResponse {
   status: WritebackStatus;
   confirmation_evidence: string | null;
   evidence_tier: "strong" | "medium" | "weak" | null;
+  simulated: boolean;
   provider_code: string | null;
   message_code: string | null;
   target_results: TargetWritebackResult[];

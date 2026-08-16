@@ -76,7 +76,7 @@ function contextWritebacks(detail: EventDetailResponse | null): EventWriteback[]
   );
 }
 
-function mergeWritebacks(
+export function mergeWritebacks(
   contextItems: EventWriteback[],
   apiItems: WritebackResponse[],
 ): EventWriteback[] {
@@ -88,7 +88,12 @@ function mergeWritebacks(
     }
   }
   for (const item of apiItems) {
-    merged.set(item.writeback_id, { ...merged.get(item.writeback_id), ...item });
+    const existing = merged.get(item.writeback_id);
+    merged.set(item.writeback_id, {
+      ...existing,
+      ...item,
+      simulated: item.simulated ?? existing?.simulated ?? false,
+    });
   }
   return [...merged.values()];
 }
