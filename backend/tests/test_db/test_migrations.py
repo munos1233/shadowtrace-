@@ -66,6 +66,7 @@ CORE_TABLES = {
     "feature_snapshot",
     "graph_edge",
     "graph_node",
+    "graph_resume_intent",
     "investigation_intent",
     "knowledge_chunk",
     "knowledge_release",

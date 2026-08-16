@@ -42,6 +42,7 @@ EXPECTED_ENUM_NAMES = {
     "TargetWritebackStatus",
     "ExecutionOwner",
     "ExecutionSubstate",
+    "GraphResumeIntentStatus",
     "ResponsePhaseState",
     "NextRecommendedAction",
     "DispositionIntentKind",
@@ -190,6 +191,15 @@ EXPECTED_ENUM_VALUES: dict[str, set[str]] = {
         "waiting_execution",
         "waiting_writeback",
         "manual_resolution",
+    },
+    "GraphResumeIntentStatus": {
+        "pending",
+        "claimed",
+        "started",
+        "terminal",
+        "skipped",
+        "retry",
+        "dead",
     },
     "ResponsePhaseState": {
         "not_started",

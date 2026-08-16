@@ -113,6 +113,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "circuit_open": ErrorCategory.TRANSIENT,
     "unsupported": ErrorCategory.PERMANENT,
     "capacity_limit_exceeded": ErrorCategory.TOOL,
+    "correlation_mismatch": ErrorCategory.TOOL,
     "react_action_denied": ErrorCategory.GUARDRAIL,
     # Writeback / disposition (step 8)
     "permission_denied": ErrorCategory.PERMANENT,
@@ -187,6 +188,8 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCategory] = {
     "replan_count_exceeded": ErrorCategory.PERMANENT,
     "writeback_recovery_exhausted": ErrorCategory.PERMANENT,
     "writeback_manual_resolution_required": ErrorCategory.PERMANENT,
+    # SuperAgent plan execution (ISSUE-305)
+    "plan_step_not_executable": ErrorCategory.PERMANENT,
     # Agent task ledger (ISSUE-133)
     "agent_task_denied": ErrorCategory.GUARDRAIL,
     "agent_task_unavailable": ErrorCategory.TRANSIENT,

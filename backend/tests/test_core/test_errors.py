@@ -97,6 +97,9 @@ _REQUIRED_DOCUMENTED_CODES: frozenset[str] = frozenset(
         "report_quality_conflict",
         "report_prerequisites_missing",
         "report_prerequisites_invalid",
+        # ISSUE-277 / ISSUE-305 — graph resume + non-executable plan steps
+        "correlation_mismatch",
+        "plan_step_not_executable",
     }
 )
 
@@ -241,6 +244,8 @@ def test_writeback_retry_rules() -> None:
         ("report_quality_conflict", ErrorCategory.PERMANENT),
         ("report_prerequisites_missing", ErrorCategory.USER_INPUT),
         ("report_prerequisites_invalid", ErrorCategory.USER_INPUT),
+        ("correlation_mismatch", ErrorCategory.TOOL),
+        ("plan_step_not_executable", ErrorCategory.PERMANENT),
     ],
 )
 def test_report_error_codes_are_registered(
