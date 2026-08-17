@@ -20,7 +20,11 @@ from app.agents.prompts.response_prompt import (
     ResponsePlanLLMResponse,
     build_response_plan_messages,
 )
-from app.agents.rules.default_response_rules import ResponseRuleAction, get_rule_actions
+from app.agents.rules.default_response_rules import (
+    ResponseRuleAction,
+    get_rule_actions,
+    union_rule_actions,
+)
 from app.agents.rules.response_plan_quality_gate import (
     CONTAINMENT_TOOLS,
     apply_containment_quality_gate,
@@ -809,9 +813,13 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             not any(item.tool_name in CONTAINMENT_TOOLS for item in rule_actions)
             or (event_type is EventType.DATA_EXFILTRATION and severity is Severity.MEDIUM)
         ):
-            # DATA_EXFIL MEDIUM stays conservative (no L3 on the default plan).
-            # Coverage / ticket-only fallback still needs isolate_host + disable_account.
-            rule_actions = get_rule_actions(event_type, Severity.HIGH)
+            # DATA_EXFIL MEDIUM stays conservative on the default plan (no L3).
+            # Coverage / ticket-only fallback still needs isolate_host + disable_account
+            # without dropping MEDIUM network IOC tools (block_domain).
+            rule_actions = union_rule_actions(
+                rule_actions,
+                get_rule_actions(event_type, Severity.HIGH),
+            )
         rule_fallback_pool = policy_filter.filter_candidates(
             expand_rule_candidates(rule_actions, entities),
         )

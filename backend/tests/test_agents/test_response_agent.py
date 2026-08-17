@@ -26,7 +26,11 @@ from app.agents.response_agent import (
     generate_response_plan_id,
     resolve_entity_targets,
 )
-from app.agents.rules.default_response_rules import DEFAULT_RESPONSE_RULES, get_rule_actions
+from app.agents.rules.default_response_rules import (
+    DEFAULT_RESPONSE_RULES,
+    get_rule_actions,
+    union_rule_actions,
+)
 from app.agents.rules.response_plan_quality_gate import IDENTITY_CONTAINMENT_TOOLS
 from app.core.llm.base import InMemoryLLMCallAuditRecorder
 from app.core.llm.mock_client import MockLLMClient
@@ -805,6 +809,7 @@ def test_data_exfiltration_high_rules_include_required_tools() -> None:
     assert "disable_account" in names
     assert "isolate_host" in names
     assert "block_ip" in names
+    assert "block_domain" in names
     assert "create_ticket" in names
     assert "notify_security_team" in names
 
@@ -817,6 +822,15 @@ def test_data_exfiltration_medium_rules_omit_l3() -> None:
     assert names == {"block_ip", "block_domain", "create_ticket"}
     assert "isolate_host" not in names
     assert "disable_account" not in names
+
+
+def test_union_rule_actions_keeps_medium_block_domain() -> None:
+    medium = get_rule_actions(EventType.DATA_EXFILTRATION, Severity.MEDIUM)
+    high = get_rule_actions(EventType.DATA_EXFILTRATION, Severity.HIGH)
+    names = {item.tool_name for item in union_rule_actions(medium, high)}
+    assert "block_domain" in names
+    assert "isolate_host" in names
+    assert "disable_account" in names
 
 
 def test_other_low_medium_never_include_destructive_tools() -> None:
@@ -2206,6 +2220,13 @@ def _exfil_entity_set() -> EntitySet:
             HostEntity(entity_id="host-wks", hostname="WKS-DATA-031", source_refs=[_ref()]),
             HostEntity(entity_id="host-db", hostname="SRV-DB-STG-02", source_refs=[_ref()]),
         ],
+        domains=[
+            DomainEntity(
+                entity_id="dom-exfil",
+                fqdn="storage-sync-cdn.example",
+                source_refs=[_ref()],
+            ),
+        ],
     )
 
 
@@ -2240,6 +2261,8 @@ def test_expand_rule_candidates_block_ip_data_exfil_high_excludes_internal() -> 
     assert "disable_account" in {item.tool_name for item in candidates}
     isolate_targets = {item.target for item in candidates if item.tool_name == "isolate_host"}
     assert isolate_targets == {"WKS-DATA-031", "SRV-DB-STG-02"}
+    domain_targets = {item.target for item in candidates if item.tool_name == "block_domain"}
+    assert domain_targets == {"storage-sync-cdn.example"}
 
 
 @pytest.mark.asyncio
@@ -2266,6 +2289,10 @@ async def test_rule_fallback_data_exfil_high_block_ip_external_dest_only() -> No
     }
     assert isolate_targets == {"WKS-DATA-031", "SRV-DB-STG-02"}
     assert "BACKUP-SRV-01" not in isolate_targets
+    domain_targets = {
+        action.target for action in plan.actions if action.tool_name == "block_domain"
+    }
+    assert domain_targets == {"storage-sync-cdn.example"}
 
 
 @pytest.mark.asyncio
