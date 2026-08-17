@@ -28,6 +28,7 @@ make demo-full-loop
 # 等价：EVAL_REQUIRE_CLOSED=1 make eval-full-loop
 # 单场景：EVAL_SCENARIO=insider_data_exfiltration make demo-full-loop
 # compat 剖面（非 strict CLOSED）：make eval-full-loop
+# Live 研判卡（与 CLOSED 管道卡拆开）：EVAL_REQUIRE_LLM_QUALITY=1 make eval-full-loop
 ```
 
 分步剖面（`bootstrap-demo-full-loop` 会停在 `waiting_approval`，需脚本审批后 `eval-full-loop` 收口）：
@@ -162,7 +163,7 @@ make smoke-demo                # exit 0 并打印 URL/端口表
 | `make smoke-demo` | 分析剖面 compat 冒烟：bootstrap 检查 + worker + scheduler + OTEL + **compat 终态门禁**（非 CLOSED） |
 | `make demo-full-loop` | 单场景 CLOSED 金路径（`eval-full-loop` + demo guard） |
 | `make down-demo` | 停止 demo 栈（含 worker/scheduler/observability）——**up-demo 后必用** |
-| `make eval-full-loop` | **金标全闭环评测**（ISSUE-256）：mock-xdr seed → full_loop → **脚本审批**；默认 compat，strict CLOSED 需 `EVAL_REQUIRE_CLOSED=1` 或 `demo-full-loop` |
+| `make eval-full-loop` | **金标全闭环评测**（ISSUE-256）：mock-xdr seed → full_loop → **脚本审批**；默认 compat，strict CLOSED 需 `EVAL_REQUIRE_CLOSED=1` 或 `demo-full-loop`；Live 研判卡需 `EVAL_REQUIRE_LLM_QUALITY=1`（与 `--require-closed` 拆开） |
 | `make eval-full-loop-matrix` | **官方动态评测 matrix**（ISSUE-301）：每场景独立 Compose project + fresh volumes，可选 strict CLOSED |
 | `make up-observability` | 仅启动 OTEL/Prometheus/Grafana（不含 app） |
 | `make down-observability` | 停止 observability 栈 |
@@ -249,6 +250,15 @@ Matrix 在容器内通过 `docker compose exec backend` 访问 `http://127.0.0.1
 评测 preflight（FP 场景）在 baseline 不可读或非零退出，并打印实际解析路径（`/api/v1/health` → `change_window_baseline.resolved_path`）。
 
 **不要把 baseline 修复误解为 full-loop early close**：graph 中 `route_after_fp_adjudication` 在 full-loop 下仍继续；FP 短闭环属于 `include_response_execution=false` 的 analysis-only profile。
+
+### 两张认证卡（ISSUE-350）
+
+- **管道卡（Mock / `--require-closed`）**：CLOSED + 报告壳 + 条件写回。LLM 可降级。CI `backend-closure-gates-mock`。绿 ≠ Agent 会研判。
+- **研判卡（Live / `--require-llm-quality`）**：按 `event_id` 查 `llm_call_log` 核心 prompt；全 timeout = FAIL。`generated_by=template` 对外泄 `confirmed_threat` = FAIL。禁止用 `/health` 60 分钟 `success_rate` 冒充本事件结论。接到 nightly / 发布 checklist，**不是**每个 PR。
+
+发布话术只允许在研判卡绿时说「Agent 会研判」。
+
+不要再开「给 scorecard 加 unscored 注解 / 再加一个 degraded_flag / 再加一个 eval profile」类 ISSUE，除非直接修上述洞。不要改 ISSUE-328 coverage 含 domain、不要让 `validate_closed_gate` 查 GT、不要让 scorecard 因 coverage GAP 变 FAIL、不要让 `--require-closed` 拒绝 `degraded_template`。
 
 `make eval-full-loop-matrix` 默认启用 `--profile-by-scenario`（`EVAL_MATRIX_PROFILE_BY_SCENARIO=1`；设 `0` 可关闭）：
 

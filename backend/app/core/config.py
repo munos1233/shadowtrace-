@@ -160,6 +160,15 @@ class Settings(BaseSettings):
     llm_probe_ttl_seconds: int = Field(default=60, alias="LLM_PROBE_TTL_SECONDS")
     llm_probe_method: str = Field(default="chat", alias="LLM_PROBE_METHOD")
     llm_required: bool = Field(default=False, alias="LLM_REQUIRED")
+    certification_card: str = Field(
+        default="",
+        alias="CERTIFICATION_CARD",
+        description=(
+            "Optional certification profile. ``live_reasoning`` treats empty "
+            "LLM response_plan candidates as llm failed (same as timeout). "
+            "Production SOC keeps the default empty / fail-open degradation."
+        ),
+    )
     triage_llm_event_type_fallback: bool = Field(
         default=False,
         alias="TRIAGE_LLM_EVENT_TYPE_FALLBACK",
@@ -770,3 +779,10 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return cached Settings singleton for FastAPI dependency injection."""
     return Settings()
+
+
+def live_reasoning_card_enabled(settings: Settings | None = None) -> bool:
+    """True when Live reasoning certification must treat empty LLM plans as failed."""
+    cfg = settings or get_settings()
+    card = (cfg.certification_card or "").strip().lower()
+    return bool(cfg.llm_required) or card == "live_reasoning"

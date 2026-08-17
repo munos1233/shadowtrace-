@@ -12,6 +12,7 @@
 make up-demo && make demo-full-loop
 # 或：EVAL_SCENARIO=insider_data_exfiltration make demo-full-loop
 # compat 剖面：make eval-full-loop（不含 strict CLOSED gate）
+# Live 研判卡：EVAL_REQUIRE_LLM_QUALITY=1 make eval-full-loop
 ```
 
 分步全闭环（与 `demo-full-loop` 等价剖面；`bootstrap-demo-full-loop` 会停在 `waiting_approval`）：

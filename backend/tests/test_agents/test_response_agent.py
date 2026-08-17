@@ -1165,6 +1165,73 @@ async def test_playbook_resolution_failure_llm_empty_uses_rule_fallback() -> Non
 
 
 @pytest.mark.asyncio
+async def test_live_reasoning_card_empty_candidates_logs_llm_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+    from app.core.errors import ValidationError as ShadowValidationError
+    from app.core.llm.base import LLMResponse
+    from app.models.playbook_release import PlaybookRef
+
+    monkeypatch.setenv("LLM_REQUIRED", "true")
+    get_settings.cache_clear()
+    try:
+        event_id = f"evt-{uuid4().hex[:8]}"
+        wm = _FakeWorkingMemory()
+        _seed_wm(wm, event_id, triage=_triage(event_type=EventType.DATA_EXFILTRATION))
+        ref = PlaybookRef.model_validate(_playbook_ref("pb-5a6b7c8d"))
+        wm.values[(event_id, "rag_output")] = {"playbook_refs": [ref.model_dump(mode="json")]}
+
+        class _RejectingReleaseService:
+            async def resolve_playbook_ref(
+                self, *_args: Any, **_kwargs: Any
+            ) -> tuple[Playbook, Any]:
+                raise ShadowValidationError(
+                    "playbook content hash mismatch",
+                    details={"reason": "content_hash_mismatch"},
+                )
+
+        class _EmptyCandidatesLLM:
+            async def chat(self, *args: Any, **kwargs: Any) -> Any:
+                import json
+
+                payload = {
+                    "actions": [
+                        {
+                            "tool_name": TERMINAL_DISPOSITION_TOOL,
+                            "target_type": "source_object",
+                            "target": "INC-001",
+                            "parameters": {},
+                            "reason": "disposition-only filtered from candidates",
+                        }
+                    ],
+                    "strategy_summary": "no containment proposed",
+                }
+                return LLMResponse(
+                    content=json.dumps(payload),
+                    model_name="mock",
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    total_tokens=2,
+                )
+
+        agent = ResponseAgent(
+            llm_client=_EmptyCandidatesLLM(),
+            working_memory=wm,
+            event_service=_FakeEventService(),
+            playbook_release_service=_RejectingReleaseService(),
+            capability_manifest=build_mock_capability_manifest(),
+        )
+        plan = await agent.execute(_agent_input(event_id))
+        assert plan.generated_by is ResponsePlanGeneratedBy.TEMPLATE
+        assert "llm failed" in plan.strategy_summary
+        assert "llm empty" not in plan.strategy_summary
+    finally:
+        monkeypatch.delenv("LLM_REQUIRED", raising=False)
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_playbook_resolution_failure_llm_schema_error_uses_rule_fallback() -> None:
     from app.core.errors import ValidationError as ShadowValidationError
     from app.core.llm.base import LLMResponse

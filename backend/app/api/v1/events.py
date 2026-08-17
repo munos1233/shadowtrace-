@@ -972,7 +972,8 @@ async def _schedule_investigation(
 
     if mode == "analysis_only" and include_response:
         raise ValidationError(
-            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only",
+            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only; "
+            "this HTTP path is not the CLOSED gold path",
             error_code="full_loop_unavailable",
             details={"orchestration_mode": mode},
         )
@@ -1317,7 +1318,8 @@ async def investigate_event(
     orchestration_mode = (settings.orchestration_mode or "graph").strip().lower()
     if orchestration_mode == "analysis_only" and include_response:
         raise ValidationError(
-            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only",
+            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only; "
+            "this HTTP path is not the CLOSED gold path",
             error_code="full_loop_unavailable",
             details={"orchestration_mode": orchestration_mode},
         )

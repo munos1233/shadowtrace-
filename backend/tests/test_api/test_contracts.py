@@ -836,6 +836,8 @@ def test_investigate_request_defaults_defer_response_execution() -> None:
     assert req.force_replan is False
     assert req.include_response_execution is False
     assert req.generate_report is True
+    description = s.InvestigateRequest.model_fields["include_response_execution"].description or ""
+    assert "CLOSED gold path" in description
 
 
 def test_investigate_request_can_opt_out_of_report_generation() -> None:

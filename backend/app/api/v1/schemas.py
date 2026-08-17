@@ -89,9 +89,15 @@ class EventCreateRequest(_StrictRequest):
 
 class InvestigateRequest(_StrictRequest):
     force_replan: bool = False
-    # When true, continue past analysis into ResponseAgent / approval (ISSUE-077 e2e).
-    # Default false keeps ISSUE-566 HTTP investigate analysis-complete at report.
-    include_response_execution: bool = False
+    include_response_execution: bool = Field(
+        default=False,
+        description=(
+            "When true, continue into ResponseAgent / approval / writeback. "
+            "Default false is analysis-only and is not the CLOSED gold path "
+            "(make up-demo + include_response_execution=true + Celery + "
+            "scenario-stamped ingest)."
+        ),
+    )
     # ISSUE-204: API default True for backward compat; product UI/auto paths pass false.
     generate_report: bool = True
 

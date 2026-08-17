@@ -11,7 +11,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from app.core.config import Settings, TaskMode, is_mock_disposition_mode, is_mock_source_mode
+from app.core.config import (
+    Settings,
+    TaskMode,
+    is_mock_disposition_mode,
+    is_mock_source_mode,
+    live_reasoning_card_enabled,
+)
 from app.core.errors import ConfigurationError
 from tests.test_support.production_settings import production_settings_kwargs
 
@@ -365,3 +371,14 @@ def test_auto_response_rejects_not_mock_disposition_mode_at_construction() -> No
             TOOL_MODE="mock",
             DISPOSITION_MODE="not_mock",
         )
+
+
+def test_live_reasoning_card_enabled_by_llm_required_or_card_name() -> None:
+    assert live_reasoning_card_enabled(Settings(LLM_REQUIRED=False)) is False
+    assert live_reasoning_card_enabled(Settings(LLM_REQUIRED=True)) is True
+    assert (
+        live_reasoning_card_enabled(
+            Settings(LLM_REQUIRED=False, CERTIFICATION_CARD="live_reasoning")
+        )
+        is True
+    )

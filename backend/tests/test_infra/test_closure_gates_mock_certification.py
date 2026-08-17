@@ -63,6 +63,7 @@ def test_docs_do_not_treat_closure_gates_green_as_containment_proof() -> None:
     assert "job id `backend-closure-gates`" in readme
     assert "Mock plumbing" in readme
     assert "Not a PR gate" in readme
+    assert "--require-llm-quality" in readme
     assert "-m adversarial_audit" in readme and "-o addopts=" in readme
     assert "Local: default adversarial pytest" not in readme
     assert "llm_mode" in readme and "certification_card" in readme and "`summary`" in readme

@@ -117,7 +117,8 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@localhost:5432/shadowtrace
       REDIS_URL: redis://localhost:6379/0
-      # ISSUE-350: pin Mock LLM. Live glm is a separate reasoning card (nightly/manual).
+      # ISSUE-350: pin Mock LLM. Live glm is a separate reasoning card (nightly/manual
+      # via EVAL_REQUIRE_LLM_QUALITY=1 / --require-llm-quality; not this PR job).
       LLM_MODE: mock
       # ISSUE-347: adversarial closure profile — scorecard visibility, not P0 blocking.
       OUTPUT_QUALITY_BLOCKING: "false"

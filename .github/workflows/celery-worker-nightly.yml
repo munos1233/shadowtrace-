@@ -1,5 +1,9 @@
 name: celery-worker-nightly
 
+# Live reasoning card (ISSUE-350) is nightly/manual, not this job:
+#   LLM_MODE=openai_compatible EVAL_REQUIRE_LLM_QUALITY=1 make eval-full-loop
+# Do not treat GET /health 60min success_rate as that card.
+
 on:
   schedule:
     - cron: "0 2 * * *"

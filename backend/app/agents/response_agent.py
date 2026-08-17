@@ -33,6 +33,7 @@ from app.agents.rules.response_plan_quality_gate import (
     evidence_blocks_high_impact_actions,
     requires_threat_aligned_containment,
 )
+from app.core.config import live_reasoning_card_enabled
 from app.core.errors import LLMError
 from app.core.errors import ValidationError as ShadowValidationError
 from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
@@ -1030,6 +1031,11 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
                         llm_candidates,
                         ResponsePlanGeneratedBy.LLM,
                         summary[:500],
+                    )
+                if live_reasoning_card_enabled():
+                    raise LLMError(
+                        "response_plan LLM returned empty candidates",
+                        details={"event_id": input.event_id},
                     )
             except SoftTimeLimitExceeded:
                 raise

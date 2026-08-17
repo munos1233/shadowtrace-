@@ -122,13 +122,14 @@ endif
 EVAL_MAX_EVENTS ?= 1
 EVAL_DECISION ?= approve
 EVAL_REQUIRE_CLOSED ?=
+EVAL_REQUIRE_LLM_QUALITY ?=
 BOOTSTRAP_AUTH_TOKEN ?= bootstrap-token
 BOOTSTRAP_GENERATE_REPORT ?= false
 BOOTSTRAP_INCLUDE_RESPONSE ?= false
 eval-full-loop:
 	@echo "[eval-full-loop] gold fixture=seed_mock_xdr_and_ingest scenario=$(EVAL_SCENARIO)"
 	@echo "[eval-full-loop] scripted $(EVAL_DECISION) — never finish via APPROVAL_TIMEOUT"
-	@echo "[eval-full-loop] profile=$(if $(EVAL_REQUIRE_CLOSED),strict CLOSED,compat)"
+	@echo "[eval-full-loop] profile=$(if $(EVAL_REQUIRE_CLOSED),strict CLOSED,compat)$(if $(EVAL_REQUIRE_LLM_QUALITY), + live reasoning card,)"
 	COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	BACKEND_PORT="$(BACKEND_PORT)" \
 	python3 "$(CURDIR)/scripts/dynamic_eval_full_loop.py" \
@@ -138,7 +139,8 @@ eval-full-loop:
 		--token "$(BOOTSTRAP_AUTH_TOKEN)" \
 		--max-events "$(EVAL_MAX_EVENTS)" \
 		--decision "$(EVAL_DECISION)" \
-		$(if $(EVAL_REQUIRE_CLOSED),--require-closed,)
+		$(if $(EVAL_REQUIRE_CLOSED),--require-closed,) \
+		$(if $(EVAL_REQUIRE_LLM_QUALITY),--require-llm-quality,)
 
 # ---------------------------------------------------------------------------
 # ISSUE-301 dynamic-eval matrix (fresh Compose project + volumes per scenario)

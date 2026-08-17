@@ -149,6 +149,12 @@ def test_full_loop_refuses_require_closed_without_report(full_loop_mod) -> None:
         )
 
 
+def test_full_loop_parses_require_llm_quality(full_loop_mod) -> None:
+    args = full_loop_mod.parse_args(["--require-llm-quality", "--event-id", "evt-x"])
+    assert args.require_llm_quality is True
+    assert args.require_closed is False
+
+
 def test_assert_strict_closed_acceptance_requires_closed(full_loop_mod) -> None:
     class _Client:
         def get_json(self, path: str):
