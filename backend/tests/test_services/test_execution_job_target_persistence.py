@@ -33,13 +33,13 @@ from app.models.enums import (
     TargetExecutionStatus,
     WritebackReadiness,
 )
-from app.models.source import SourceReference
-from tests.test_support.db_isolation import truncate_business_tables
 from app.models.execution import ActionExecutionJob, TargetExecutionResult
+from app.models.source import SourceReference
 from app.providers.tools.mock_provider import MockToolProvider, MockToolProviderConfig
 from app.services.action_execution_service import DbExecutionJobStore
 from app.services.context_service import EventContextStore, event_summary_from_security_event
 from app.services.execution_job_persistence import load_target_results_for_job
+from tests.test_support.db_isolation import truncate_business_tables
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 DATABASE_URL = os.environ.get(
