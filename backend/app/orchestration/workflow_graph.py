@@ -2213,6 +2213,27 @@ def build_investigation_graph(
                 event_status=EventStatus.VERIFYING,
             )
             update["execution_substate"] = ExecutionSubstate.MANUAL_RESOLUTION.value
+        elif verification_result.overall_status is VerificationOverallStatus.FAILED:
+            # Required + unresolved disposition: fail closed instead of
+            # REPORTING/CLOSED without writeback, and instead of looping VERIFYING.
+            try:
+                status = await _transition_status(
+                    services,
+                    state,
+                    EventStatus.FAILED,
+                    reason="investigation:disposition_unresolved",
+                )
+            except InvalidStateTransitionError as exc:
+                if not (exc.current is EventStatus.FAILED and exc.target is EventStatus.FAILED):
+                    raise
+                status = cast(InvestigationState, {"event_status": EventStatus.FAILED.value})
+            return _patch_state(
+                _trace(NODE_VERIFY),
+                plan_patch,
+                status,
+                update,
+                {"halted": True, "event_status": EventStatus.FAILED.value},
+            )
 
         return _patch_state(_trace(NODE_VERIFY), plan_patch, update)
 

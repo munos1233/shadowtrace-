@@ -77,6 +77,28 @@ class LLMTimeoutError(LLMError):
     default_retryable = False
 
 
+_EVENT_LLM_UNAVAILABLE: dict[str, str] = {}
+
+
+def mark_event_llm_unavailable(event_id: str, reason: str = "llm_timeout") -> None:
+    """Record that this event already hit a provider timeout (skip later LLM waits)."""
+    trimmed = (event_id or "").strip()
+    if trimmed:
+        _EVENT_LLM_UNAVAILABLE[trimmed] = reason
+
+
+def event_llm_unavailable_reason(event_id: str) -> str | None:
+    return _EVENT_LLM_UNAVAILABLE.get((event_id or "").strip())
+
+
+def clear_event_llm_unavailable(event_id: str | None = None) -> None:
+    """Test helper: clear one event or the whole process-local skip map."""
+    if event_id is None:
+        _EVENT_LLM_UNAVAILABLE.clear()
+        return
+    _EVENT_LLM_UNAVAILABLE.pop((event_id or "").strip(), None)
+
+
 class LLMAuthError(LLMError):
     default_error_code = "llm_auth_error"
     default_retryable = False
@@ -448,6 +470,24 @@ class BaseLLMClient(ABC):
         del scenario_id  # Used by MockLLMClient; never inferred from prompt content.
         chat_started = time.perf_counter()
         self._validate_context(event_id, agent_name, prompt_key, messages)
+        skip_reason = event_llm_unavailable_reason(event_id)
+        if skip_reason is not None:
+            await self._record_audit(
+                LLMCallAudit(
+                    event_id=event_id,
+                    agent_name=agent_name,
+                    prompt_key=prompt_key,
+                    model_name=self.primary_model,
+                    latency_ms=0,
+                    status="llm_timeout",
+                    error_class="timeout",
+                    error_detail="llm_unavailable_short_circuit",
+                )
+            )
+            raise LLMTimeoutError(
+                "LLM skipped after prior timeout on this event",
+                details={"event_id": event_id, "reason": skip_reason, "short_circuit": True},
+            )
         require_json = json_mode or response_model is not None
         prepared_source = ensure_json_mode_messages(messages) if require_json else list(messages)
         prepared = self._fit_messages(prepared_source)
@@ -705,6 +745,8 @@ class BaseLLMClient(ABC):
                     error.__cause__ = exc
 
             await _persist_attempt_audit()
+            if isinstance(error, LLMTimeoutError) or status == "llm_timeout":
+                mark_event_llm_unavailable(event_id, "llm_timeout")
             if error is not None:
                 raise error
             assert raw is not None
@@ -923,8 +965,11 @@ __all__ = [
     "SQLAlchemyLLMCallAuditRecorder",
     "bump_max_tokens",
     "classify_llm_call_failure",
+    "clear_event_llm_unavailable",
     "default_golden_root",
     "ensure_json_mode_messages",
     "estimate_tokens",
+    "event_llm_unavailable_reason",
+    "mark_event_llm_unavailable",
     "sanitize_llm_error_detail",
 ]

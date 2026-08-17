@@ -1879,6 +1879,39 @@ class TestRegressionShouldFix:
         ]
         assert deferred_rows[0]["detail"] == "deferred_pending_activation"
 
+    async def test_disposition_unresolved_fails_instead_of_verifying_hold(self):
+        """Required + unresolved disposition must FAIL, not loop VERIFYING."""
+        deferred = _action(
+            tool_name=TERMINAL_DISPOSITION_TOOL,
+            action_name="terminal",
+            execution_phase=ActionExecutionPhase.POST_VERIFY,
+            status=ActionStatus.APPROVED,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+            writeback_required=True,
+        )
+        ed_svc = FakeEventDispositionService(
+            activated=False,
+            skipped_reason="disposition_unresolved",
+        )
+        agent = VerifyAgent(
+            working_memory=FakeWorkingMemory(),
+            trace_service=FakeTraceService(),
+            event_disposition_service=ed_svc,
+        )
+        agent._load_execution_state = AsyncMock(  # type: ignore[method-assign]
+            return_value=([deferred], {}, {})
+        )
+        agent._load_disposition_policy = AsyncMock(  # type: ignore[method-assign]
+            return_value=DispositionPolicy.REQUIRED,
+        )
+
+        result = await agent.execute(_input(actions=[deferred]))
+
+        assert result.overall_status is VerificationOverallStatus.FAILED
+        assert result.need_manual_resolution is False
+        assert result.need_writeback_recovery is False
+        assert result.need_action_replan is False
+
     async def test_finalize_failure_during_exception_handling(self):
         """_finalize_verification_action failure → logged, not swallowed.
 

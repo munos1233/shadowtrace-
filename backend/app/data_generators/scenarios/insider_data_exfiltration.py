@@ -271,6 +271,7 @@ def build_insider_data_exfiltration(
             "dst_ip": EXFIL_IP,
             "domain": EXFIL_DOMAIN,
             "risk_score": 92,
+            "scenario": SCENARIO_ID,
         },
     )
 

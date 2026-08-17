@@ -25,7 +25,8 @@
       "normalized": {
         "account": "zhangsan",
         "hostname": "PC-FIN-023",
-        "risk_score": 92
+        "risk_score": 92,
+        "scenario": "insider_data_exfiltration"
       },
       "title": "Finance endpoint suspected data exfiltration",
       "level": "critical",

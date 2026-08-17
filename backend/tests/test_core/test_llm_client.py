@@ -26,6 +26,7 @@ from app.core.llm.base import (
     SQLAlchemyLLMCallAuditRecorder,
     bump_max_tokens,
     classify_llm_call_failure,
+    clear_event_llm_unavailable,
     ensure_json_mode_messages,
     sanitize_llm_error_detail,
 )
@@ -73,6 +74,7 @@ def _client(
     fallback_models: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> OpenAICompatibleLLMClient:
+    clear_event_llm_unavailable()
     return OpenAICompatibleLLMClient(
         base_url="https://llm.example/v1",
         api_key="test-key",
@@ -496,6 +498,38 @@ async def test_primary_timeout_does_not_retry_fallback() -> None:
     assert [(entry.model_name, entry.status, entry.fallback_level) for entry in audit.entries] == [
         ("primary-model", "llm_timeout", 0),
     ]
+
+
+@pytest.mark.asyncio
+async def test_event_timeout_short_circuits_later_prompts() -> None:
+    audit = InMemoryLLMCallAuditRecorder()
+
+    with respx.mock(base_url="https://llm.example/v1") as router:
+        route = router.post("/chat/completions")
+        route.side_effect = httpx.ReadTimeout("primary timed out")
+        async with httpx.AsyncClient(base_url="https://llm.example/v1") as http_client:
+            client = _client(http_client, audit=audit)
+            with pytest.raises(LLMTimeoutError):
+                await client.chat(
+                    MESSAGES,
+                    event_id="evt-2026-short-circuit",
+                    agent_name="PlannerAgent",
+                    prompt_key="plan_generate",
+                )
+            with pytest.raises(LLMTimeoutError) as second:
+                await client.chat(
+                    MESSAGES,
+                    event_id="evt-2026-short-circuit",
+                    agent_name="RiskAgent",
+                    prompt_key="risk_score",
+                )
+
+    assert "short_circuit" in (second.value.details or {})
+    assert route.call_count == 1
+    assert [entry.prompt_key for entry in audit.entries] == ["plan_generate", "risk_score"]
+    assert audit.entries[1].status == "llm_timeout"
+    assert audit.entries[1].error_detail == "llm_unavailable_short_circuit"
+    assert audit.entries[1].latency_ms == 0
 
 
 @pytest.mark.asyncio

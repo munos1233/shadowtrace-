@@ -349,6 +349,7 @@ def build_system_scenario(
             "event_type": spec.event_type,
             "risk_score": spec.risk_score,
             "description": spec.description,
+            "scenario": spec.scenario_id,
         },
     )
 

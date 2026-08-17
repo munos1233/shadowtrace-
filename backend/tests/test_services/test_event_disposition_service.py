@@ -726,7 +726,7 @@ async def test_idempotent_replay_returns_existing_ids(
 
 
 @pytest.mark.asyncio
-async def test_effect_not_ready_without_verification(
+async def test_disposition_unresolved_without_verification(
     session_factory: async_sessionmaker[AsyncSession],
     store: EventContextStore,
     mock_xdr_client: httpx.AsyncClient,
@@ -739,7 +739,27 @@ async def test_effect_not_ready_without_verification(
     await _insert_action(session_factory, event_id, deferred)
 
     result = await disposition_service.activate_and_submit(event_id, 1, "test-operator")
-    assert result.skipped_reason == "effect_not_ready"
+    assert result.skipped_reason == "disposition_unresolved"
+
+
+@pytest.mark.asyncio
+async def test_required_none_verdict_is_disposition_unresolved(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    disposition_service: EventDispositionService,
+    cleanup: None,
+) -> None:
+    event_id = await _create_event(
+        session_factory,
+        store,
+        final_verdict=FinalVerdict.NONE,
+    )
+    deferred = _deferred_action(event_id=event_id)
+    await _insert_action(session_factory, event_id, deferred)
+
+    result = await disposition_service.activate_and_submit(event_id, 1, "test-operator")
+    assert result.activated is False
+    assert result.skipped_reason == "disposition_unresolved"
 
 
 @pytest.mark.asyncio

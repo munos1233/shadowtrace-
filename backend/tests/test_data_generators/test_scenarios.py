@@ -58,6 +58,15 @@ def test_registry_contains_all_scenario_packs(scenario_id: str) -> None:
 
 
 @pytest.mark.parametrize("scenario_id", SCENARIO_IDS)
+def test_incident_normalized_stamps_scenario_id(scenario_id: str) -> None:
+    """ISSUE-199: ingest copies normalized.scenario so MockLLM skips default.json."""
+    scenario = build_scenario(scenario_id, seed=42)
+    assert scenario.incidents
+    for incident in scenario.incidents:
+        assert incident.normalized.get("scenario") == scenario_id
+
+
+@pytest.mark.parametrize("scenario_id", SCENARIO_IDS)
 def test_scenario_passes_framework_and_schema_validation(scenario_id: str) -> None:
     built = build_scenario(scenario_id, seed=42)
     # Round-trip through Pydantic (= schema) + referential consistency validator.
