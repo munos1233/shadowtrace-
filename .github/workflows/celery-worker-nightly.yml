@@ -60,6 +60,9 @@ jobs:
         working-directory: backend
         run: uv sync --frozen --extra dev
 
+      - name: Apply migrations
+        run: uv run --frozen python -m alembic upgrade head
+
       - name: ISSUE-117 Phase B redelivery matrix (unit/integration)
         # ISSUE-371: pyproject addopts excludes ``nightly``; -o addopts= is
         # required so test_run_investigation_non_eager_worker_forwards_generate_report
