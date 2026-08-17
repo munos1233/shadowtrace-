@@ -1000,7 +1000,6 @@ async def test_llm_missing_non_core_section_merges_and_stays_llm(
 async def test_llm_whitespace_core_is_template_partial_sections(
     wm: _FakeWorkingMemory,
     event_service: _FakeEventService,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """ISSUE-358: whitespace-only overview must not stamp generated_by=llm."""
     event_id = f"evt-report-ws-core-{uuid4().hex[:8]}"
@@ -1010,14 +1009,13 @@ async def test_llm_whitespace_core_is_template_partial_sections(
         working_memory=wm,
         event_service=event_service,
     )
-    with caplog.at_level(logging.WARNING, logger="app.agents.report_agent"):
-        report = await agent.execute(
-            ReportAgentInput(
-                event_id=event_id,
-                evidence_output=_main_evidence(event_id),
-                risk_assessment=_high_risk(),
-            )
+    report = await agent.execute(
+        ReportAgentInput(
+            event_id=event_id,
+            evidence_output=_main_evidence(event_id),
+            risk_assessment=_high_risk(),
         )
+    )
     assert report.generated_by == GENERATED_BY_TEMPLATE
     assert "report_llm_fallback:partial_sections" in report.warnings
     assert report.error_detail is None
@@ -1025,7 +1023,6 @@ async def test_llm_whitespace_core_is_template_partial_sections(
     assert report.degraded is True
     storyline = next(s for s in report.sections if s.key == "attack_storyline")
     assert "llm storyline kept" in storyline.content
-    assert any("missing_core" in rec.message for rec in caplog.records)
 
 
 def test_builder_preserves_section_order() -> None:

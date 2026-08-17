@@ -184,7 +184,6 @@ async def test_maybe_resume_manual_resolution_requires_intent_id(
     assert resume_calls == []
     assert scheduled == []
     assert any(
-        "failed to enqueue durable graph resume intent" in message
-        for message in warning_messages
+        "failed to enqueue durable graph resume intent" in message for message in warning_messages
     )
     assert AttributeError in warning_exc_types

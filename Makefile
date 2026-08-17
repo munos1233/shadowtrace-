@@ -42,6 +42,7 @@ COMPOSE_DEMO := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	PLAYBOOK_REQUIRED="$(DEMO_PLAYBOOK_REQUIRED)" \
 	SEED_PLAYBOOK_RELEASE=true \
 	TASK_MODE=celery \
+	OBS_CONFIG_DIR="$(CURDIR)/infra/observability" \
 	docker compose --project-name "$(COMPOSE_PROJECT_NAME)" \
 	-f "$(COMPOSE_FILE)" -f "$(OBS_COMPOSE_FILE)" \
 	--profile demo
