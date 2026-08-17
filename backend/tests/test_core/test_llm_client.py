@@ -28,6 +28,8 @@ from app.core.llm.base import (
     classify_llm_call_failure,
     clear_event_llm_unavailable,
     ensure_json_mode_messages,
+    event_llm_unavailable_reason,
+    mark_event_llm_unavailable,
     sanitize_llm_error_detail,
 )
 from app.core.llm.factory import get_llm_client
@@ -530,6 +532,58 @@ async def test_event_timeout_short_circuits_later_prompts() -> None:
     assert audit.entries[1].status == "llm_timeout"
     assert audit.entries[1].error_detail == "llm_unavailable_short_circuit"
     assert audit.entries[1].latency_ms == 0
+
+
+def test_event_llm_unavailable_map_is_bounded_and_clearable() -> None:
+    from app.core.llm.base import _MAX_EVENT_LLM_UNAVAILABLE  # noqa: SLF001
+
+    clear_event_llm_unavailable()
+    try:
+        mark_event_llm_unavailable("evt-old")
+        for index in range(_MAX_EVENT_LLM_UNAVAILABLE):
+            mark_event_llm_unavailable(f"evt-bound-{index}")
+        assert event_llm_unavailable_reason("evt-old") is None
+        assert event_llm_unavailable_reason(f"evt-bound-{_MAX_EVENT_LLM_UNAVAILABLE - 1}") == (
+            "llm_timeout"
+        )
+        clear_event_llm_unavailable("evt-bound-0")
+        assert event_llm_unavailable_reason("evt-bound-0") is None
+    finally:
+        clear_event_llm_unavailable()
+
+
+@pytest.mark.asyncio
+async def test_clearing_event_timeout_allows_later_chat() -> None:
+    audit = InMemoryLLMCallAuditRecorder()
+
+    with respx.mock(base_url="https://llm.example/v1") as router:
+        route = router.post("/chat/completions")
+        route.side_effect = [
+            httpx.ReadTimeout("primary timed out"),
+            httpx.Response(
+                200,
+                json=_response("recovered answer", model="primary-model", prompt_tokens=4),
+            ),
+        ]
+        async with httpx.AsyncClient(base_url="https://llm.example/v1") as http_client:
+            client = _client(http_client, audit=audit)
+            with pytest.raises(LLMTimeoutError):
+                await client.chat(
+                    MESSAGES,
+                    event_id="evt-2026-retry-after-timeout",
+                    agent_name="PlannerAgent",
+                    prompt_key="plan_generate",
+                )
+            clear_event_llm_unavailable("evt-2026-retry-after-timeout")
+            response = await client.chat(
+                MESSAGES,
+                event_id="evt-2026-retry-after-timeout",
+                agent_name="RiskAgent",
+                prompt_key="risk_score",
+            )
+
+    assert response.content == "recovered answer"
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio

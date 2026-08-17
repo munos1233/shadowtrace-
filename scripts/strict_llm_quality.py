@@ -6,9 +6,13 @@ Independent of ``--require-closed`` (plumbing). Never consults GET /health
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from dynamic_eval_approve import DynamicEvalApiError, DynamicEvalClient, unwrap_event_detail_payload
+
+_GENERATED_BY_RE = re.compile(r"generated_by=([a-z_]+)", re.IGNORECASE)
+_RESPONSE_AGENT_NAMES = frozenset({"response_agent", "ResponseAgent"})
 
 CORE_PROMPT_KEYS = (
     "triage_extract",
@@ -78,6 +82,7 @@ def _scenario_from_event(event: dict[str, Any]) -> str | None:
 
 
 def _generated_by_from_event(event: dict[str, Any]) -> str | None:
+    """Best-effort snapshot lookup. API snapshots usually omit response_plan."""
     snapshot = event.get("event_context_snapshot")
     if isinstance(snapshot, dict):
         direct = snapshot.get("response_plan_generated_by")
@@ -89,6 +94,47 @@ def _generated_by_from_event(event: dict[str, Any]) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return None
+
+
+def _generated_by_token(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip().lower()
+    if trimmed in {"template", "llm"}:
+        return trimmed
+    return None
+
+
+def _generated_by_from_trace(entries: list[Any]) -> str | None:
+    """Read response_plan.generated_by from agent_execution titles/details.
+
+    GET /events/{id} snapshots are ISSUE-254 whitelisted and do not include
+    ``response_plan``. Decision-trace response_agent titles carry
+    ``generated_by=template|llm``.
+    """
+    found: str | None = None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        actor = str(entry.get("actor") or "")
+        detail = _llm_call_detail(entry)
+        agent_name = str(detail.get("agent_name") or actor)
+        if agent_name not in _RESPONSE_AGENT_NAMES and actor not in _RESPONSE_AGENT_NAMES:
+            continue
+        for candidate in (
+            detail.get("generated_by"),
+            _GENERATED_BY_RE.search(str(entry.get("title") or "")),
+            _GENERATED_BY_RE.search(str(detail.get("structured_conclusion") or "")),
+            _GENERATED_BY_RE.search(str(detail.get("brief") or "")),
+        ):
+            token = (
+                _generated_by_token(candidate.group(1))
+                if isinstance(candidate, re.Match)
+                else _generated_by_token(candidate)
+            )
+            if token:
+                found = token
+    return found
 
 
 def evaluate_llm_quality(
@@ -152,17 +198,21 @@ def evaluate_llm_quality(
 
     exfil_like = (event_type or "") in _EXFIL_EVENT_TYPES or (scenario_id or "") in _EXFIL_SCENARIOS
     generated_by = (response_plan_generated_by or "").strip().lower()
-    if (
-        generated_by == "template"
-        and (final_verdict or "") == "confirmed_threat"
-        and exfil_like
-    ):
-        raise RuntimeError(
-            "live reasoning card FAIL: response_plan.generated_by=template on "
-            f"confirmed_threat exfil event {event_id} "
-            f"(event_type={event_type!r} scenario={scenario_id!r}); "
-            "rule fallback is not Agent reasoning success"
-        )
+    if exfil_like and (final_verdict or "") == "confirmed_threat":
+        if not generated_by:
+            raise RuntimeError(
+                "live reasoning card FAIL: could not observe "
+                "response_plan.generated_by on confirmed_threat exfil event "
+                f"{event_id} (event_type={event_type!r} scenario={scenario_id!r}); "
+                "GET /events snapshot does not carry the plan — use decision-trace"
+            )
+        if generated_by == "template":
+            raise RuntimeError(
+                "live reasoning card FAIL: response_plan.generated_by=template on "
+                f"confirmed_threat exfil event {event_id} "
+                f"(event_type={event_type!r} scenario={scenario_id!r}); "
+                "rule fallback is not Agent reasoning success"
+            )
 
     summary["ok"] = True
     return summary
@@ -172,23 +222,22 @@ def _paginate_decision_trace(
     client: DynamicEvalClient,
     event_id: str,
     *,
+    entry_types: tuple[str, ...] = ("llm_call",),
     page_size: int = 200,
 ) -> list[dict[str, Any]]:
     page = 1
     collected: list[dict[str, Any]] = []
     total: int | None = None
+    type_qs = "&".join(f"entry_type={item}" for item in entry_types)
     while page <= 20:
         payload = client.get_json(
-            f"/api/v1/events/{event_id}/decision-trace"
-            f"?entry_type=llm_call&page={page}&page_size={page_size}"
+            f"/api/v1/events/{event_id}/decision-trace?{type_qs}&page={page}&page_size={page_size}"
         )
         if not isinstance(payload, dict):
             raise DynamicEvalApiError(f"unexpected decision-trace payload: {payload!r}")
         items = payload.get("entries")
         if not isinstance(items, list):
-            raise DynamicEvalApiError(
-                f"decision-trace entries missing for {event_id}: {payload!r}"
-            )
+            raise DynamicEvalApiError(f"decision-trace entries missing for {event_id}: {payload!r}")
         page_items = [item for item in items if isinstance(item, dict)]
         collected.extend(page_items)
         if total is None and payload.get("total") is not None:
@@ -217,13 +266,18 @@ def assert_llm_quality_acceptance(
     if not isinstance(payload, dict):
         raise DynamicEvalApiError(f"unexpected event detail payload: {payload!r}")
     event = unwrap_event_detail_payload(payload, expected_event_id=event_id)
-    trace_entries = _paginate_decision_trace(client, event_id)
+    trace_entries = _paginate_decision_trace(
+        client,
+        event_id,
+        entry_types=("llm_call", "agent_execution"),
+    )
     llm_calls = collect_llm_calls_from_trace(trace_entries)
+    generated_by = _generated_by_from_event(event) or _generated_by_from_trace(trace_entries)
     return evaluate_llm_quality(
         event_id=event_id,
         event_type=str(event.get("event_type") or "") or None,
         final_verdict=str(event.get("final_verdict") or "") or None,
         scenario_id=_scenario_from_event(event),
-        response_plan_generated_by=_generated_by_from_event(event),
+        response_plan_generated_by=generated_by,
         llm_calls=llm_calls,
     )

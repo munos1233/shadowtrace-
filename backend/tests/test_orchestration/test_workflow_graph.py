@@ -794,6 +794,7 @@ def test_remaining_route_truth_tables() -> None:
         == ROUTE_REPORT
     )
     assert route_after_verify(_base_state()) == ROUTE_REPORT
+    assert route_after_verify(_base_state(halted=True)) == ROUTE_HALT
     assert (
         route_after_writeback_recovery(_base_state(verify_need_writeback_recovery=True))
         == ROUTE_WRITEBACK
@@ -2251,6 +2252,42 @@ async def test_prepare_graph_resume_keeps_manual_for_entity_only_writebacks() ->
     final = await invoke_investigation_graph(graph, None, config)
     assert NODE_MANUAL_HOLD in final["node_trace"], final["node_trace"]
     assert NODE_REPORT not in final["node_trace"], final["node_trace"]
+
+
+@pytest.mark.asyncio
+async def test_disposition_unresolved_verify_halts_failed_without_report() -> None:
+    """Required + unresolved disposition must FAILED+halt, never REPORT/CLOSE."""
+
+    class _UnresolvedDispositionVerifyAgent:
+        async def execute(self, _input: Any) -> VerificationResult:
+            return VerificationResult(
+                overall_status=VerificationOverallStatus.FAILED,
+                verification_phase=VerificationPhase.DISPOSITION,
+                need_action_replan=False,
+                need_writeback_recovery=False,
+                need_manual_resolution=False,
+            )
+
+    machine = FakeStateMachine()
+    services = _services(machine)
+    graph = build_investigation_graph(
+        _agents_with_verify(_UnresolvedDispositionVerifyAgent()),
+        services,
+    )
+    event_id = "evt-disposition-unresolved-halt"
+    final = await graph.ainvoke(
+        _base_state(event_id=event_id),
+        {"configurable": {"thread_id": event_id}},
+    )
+    assert final["halted"] is True
+    assert final["event_status"] == EventStatus.FAILED.value
+    assert NODE_HALT in final["node_trace"]
+    assert NODE_REPORT not in final["node_trace"]
+    assert NODE_CLOSE not in final["node_trace"]
+    assert any(
+        target is EventStatus.FAILED and reason == "investigation:disposition_unresolved"
+        for _, target, reason in machine.transitions
+    )
 
 
 @pytest.mark.asyncio

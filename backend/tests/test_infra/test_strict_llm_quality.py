@@ -98,3 +98,32 @@ def test_quality_module_never_mentions_health_endpoint(quality_mod) -> None:
     assert "Never consults GET /health" in source or "never uses GET /health" in source.lower()
     assert 'get_json("/api/v1/health' not in source
     assert "get_json('/api/v1/health" not in source
+
+
+def test_generated_by_from_response_agent_trace_title(quality_mod) -> None:
+    found = quality_mod._generated_by_from_trace(
+        [
+            {
+                "entry_type": "agent_execution",
+                "actor": "response_agent",
+                "title": (
+                    "response_agent 完成响应方案：response_plan actions=3 "
+                    "plan_id=pln-1 generated_by=template"
+                ),
+                "detail": {},
+            }
+        ]
+    )
+    assert found == "template"
+
+
+def test_missing_generated_by_on_exfil_confirmed_threat_fails(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="could not observe"):
+        quality_mod.evaluate_llm_quality(
+            event_id="evt-exfil-missing",
+            event_type="data_exfiltration",
+            final_verdict="confirmed_threat",
+            scenario_id="insider_data_exfiltration",
+            response_plan_generated_by=None,
+            llm_calls=_success_calls(),
+        )

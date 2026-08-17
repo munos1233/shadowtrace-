@@ -7022,6 +7022,7 @@
           "include_response_execution": {
             "type": "boolean",
             "title": "Include Response Execution",
+            "description": "When true, continue into ResponseAgent / approval / writeback. Default false is analysis-only and is not the CLOSED gold path (make up-demo + include_response_execution=true + Celery + scenario-stamped ingest).",
             "default": false
           },
           "generate_report": {

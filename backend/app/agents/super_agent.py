@@ -386,6 +386,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         if self.risk_agent is None or self.report_agent is None:
             raise RuntimeError("SuperAgent requires RiskAgent and ReportAgent")
 
+        from app.core.llm.base import clear_event_llm_unavailable
+
+        # A prior timeout in this worker must not skip LLM on a new run/retry.
+        clear_event_llm_unavailable(event_id)
+
         owner_token = str(owner_id or "").strip()
         if lease_acquired and not owner_token:
             raise ValidationError(

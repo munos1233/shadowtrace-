@@ -78,13 +78,22 @@ class LLMTimeoutError(LLMError):
 
 
 _EVENT_LLM_UNAVAILABLE: dict[str, str] = {}
+_MAX_EVENT_LLM_UNAVAILABLE = 1024
 
 
 def mark_event_llm_unavailable(event_id: str, reason: str = "llm_timeout") -> None:
-    """Record that this event already hit a provider timeout (skip later LLM waits)."""
+    """Record that this event already hit a provider timeout (skip later LLM waits).
+
+    Process-local and bounded. SuperAgent.investigate clears the event at the
+    start of each run so a Celery retry can try the provider again.
+    """
     trimmed = (event_id or "").strip()
-    if trimmed:
-        _EVENT_LLM_UNAVAILABLE[trimmed] = reason
+    if not trimmed:
+        return
+    _EVENT_LLM_UNAVAILABLE.pop(trimmed, None)
+    while len(_EVENT_LLM_UNAVAILABLE) >= _MAX_EVENT_LLM_UNAVAILABLE:
+        _EVENT_LLM_UNAVAILABLE.pop(next(iter(_EVENT_LLM_UNAVAILABLE)))
+    _EVENT_LLM_UNAVAILABLE[trimmed] = reason
 
 
 def event_llm_unavailable_reason(event_id: str) -> str | None:
@@ -92,7 +101,7 @@ def event_llm_unavailable_reason(event_id: str) -> str | None:
 
 
 def clear_event_llm_unavailable(event_id: str | None = None) -> None:
-    """Test helper: clear one event or the whole process-local skip map."""
+    """Clear one event (new investigation / retry) or the whole skip map."""
     if event_id is None:
         _EVENT_LLM_UNAVAILABLE.clear()
         return
