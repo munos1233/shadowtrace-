@@ -14,8 +14,8 @@
       "evidence_chain": "证据链尚未完整；需继续采集身份、终端与网络日志。",
       "attack_storyline": "攻击叙事待多源证据关联后生成。",
       "attack_mapping": "- （待 ATT&CK 映射）",
-      "executed_actions": "暂无处置动作",
-      "verification_results": "暂无验证结果",
+      "executed_actions": "本调查未执行处置",
+      "verification_results": "本调查未执行验证",
       "recommendations": "1. 继续证据采集与实体归一化。\n2. 完成风险评分后再决定是否升级处置。",
       "appendix_index": "附录索引待报告定稿后更新。"
     }

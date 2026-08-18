@@ -897,6 +897,76 @@ async def test_unknown_mock_prompt_fails_explicitly() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_mock_storyline_golden_binds_prompt_evidence_ids() -> None:
+    from app.agents.prompts.storyline_prompt import build_storyline_messages
+
+    audit = InMemoryLLMCallAuditRecorder()
+    client = MockLLMClient(audit_recorder=audit)
+    evidence = [
+        {
+            "evidence_id": "evd-bind-login",
+            "source": "identity",
+            "evidence_type": "login",
+            "description": "账号 zhangsan 从 10.20.30.23 登录",
+            "timestamp": "2024-06-15T09:00:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-rar",
+            "source": "endpoint",
+            "evidence_type": "process_create",
+            "description": "主机 PC-FIN-023 上 rar.exe 进程启动",
+            "timestamp": "2024-06-15T09:01:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-file",
+            "source": "data_security",
+            "evidence_type": "file_access",
+            "description": "账号 zhangsan 访问文件 financial_data.zip",
+            "timestamp": "2024-06-15T09:02:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-net",
+            "source": "network_flow",
+            "evidence_type": "outbound",
+            "description": "PC-FIN-023 连接外部 IP 203.0.113.88",
+            "timestamp": "2024-06-15T09:03:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-dns",
+            "source": "dns",
+            "evidence_type": "dns_query",
+            "description": "DNS 解析 cloud-storage.example.com 到 203.0.113.88",
+            "timestamp": "2024-06-15T09:04:00Z",
+        },
+    ]
+    messages = build_storyline_messages(
+        evidence_entries=evidence,
+        technique_matches=[],
+        graph_paths=[],
+        entity_names=["zhangsan"],
+    )
+    response = await client.chat(
+        messages,
+        event_id="evt-storyline-bind",
+        agent_name="storyline_service",
+        prompt_key="storyline_generate",
+        scenario_id="insider_data_exfiltration",
+        json_mode=True,
+    )
+    payload = json.loads(response.content)
+    bound_ids = {
+        str(entry.get("evidence_id") or "")
+        for phase in payload.get("phases") or []
+        for entry in (phase.get("entries") or [])
+        if isinstance(phase, dict)
+    }
+    catalog = {item["evidence_id"] for item in evidence}
+    assert bound_ids <= catalog
+    assert bound_ids, "production MockLLM must bind catalog evidence_id values"
+    assert "" not in bound_ids
+
+
 def test_mock_llm_client_requires_audit_recorder() -> None:
     with pytest.raises(ValueError, match="audit_recorder is required"):
         MockLLMClient()

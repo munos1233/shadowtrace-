@@ -11,6 +11,7 @@
           {
             "timestamp": "2024-06-15T09:00:00Z",
             "description": "账号 zhangsan 从 10.20.30.23 登录 PC-FIN-023",
+            "evidence_id": "",
             "technique_id": "T1078",
             "severity_hint": "low"
           }
@@ -25,6 +26,7 @@
           {
             "timestamp": "2024-06-15T09:02:00Z",
             "description": "账号 zhangsan 访问文件 financial_data.zip",
+            "evidence_id": "",
             "technique_id": "T1005",
             "severity_hint": "medium"
           }
@@ -39,6 +41,7 @@
           {
             "timestamp": "2024-06-15T09:01:00Z",
             "description": "主机 PC-FIN-023 上 rar.exe 进程启动",
+            "evidence_id": "",
             "technique_id": "T1560",
             "severity_hint": "medium"
           }
@@ -53,12 +56,14 @@
           {
             "timestamp": "2024-06-15T09:03:00Z",
             "description": "PC-FIN-023 连接外部 IP 203.0.113.88",
+            "evidence_id": "",
             "technique_id": "T1041",
             "severity_hint": "high"
           },
           {
             "timestamp": "2024-06-15T09:04:00Z",
             "description": "DNS 解析 cloud-storage.example.com 到 203.0.113.88",
+            "evidence_id": "",
             "technique_id": "T1071",
             "severity_hint": "high"
           }

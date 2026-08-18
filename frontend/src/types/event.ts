@@ -711,6 +711,8 @@ export interface EventDetailResponse extends SideEffectConvergenceProjection {
   writeback_readiness: WritebackReadiness;
   writeback_overall_status: WritebackStatus | null;
   pending_writeback_count: number;
+  /** ISSUE-312 entity submit receipts still ACCEPTED (not terminal pending). */
+  entity_writeback_accepted_count?: number;
   detection_context_snapshot?: DetectionContextSnapshotSummary | null;
   detection_context_projection_error?: DetectionContextProjectionErrorSummary | null;
   analysis_only_complete?: boolean;

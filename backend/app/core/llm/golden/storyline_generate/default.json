@@ -11,6 +11,7 @@
           {
             "timestamp": "2025-01-01T00:00:00Z",
             "description": "Awaiting correlated identity and endpoint evidence",
+            "evidence_id": "",
             "technique_id": "T1078",
             "severity_hint": "low"
           }

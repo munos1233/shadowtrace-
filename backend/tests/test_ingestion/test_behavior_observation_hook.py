@@ -291,6 +291,7 @@ async def test_poll_marks_degraded_when_behavior_projection_fails(
         )
     assert summary.accepted >= 1
     assert summary.degraded is True
+    assert summary.observation_degraded is True
     assert any(error.get("stage") == "behavior_observation_projection" for error in summary.errors)
 
 

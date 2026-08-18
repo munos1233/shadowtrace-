@@ -145,6 +145,9 @@ def evaluate_llm_quality(
     scenario_id: str | None,
     response_plan_generated_by: str | None,
     llm_calls: list[dict[str, Any]],
+    storyline_generated_by: str | None = None,
+    storyline_phase_count: int = 0,
+    report_quality: str | None = None,
 ) -> dict[str, Any]:
     """Return a quality summary or raise RuntimeError when the Live card fails."""
     by_prompt: dict[str, list[dict[str, Any]]] = {key: [] for key in CORE_PROMPT_KEYS}
@@ -186,6 +189,9 @@ def evaluate_llm_quality(
         "final_verdict": final_verdict,
         "scenario_id": scenario_id,
         "response_plan_generated_by": response_plan_generated_by,
+        "storyline_generated_by": storyline_generated_by,
+        "storyline_phase_count": int(storyline_phase_count or 0),
+        "report_quality": report_quality,
         "health_window_consulted": False,
     }
 
@@ -212,6 +218,32 @@ def evaluate_llm_quality(
                 f"confirmed_threat exfil event {event_id} "
                 f"(event_type={event_type!r} scenario={scenario_id!r}); "
                 "rule fallback is not Agent reasoning success"
+            )
+        storyline_by = (storyline_generated_by or "").strip().lower()
+        if storyline_by != "llm" or int(storyline_phase_count or 0) < 1:
+            raise RuntimeError(
+                "live reasoning card FAIL: storyline was not adopted from LLM on "
+                f"confirmed_threat exfil event {event_id} "
+                f"generated_by={storyline_generated_by!r} phases={storyline_phase_count}; "
+                "llm_call_log success is not narrative adoption"
+            )
+        report_successes = [
+            row
+            for row in llm_calls
+            if str(row.get("prompt_key") or "") == "report_generate"
+            and str(row.get("status") or "") == "success"
+        ]
+        quality = (report_quality or "").strip().lower()
+        if not report_successes:
+            raise RuntimeError(
+                "live reasoning card FAIL: report_generate did not succeed on "
+                f"confirmed_threat exfil event {event_id}"
+            )
+        if quality in {"", "incomplete_placeholder", "degraded_template"}:
+            raise RuntimeError(
+                "live reasoning card FAIL: report_quality="
+                f"{report_quality!r} on confirmed_threat exfil event {event_id}; "
+                "incomplete_placeholder/degraded_template is not Live reasoning success"
             )
 
     summary["ok"] = True
@@ -257,6 +289,37 @@ def _paginate_decision_trace(
     return collected
 
 
+def _load_storyline_adoption(
+    client: DynamicEvalClient,
+    event_id: str,
+) -> tuple[str | None, int]:
+    try:
+        payload = client.get_json(f"/api/v1/events/{event_id}/timeline")
+    except DynamicEvalApiError:
+        return None, 0
+    if not isinstance(payload, dict):
+        return None, 0
+    generated_by = payload.get("generated_by")
+    phases = payload.get("phases")
+    phase_count = len(phases) if isinstance(phases, list) else 0
+    token = generated_by.strip() if isinstance(generated_by, str) else None
+    return token, phase_count
+
+
+def _load_report_quality(client: DynamicEvalClient, event_id: str) -> str | None:
+    try:
+        payload = client.get_json(f"/api/v1/events/{event_id}/report")
+    except DynamicEvalApiError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    report = payload.get("report")
+    if not isinstance(report, dict):
+        return None
+    quality = report.get("report_quality")
+    return quality.strip() if isinstance(quality, str) and quality.strip() else None
+
+
 def assert_llm_quality_acceptance(
     client: DynamicEvalClient,
     event_id: str,
@@ -273,6 +336,8 @@ def assert_llm_quality_acceptance(
     )
     llm_calls = collect_llm_calls_from_trace(trace_entries)
     generated_by = _generated_by_from_event(event) or _generated_by_from_trace(trace_entries)
+    storyline_generated_by, storyline_phase_count = _load_storyline_adoption(client, event_id)
+    report_quality = _load_report_quality(client, event_id)
     return evaluate_llm_quality(
         event_id=event_id,
         event_type=str(event.get("event_type") or "") or None,
@@ -280,4 +345,7 @@ def assert_llm_quality_acceptance(
         scenario_id=_scenario_from_event(event),
         response_plan_generated_by=generated_by,
         llm_calls=llm_calls,
+        storyline_generated_by=storyline_generated_by,
+        storyline_phase_count=storyline_phase_count,
+        report_quality=report_quality,
     )

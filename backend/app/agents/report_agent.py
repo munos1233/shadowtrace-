@@ -26,11 +26,19 @@ from app.agents.report_section_builder import (
     DECISION_BRIEF_LABEL,
     EVIDENCE_LIMITED_REASON_LABEL,
     EVIDENCE_SUMMARY_LABEL,
+    INCOMPLETE_ACTIONS_PLACEHOLDER,
+    INCOMPLETE_VERIFICATION_PLACEHOLDER,
     INVESTIGATION_LIMITATION_HEADER,
+    NOT_EXECUTED_ACTIONS,
+    NOT_EXECUTED_VERIFICATION,
+    PLACEHOLDER_NO_ACTIONS,
+    PLACEHOLDER_NO_VERIFICATION,
     SECTION_KEYS,
     SECTION_SPECS,
     SECTION_TITLES,
     SOURCE_SUMMARY_LABEL,
+    UNAVAILABLE_ACTIONS,
+    UNAVAILABLE_VERIFICATION,
     ReportSectionBuilder,
 )
 from app.agents.triage_risk_consistency import (
@@ -110,6 +118,15 @@ _EVIDENCE_LIMITED_MERGE_PREFIXES = (
     "- normalized.",
 )
 _ACTIONS_MERGE_PREFIXES = (f"{ACTIONS_STATUS_SUMMARY_LABEL}:",)
+_DISPOSITION_BAD_MARKERS = (
+    PLACEHOLDER_NO_ACTIONS,
+    PLACEHOLDER_NO_VERIFICATION,
+    INCOMPLETE_ACTIONS_PLACEHOLDER,
+    INCOMPLETE_VERIFICATION_PLACEHOLDER,
+    UNAVAILABLE_ACTIONS,
+    UNAVAILABLE_VERIFICATION,
+)
+_DISPOSITION_IDLE_MARKERS = (NOT_EXECUTED_ACTIONS, NOT_EXECUTED_VERIFICATION)
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 
@@ -508,6 +525,23 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         merged_lines = merged_content.splitlines()
         return [line for line in required if line not in merged_lines]
 
+    @staticmethod
+    def _llm_disposition_chapter_unusable(llm_content: str, draft_content: str) -> bool:
+        """Prefer the template draft when LLM wipes honest action/verify chapters."""
+        if any(marker in llm_content for marker in _DISPOSITION_BAD_MARKERS):
+            return True
+        if "incomplete_placeholder" in llm_content.lower():
+            return True
+        llm_idle = any(marker in llm_content for marker in _DISPOSITION_IDLE_MARKERS)
+        draft_idle = any(marker in draft_content for marker in _DISPOSITION_IDLE_MARKERS)
+        draft_legacy = any(
+            marker in draft_content
+            for marker in (PLACEHOLDER_NO_ACTIONS, PLACEHOLDER_NO_VERIFICATION)
+        )
+        if llm_idle and draft_content.strip() and not draft_idle and not draft_legacy:
+            return True
+        return False
+
     def _merge_sections(
         self,
         base: list[ReportSection],
@@ -539,14 +573,21 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
                 )
                 if missing:
                     content = "\n".join([content, *missing])
-            elif section.key == "executed_actions" and section.key in overrides:
-                missing = self._missing_required_lines(
-                    section.content,
-                    content,
-                    prefixes=_ACTIONS_MERGE_PREFIXES,
-                )
-                if missing:
-                    content = "\n".join([content, *missing])
+            elif (
+                section.key in {"executed_actions", "verification_results"}
+                and section.key in overrides
+            ):
+                llm_content = overrides[section.key]
+                if self._llm_disposition_chapter_unusable(llm_content, section.content):
+                    content = section.content
+                elif section.key == "executed_actions":
+                    missing = self._missing_required_lines(
+                        section.content,
+                        content,
+                        prefixes=_ACTIONS_MERGE_PREFIXES,
+                    )
+                    if missing:
+                        content = "\n".join([content, *missing])
             elif section.key == "recommendations" and section.key in overrides:
                 missing = self._missing_required_lines(
                     section.content,

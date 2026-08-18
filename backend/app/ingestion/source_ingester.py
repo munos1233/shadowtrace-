@@ -78,6 +78,7 @@ class IngestionSummary(BaseModel):
     watermark_before: dict[str, Any] | None = None
     watermark_after: dict[str, Any] | None = None
     degraded: bool = False
+    observation_degraded: bool = False
     errors: list[dict[str, Any]] = Field(default_factory=list)
     kind_summaries: dict[str, IngestionKindSummary] = Field(default_factory=dict)
 
@@ -194,6 +195,7 @@ class SourceIngester:
         detail: dict[str, Any] | None = None,
     ) -> None:
         summary.degraded = True
+        summary.observation_degraded = True
         payload: dict[str, Any] = {"source_record_id": source_record_id}
         if detail is not None:
             payload.update(detail)
@@ -310,6 +312,9 @@ class SourceIngester:
             aggregate.duplicate += result.duplicate
             aggregate.rejected += result.rejected
             aggregate.degraded = aggregate.degraded or result.degraded
+            aggregate.observation_degraded = (
+                aggregate.observation_degraded or result.observation_degraded
+            )
             aggregate.errors.extend(result.errors)
         if len(kinds) == 1:
             only = aggregate.kind_summaries[kinds[0].value]
@@ -621,6 +626,7 @@ class SourceIngester:
 
             if behavior_failed:
                 summary.degraded = True
+                summary.observation_degraded = True
                 summary.errors.append(
                     {
                         "stage": "behavior_observation_projection",
@@ -1265,6 +1271,7 @@ def _merge_counts(target: IngestionSummary, source: IngestionSummary) -> None:
     target.duplicate += source.duplicate
     target.rejected += source.rejected
     target.degraded = target.degraded or source.degraded
+    target.observation_degraded = target.observation_degraded or source.observation_degraded
     target.errors.extend(source.errors)
 
 

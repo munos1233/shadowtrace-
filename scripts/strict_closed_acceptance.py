@@ -76,7 +76,13 @@ def assert_strict_closed_acceptance_once(
     client: DynamicEvalClient,
     event_id: str,
 ) -> dict[str, Any]:
-    """ISSUE-301 strict profile: CLOSED + report + writeback gate convergence."""
+    """ISSUE-301 strict profile: CLOSED + report + terminal writeback convergence.
+
+    Event-level ``writeback_readiness`` / ``writeback_overall_status`` /
+    ``pending_writeback_count`` are ISSUE-312 **terminal** (applicable) fields.
+    Entity ACCEPTED receipts belong in ``entity_writeback_accepted_count`` and
+    must not fail this gate.
+    """
     detail = get_event_detail(client, event_id)
     event = unwrap_event_detail_payload(detail, expected_event_id=event_id)
     status = str(event.get("status") or "")
@@ -126,6 +132,7 @@ def assert_strict_closed_acceptance_once(
             raise RuntimeError(
                 f"strict profile: pending_writeback_count={pending} for {event_id}"
             )
+        # Entity ACCEPTED is allowed; do not treat it as terminal pending.
 
     action_violations: list[str] = []
     for action in list_all_event_actions(client, event_id):

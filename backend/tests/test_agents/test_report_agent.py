@@ -77,6 +77,7 @@ from app.models.enums import (
 )
 from app.models.evidence import Evidence, EvidenceGap
 from app.models.ids import new_evidence_id, report_id_for_event
+from app.models.report import ReportSection
 from app.providers.llm.openai_compatible import OpenAICompatibleLLMClient
 from app.services.agent_trace_service import TraceProjection
 
@@ -493,6 +494,12 @@ async def test_main_scenario_fifteen_sections_and_key_facts(
     assert agent.last_report_markdown
     assert "zhangsan" in agent.last_report_markdown
     assert f"content_sha256={agent.last_content_sha256}" in agent.last_report_markdown
+    assert report.report_quality.value == "complete"
+    assert report.degraded is False
+    executed = next(s for s in report.sections if s.key == "executed_actions")
+    verification = next(s for s in report.sections if s.key == "verification_results")
+    assert PLACEHOLDER_NO_ACTIONS not in executed.content
+    assert PLACEHOLDER_NO_VERIFICATION not in verification.content
 
 
 @pytest.mark.asyncio
@@ -1709,10 +1716,64 @@ def test_llm_merge_preserves_template_enrichment_briefs() -> None:
     assert f"{ACTIONS_STATUS_SUMMARY_LABEL}:" in overview.content
 
 
-def test_llm_failure_metadata_timeout_code() -> None:
+def test_llm_merge_rejects_legacy_placeholder_when_draft_has_actions() -> None:
+    """ISSUE-212: LLM 「暂无处置动作」 must not overwrite honest executed drafts."""
+    draft_actions = (
+        f"{ACTIONS_STATUS_SUMMARY_LABEL}: isolate_host=success\n"
+        "act-1 | isolate_host | tool=isolate_host | status=success | "
+        "effect_verification=verified | target=PC-FIN-023"
+    )
+    draft_verify = (
+        "overall_status=verified\n"
+        "act-1 | effect=verified | readiness=ready | receipt_refs=- | detail=ok"
+    )
+    sections = [
+        ReportSection(key="overview", title="事件概述", content="overview"),
+        ReportSection(key="executed_actions", title="已执行处置", content=draft_actions),
+        ReportSection(key="verification_results", title="验证结果", content=draft_verify),
+    ]
+    merged = ReportAgent(llm_client=None)._merge_sections(
+        sections,
+        {
+            "executed_actions": PLACEHOLDER_NO_ACTIONS,
+            "verification_results": PLACEHOLDER_NO_VERIFICATION,
+        },
+    )
+    by_key = {section.key: section.content for section in merged}
+    assert by_key["executed_actions"] == draft_actions
+    assert by_key["verification_results"] == draft_verify
+    assert PLACEHOLDER_NO_ACTIONS not in by_key["executed_actions"]
+    assert PLACEHOLDER_NO_VERIFICATION not in by_key["verification_results"]
 
-    meta = llm_failure_metadata(TimeoutError())
-    assert meta["error_code"] == "llm_timeout"
+
+def test_llm_merge_rejects_idle_when_draft_has_execution_rows() -> None:
+    """Idle golden wording must not wipe executed action/verify chapters."""
+    draft_actions = (
+        f"{ACTIONS_STATUS_SUMMARY_LABEL}: isolate_host=success\n"
+        "act-1 | isolate_host | tool=isolate_host | status=success | "
+        "effect_verification=verified | target=PC-FIN-023"
+    )
+    draft_verify = (
+        "overall_status=verified\n"
+        "act-1 | effect=verified | readiness=ready | receipt_refs=- | detail=ok"
+    )
+    sections = [
+        ReportSection(key="overview", title="事件概述", content="overview"),
+        ReportSection(key="executed_actions", title="已执行处置", content=draft_actions),
+        ReportSection(key="verification_results", title="验证结果", content=draft_verify),
+    ]
+    merged = ReportAgent(llm_client=None)._merge_sections(
+        sections,
+        {
+            "executed_actions": NOT_EXECUTED_ACTIONS,
+            "verification_results": NOT_EXECUTED_VERIFICATION,
+        },
+    )
+    by_key = {section.key: section.content for section in merged}
+    assert by_key["executed_actions"] == draft_actions
+    assert by_key["verification_results"] == draft_verify
+    assert NOT_EXECUTED_ACTIONS not in by_key["executed_actions"]
+    assert NOT_EXECUTED_VERIFICATION not in by_key["verification_results"]
 
 
 def _sample_detection_context_snapshot(*, event_id: str) -> DetectionContextSnapshot:

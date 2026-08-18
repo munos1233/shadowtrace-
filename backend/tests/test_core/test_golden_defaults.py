@@ -138,6 +138,18 @@ def test_adversarial_scenario_golden_exists(prompt_key: str) -> None:
     assert path.is_file(), f"missing adversarial golden for {prompt_key}"
 
 
+def test_report_generate_goldens_forbid_legacy_incomplete_markers() -> None:
+    """ISSUE-212: mock goldens must not reuse 「暂无处置动作/暂无验证结果」."""
+    root = default_golden_root() / "report_generate"
+    forbidden = ("暂无处置动作", "暂无验证结果")
+    files = sorted(root.glob("*.json"))
+    assert files, f"missing report_generate goldens under {root}"
+    for path in files:
+        blob = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            assert marker not in blob, f"{path.name} still contains {marker!r}"
+
+
 def test_adversarial_report_golden_recommends_dest_not_vpn_src() -> None:
     payload = _load_golden("report_generate", "adversarial_credential_db_staging_exfil.json")
     sections = payload["content"]["sections"]

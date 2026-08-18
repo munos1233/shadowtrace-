@@ -38,6 +38,26 @@ def _success_calls() -> list[dict[str, str]]:
     ]
 
 
+def _exfil_success_kwargs(**overrides):
+    payload = {
+        "event_id": "evt-exfil-ok",
+        "event_type": "data_exfiltration",
+        "final_verdict": "confirmed_threat",
+        "scenario_id": "insider_data_exfiltration",
+        "response_plan_generated_by": "llm",
+        "llm_calls": [
+            *_success_calls(),
+            {"prompt_key": "storyline_generate", "status": "success"},
+            {"prompt_key": "report_generate", "status": "success"},
+        ],
+        "storyline_generated_by": "llm",
+        "storyline_phase_count": 4,
+        "report_quality": "complete",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_all_timeout_fails_live_card(quality_mod) -> None:
     calls = [
         {"prompt_key": key, "status": "llm_timeout", "error_class": "timeout"}
@@ -81,15 +101,31 @@ def test_plumbing_template_on_domain_none_still_passes_live_llm_success(quality_
 
 
 def test_llm_success_on_exfil_passes(quality_mod) -> None:
-    summary = quality_mod.evaluate_llm_quality(
-        event_id="evt-exfil-ok",
-        event_type="data_exfiltration",
-        final_verdict="confirmed_threat",
-        scenario_id="insider_data_exfiltration",
-        response_plan_generated_by="llm",
-        llm_calls=_success_calls(),
-    )
+    summary = quality_mod.evaluate_llm_quality(**_exfil_success_kwargs())
     assert summary["ok"] is True
+    assert summary["storyline_generated_by"] == "llm"
+    assert summary["report_quality"] == "complete"
+
+
+def test_rule_storyline_on_exfil_fails_live_card(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="storyline was not adopted"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(storyline_generated_by="rule", storyline_phase_count=4)
+        )
+
+
+def test_incomplete_report_on_exfil_fails_live_card(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="report_quality"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(report_quality="incomplete_placeholder")
+        )
+
+
+def test_degraded_template_report_on_exfil_fails_live_card(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="degraded_template"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(report_quality="degraded_template")
+        )
 
 
 def test_quality_module_never_mentions_health_endpoint(quality_mod) -> None:
@@ -127,3 +163,20 @@ def test_missing_generated_by_on_exfil_confirmed_threat_fails(quality_mod) -> No
             response_plan_generated_by=None,
             llm_calls=_success_calls(),
         )
+
+
+def test_live_reasoning_nightly_workflow_is_independent_and_fail_closed() -> None:
+    workflow = REPO_ROOT / ".github" / "workflows" / "live-reasoning-nightly.yml"
+    ci = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+    assert workflow.is_file()
+    text = workflow.read_text(encoding="utf-8")
+    assert "EVAL_REQUIRE_LLM_QUALITY" in text or "--require-llm-quality" in text
+    assert "EVAL_REQUIRE_CLOSED" in text or "--require-closed" in text
+    assert "fail-closed" in text
+    assert "secrets.LLM_API_KEY" in text
+    assert "insider_data_exfiltration" in text
+    assert "adversarial-closure-gates" in text
+    assert "live-glm-eval" in text
+    ci_text = ci.read_text(encoding="utf-8")
+    assert "live-glm-eval" not in ci_text
+    assert "live-reasoning-nightly.yml" not in ci_text

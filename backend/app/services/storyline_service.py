@@ -20,6 +20,7 @@ from app.agents.prompts.storyline_prompt import (
 )
 from app.core.errors import ShadowTraceError
 from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
+from app.core.llm.scenario_context import resolve_llm_scenario_id
 
 # LLMError / LLMProviderError are runtime-importable from app.core.llm.base
 # even though only LLMProviderError is listed in __all__.  Catch Exception
@@ -154,6 +155,7 @@ class StorylineService:
                     technique_matches=technique_matches,
                     graph_paths=graph_paths,
                     entity_names=entity_names,
+                    scenario_id=_scenario_id_from_context(event_context),
                 )
                 if storyline is not None:
                     finalized = self._finalize_storyline(storyline)
@@ -191,6 +193,7 @@ class StorylineService:
         technique_matches: list[dict[str, Any]],
         graph_paths: list[list[str]],
         entity_names: list[str],
+        scenario_id: str | None = None,
     ) -> AttackStoryline | None:
         """Call LLM, validate evidence_ids, backfill technique_ids, return."""
         if self._llm_client is None:
@@ -207,6 +210,7 @@ class StorylineService:
             event_id=event_id,
             agent_name="storyline_service",
             prompt_key="storyline_generate",
+            scenario_id=scenario_id,
             json_mode=True,
             response_model=StorylineLLMResponse,
             timeout=resolve_structured_prompt_timeout("storyline_generate"),
@@ -276,6 +280,11 @@ class StorylineService:
             )
 
         if not phases:
+            # LLM call may have succeeded, but unbound entries are not adoption.
+            await self._mark_degraded(
+                event_id,
+                reason="storyline_unbound_evidence",
+            )
             return None  # signal fallback
 
         # Backfill technique_id from RAGOutput matches
@@ -517,6 +526,20 @@ def _extract_entity_names(event_context: dict[str, Any]) -> list[str]:
 # ====================================================================== #
 # LLM helpers
 # ====================================================================== #
+
+
+def _scenario_id_from_context(event_context: dict[str, Any]) -> str | None:
+    """Resolve MockLLM scenario routing from EventContext snapshots (ISSUE-199)."""
+    source = event_context.get("source_snapshot")
+    raw = event_context.get("raw_alert_snapshot")
+    event = event_context.get("event")
+    if not isinstance(raw, dict) and isinstance(event, dict):
+        nested = event.get("raw_alert_snapshot")
+        raw = nested if isinstance(nested, dict) else event
+    return resolve_llm_scenario_id(
+        source_snapshot=source if isinstance(source, dict) else None,
+        raw_alert_snapshot=raw if isinstance(raw, dict) else None,
+    )
 
 
 def _build_evidence_entries(

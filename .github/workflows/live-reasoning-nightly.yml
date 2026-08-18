@@ -1,0 +1,124 @@
+name: live-reasoning-nightly
+
+# ISSUE-350 live glm reasoning card. Independent of PR ci.yml.
+# Mock CLOSED green is not a success reason for this job.
+# Missing GitHub secrets fail the job (no skip-as-success).
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: live-reasoning-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-glm-eval:
+    name: live-glm-eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      COMPOSE_PROJECT_NAME: shadowtrace-live-${{ github.run_id }}
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
+      BACKEND_PORT: "8000"
+      FRONTEND_PORT: "5173"
+      MOCK_XDR_PORT: "8100"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require live LLM secrets (fail-closed)
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_BASE_URL: ${{ secrets.LLM_API_BASE_URL }}
+          LLM_PRIMARY_MODEL: ${{ secrets.LLM_PRIMARY_MODEL }}
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${LLM_API_KEY}" ]; then
+            echo "LLM_API_KEY secret is required (fail-closed)"
+            missing=1
+          fi
+          if [ -z "${LLM_API_BASE_URL}" ]; then
+            echo "LLM_API_BASE_URL secret is required (fail-closed)"
+            missing=1
+          fi
+          if [ -z "${LLM_PRIMARY_MODEL}" ]; then
+            echo "LLM_PRIMARY_MODEL secret is required (fail-closed)"
+            missing=1
+          fi
+          if [ "${missing}" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Write live LLM overlay (mock XDR + live glm)
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_BASE_URL: ${{ secrets.LLM_API_BASE_URL }}
+          LLM_PRIMARY_MODEL: ${{ secrets.LLM_PRIMARY_MODEL }}
+        run: |
+          set -euo pipefail
+          {
+            echo "LLM_MODE=openai_compatible"
+            echo "LLM_API_BASE_URL=${LLM_API_BASE_URL}"
+            echo "LLM_API_KEY=${LLM_API_KEY}"
+            echo "LLM_PRIMARY_MODEL=${LLM_PRIMARY_MODEL}"
+          } > .env.live
+
+      - name: Start demo stack with fresh volumes
+        run: |
+          set -euo pipefail
+          make down-v || true
+          make up-demo
+
+      - name: Live reasoning card (insider gold path)
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/live-reasoning
+          EVAL_REQUIRE_CLOSED=1 EVAL_REQUIRE_LLM_QUALITY=1 \
+            EVAL_SCENARIO=insider_data_exfiltration EVAL_MAX_EVENTS=1 \
+            python3 scripts/dynamic_eval_full_loop.py \
+              --seed-via-compose \
+              --scenario insider_data_exfiltration \
+              --base-url "http://127.0.0.1:${BACKEND_PORT}" \
+              --token bootstrap-token \
+              --max-events 1 \
+              --decision approve \
+              --require-closed \
+              --require-llm-quality \
+              --json | tee artifacts/live-reasoning/insider-eval.json
+
+      - name: Live adversarial pack (same secrets, isolated compose)
+        env:
+          LLM_MODE: openai_compatible
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_BASE_URL: ${{ secrets.LLM_API_BASE_URL }}
+          LLM_PRIMARY_MODEL: ${{ secrets.LLM_PRIMARY_MODEL }}
+        run: make adversarial-closure-gates
+
+      - name: Collect decision-trace / report artifacts
+        if: always()
+        run: python3 scripts/collect_live_eval_artifacts.py
+
+      - name: Upload live reasoning artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-reasoning-${{ github.run_id }}
+          path: |
+            artifacts/live-reasoning/**
+            backend/tests/adversarial/artifacts/latest_audit.json
+            backend/tests/adversarial/artifacts/latest_full_loop_audit.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose \
+            --project-name "${COMPOSE_PROJECT_NAME}" \
+            -f "${GITHUB_WORKSPACE}/infra/docker-compose.yml" \
+            down --volumes --remove-orphans || true
+          make down-demo || true
+          make down-v || true

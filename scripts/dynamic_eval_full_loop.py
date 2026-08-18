@@ -177,6 +177,27 @@ def _compose_cmd() -> list[str]:
     ]
 
 
+def flush_mock_observation_via_compose() -> None:
+    """Drop leftover mock observation projection keys before gold-path seed."""
+    cmd = _compose_cmd() + [
+        "exec",
+        "-T",
+        "redis",
+        "redis-cli",
+        "DEL",
+        "shadowtrace:mock_observation_projection",
+        "shadowtrace:mock_observation_idempotency",
+    ]
+    print("[dynamic-eval] flushing mock observation projection keys")
+    proc = subprocess.run(cmd, cwd=_ROOT_DIR, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(
+            "[dynamic-eval] WARN: observation key flush skipped "
+            f"(exit={proc.returncode}): {proc.stderr.strip()}",
+            file=sys.stderr,
+        )
+
+
 def seed_via_compose(
     *,
     scenario: str,
@@ -203,6 +224,12 @@ def seed_via_compose(
     print(f"[dynamic-eval] seeding via compose: scenario={scenario}")
     proc = subprocess.run(cmd, cwd=_ROOT_DIR, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
+        combined = f"{proc.stdout}\n{proc.stderr}"
+        if "dirty fixture" in combined:
+            raise RuntimeError(
+                "dirty fixture, run down-v or --fresh-volumes "
+                f"(exit={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+            )
         raise RuntimeError(
             "seed_mock_xdr_and_ingest failed "
             f"(exit={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
@@ -1024,6 +1051,7 @@ def main(argv: list[str] | None = None) -> int:
             if item.get("event_id")
         }
         if args.seed_via_compose:
+            flush_mock_observation_via_compose()
             seed_summary = seed_via_compose(
                 scenario=args.scenario,
                 mock_xdr_url=args.mock_xdr_url,

@@ -212,6 +212,10 @@ BOOTSTRAP_INCLUDE_RESPONSE=true make bootstrap   # 会停在 waiting_approval，
 
 评测超时建议写在本地 `.env`（参考仓库根目录 `.env.example` 中「Dynamic eval / gold-path profile」注释块），**不要**把仓库里的 `APPROVAL_TIMEOUT_MINUTES=30` 改成 2。
 
+**脏夹具：** 单场景 `make eval-full-loop` 复用已有 Compose 卷时，残留 connector watermark / `agent_task` 幂等键 / mock observation Redis key 会被当成脏夹具并 **fail-closed**（提示 `dirty fixture, run down-v or --fresh-volumes`）。官方路径是 `make down-v` 后 `make up-demo`，或使用 `make eval-full-loop-matrix`（每场景 fresh volumes）。不要把脏卷上的 `IntegrityError` / observation `degraded` 包装成研判失败。
+
+**嵌套 Docker / Cloud Agent：** 在已有容器里再跑 Compose 时，宿主机 `bridge-nf-call-iptables` 可能丢掉容器互访（ICC）。这是环境问题：修 iptables/ICC 或改用 non-nested Docker。**禁止**把产品 `DATABASE_URL` / `REDIS_URL` 改成网关映射端口来“绕过”容器网络。
+
 ### 动态评测 matrix（ISSUE-301）
 
 全闭环 matrix 是仓库内**唯一**推荐的 serial 动态评测入口：每个场景使用独立 `COMPOSE_PROJECT_NAME` 与 fresh volumes，避免 Mock XDR `control/seed` 在前一场景尚未结束时覆盖 state。
