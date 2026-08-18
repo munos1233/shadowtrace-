@@ -332,6 +332,8 @@ def test_response_prompt_issue360_live_path_stacks_with_357_and_omits_inconsiste
         "plan containment for EntitySet hosts/accounts even if triage severity is medium" in system
     )
     assert "plan isolate_host for every host listed in entities.hosts" in system
+    assert "Coverage contract (ISSUE-328, not domain)" in system
+    assert "for each EntitySet account propose disable_account" in system
     assert "block_ip policy (ISSUE-361)" in system
     assert "dst_ip" in system
     assert "explicit_source_block" in system

@@ -226,6 +226,52 @@ class _UngroundedOnlyLLM:
         )
 
 
+class _IncompleteInsiderLLM:
+    """Legacy insider golden: reset_password + isolate_host, no disable_account/block_ip."""
+
+    async def chat(self, *args: Any, **kwargs: Any) -> Any:
+        import json
+
+        from app.core.llm.base import LLMResponse
+
+        payload = {
+            "actions": [
+                {
+                    "tool_name": "reset_password",
+                    "target_type": "account",
+                    "target": "zhangsan",
+                    "parameters": {},
+                    "reason": "Reset credentials for suspected insider account",
+                },
+                {
+                    "tool_name": "isolate_host",
+                    "target_type": "host",
+                    "target": "PC-FIN-023",
+                    "parameters": {},
+                    "reason": "Isolate finance endpoint pending investigation",
+                },
+                {
+                    "tool_name": "create_ticket",
+                    "target_type": "ticket",
+                    "target": "ticket",
+                    "parameters": {
+                        "title": "Data exfiltration response",
+                        "description": "Automated containment plan",
+                    },
+                    "reason": "Track investigation actions",
+                },
+            ],
+            "strategy_summary": "Reset insider account credentials and isolate finance endpoint",
+        }
+        return LLMResponse(
+            content=json.dumps(payload),
+            model_name="mock",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+        )
+
+
 def _playbook_ref(playbook_id: str) -> dict[str, str | int]:
     return {
         "playbook_id": playbook_id,
@@ -279,6 +325,41 @@ def _entities() -> EntitySet:
         ],
         hosts=[HostEntity(entity_id="host-1", hostname="PC-FIN-023", source_refs=[_ref()])],
         domains=[DomainEntity(entity_id="dom-1", fqdn="evil.example", source_refs=[_ref()])],
+    )
+
+
+def _insider_entities() -> EntitySet:
+    """EntitySet matching insider_data_exfiltration triage/scenario IOCs."""
+    return EntitySet(
+        accounts=[
+            AccountEntity(entity_id="acct-zhangsan", username="zhangsan", source_refs=[_ref()]),
+        ],
+        hosts=[
+            HostEntity(entity_id="host-pc-fin-023", hostname="PC-FIN-023", source_refs=[_ref()]),
+        ],
+        ips=[
+            IPEntity(
+                entity_id="ip-int-fin",
+                address="10.20.30.23",
+                scope="internal",
+                attributes={"normalized_field": "src_ip"},
+                source_refs=[_ref()],
+            ),
+            IPEntity(
+                entity_id="ip-ext-exfil",
+                address="203.0.113.88",
+                scope="external",
+                attributes={"normalized_field": "dst_ip"},
+                source_refs=[_ref()],
+            ),
+        ],
+        domains=[
+            DomainEntity(
+                entity_id="dom-exfil-upload",
+                fqdn="unknown-upload-example.com",
+                source_refs=[_ref()],
+            )
+        ],
     )
 
 
@@ -370,10 +451,19 @@ def _seed_wm(
 
 @pytest.mark.asyncio
 async def test_main_scenario_has_disable_account_and_block_ip() -> None:
+    """MockLLM insider golden must cover EntitySet without 328/359 demotion."""
     event_id = f"evt-{uuid4().hex[:8]}"
     wm = _FakeWorkingMemory()
-    _seed_wm(wm, event_id, triage=_triage())
-    event_service = _FakeEventService()
+    _seed_wm(
+        wm,
+        event_id,
+        triage=_triage(
+            event_type=EventType.DATA_EXFILTRATION,
+            severity=Severity.HIGH,
+            entities=_insider_entities(),
+        ),
+    )
+    event_service = _FakeEventService(final_verdict=FinalVerdict.CONFIRMED_THREAT)
     llm = MockLLMClient(audit_recorder=InMemoryLLMCallAuditRecorder())
     agent = ResponseAgent(
         llm_client=llm,
@@ -386,11 +476,49 @@ async def test_main_scenario_has_disable_account_and_block_ip() -> None:
     plan = await agent.execute(_agent_input(event_id))
 
     tool_names = {action.tool_name for action in plan.actions}
+    assert "disable_account" in tool_names
     assert "isolate_host" in tool_names
+    assert "block_ip" in tool_names
     assert "create_ticket" in tool_names
+    disable = next(a for a in plan.actions if a.tool_name == "disable_account")
     isolate = next(a for a in plan.actions if a.tool_name == "isolate_host")
+    block = next(a for a in plan.actions if a.tool_name == "block_ip")
+    assert disable.target == "zhangsan"
+    assert isolate.target == "PC-FIN-023"
+    assert block.target == "203.0.113.88"
     assert isolate.action_level is ActionLevel.L3
     assert plan.generated_by is ResponsePlanGeneratedBy.LLM
+    strategy = plan.strategy_summary or ""
+    assert "entity_coverage_merge" not in strategy
+    assert "identity_containment_dedup" not in strategy
+    assert "rule fallback after ungrounded" not in strategy
+
+
+@pytest.mark.asyncio
+async def test_incomplete_insider_plan_stamps_template_not_llm() -> None:
+    """Anti-cheat: reset_password without disable_account/block_ip is not LLM adoption."""
+    event_id = f"evt-{uuid4().hex[:8]}"
+    wm = _FakeWorkingMemory()
+    _seed_wm(
+        wm,
+        event_id,
+        triage=_triage(
+            event_type=EventType.DATA_EXFILTRATION,
+            severity=Severity.HIGH,
+            entities=_insider_entities(),
+        ),
+    )
+    agent = ResponseAgent(
+        llm_client=_IncompleteInsiderLLM(),
+        working_memory=wm,
+        event_service=_FakeEventService(final_verdict=FinalVerdict.CONFIRMED_THREAT),
+        capability_manifest=build_mock_capability_manifest(),
+        scenario_id="insider_data_exfiltration",
+    )
+    plan = await agent.execute(_agent_input(event_id))
+    assert plan.generated_by is ResponsePlanGeneratedBy.TEMPLATE
+    strategy = plan.strategy_summary or ""
+    assert "identity_containment_dedup" in strategy or "entity_coverage_merge" in strategy
 
 
 @pytest.mark.asyncio

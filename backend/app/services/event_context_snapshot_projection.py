@@ -195,6 +195,27 @@ def build_evidence_snapshot_summary(
     return _fit_bytes(summary, max_bytes=_MAX_EVIDENCE_SUMMARY_BYTES)
 
 
+def _count_or_preserved(
+    payload: dict[str, Any],
+    *,
+    list_key: str,
+    count_key: str,
+) -> int:
+    """Count a heavy list when present; otherwise keep a previously projected count.
+
+    ISSUE-254 strips ``phases`` / ``claim_refs`` after the first summary. Re-projecting
+    that summary must not re-derive the counter from a missing list (which looks like 0).
+    """
+    items = payload.get(list_key)
+    if isinstance(items, list):
+        return len(items)
+    raw = payload.get(count_key)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_storyline_snapshot_summary(
     storyline: AttackStoryline | dict[str, Any],
 ) -> dict[str, Any]:
@@ -212,14 +233,16 @@ def build_storyline_snapshot_summary(
     else:
         grounding = storyline.get("grounding_status")
         generated_by = storyline.get("generated_by")
-        phases = storyline.get("phases") or []
-        claim_refs = storyline.get("claim_refs") or []
         payload = {
             "storyline_id": str(storyline.get("storyline_id") or "")[:128],
             "grounding_status": _enum_value_or_text(grounding)[:64],
             "generated_by": _enum_value_or_text(generated_by)[:32],
-            "phase_count": len(phases) if isinstance(phases, list) else 0,
-            "claim_ref_count": len(claim_refs) if isinstance(claim_refs, list) else 0,
+            "phase_count": _count_or_preserved(
+                storyline, list_key="phases", count_key="phase_count"
+            ),
+            "claim_ref_count": _count_or_preserved(
+                storyline, list_key="claim_refs", count_key="claim_ref_count"
+            ),
             "narrative_summary": str(storyline.get("narrative_summary") or "")[
                 :_MAX_NARRATIVE_CHARS
             ],
@@ -418,7 +441,9 @@ def _hard_project_api_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
             cleaned["evidence_summary"],
             max_bytes=_MAX_EVIDENCE_SUMMARY_BYTES,
         )
-    if isinstance(cleaned.get("storyline"), dict):
+    if isinstance(cleaned.get("storyline"), dict) and _storyline_needs_reproject(
+        cleaned["storyline"]
+    ):
         cleaned["storyline"] = build_storyline_snapshot_summary(cleaned["storyline"])
     if isinstance(cleaned.get("evidence_gaps"), list):
         cleaned["evidence_gaps"] = [

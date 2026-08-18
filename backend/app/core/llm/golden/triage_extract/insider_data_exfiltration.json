@@ -21,20 +21,22 @@
           "entity_id": "ip-int-fin",
           "entity_type": "ip",
           "address": "10.20.30.23",
-          "scope": "internal"
+          "scope": "internal",
+          "attributes": {"normalized_field": "src_ip"}
         },
         {
           "entity_id": "ip-ext-exfil",
           "entity_type": "ip",
           "address": "203.0.113.88",
-          "scope": "external"
+          "scope": "external",
+          "attributes": {"normalized_field": "dst_ip"}
         }
       ],
       "domains": [
         {
-          "entity_id": "dom-cloud-storage",
+          "entity_id": "dom-exfil-upload",
           "entity_type": "domain",
-          "fqdn": "cloud-storage.example.com"
+          "fqdn": "unknown-upload-example.com"
         }
       ],
       "processes": [

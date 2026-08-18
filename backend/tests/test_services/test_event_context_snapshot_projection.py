@@ -132,6 +132,33 @@ def test_storyline_summary_from_dict_drops_heavy_fields() -> None:
     assert "prompt" not in summary
 
 
+def test_storyline_summary_reproject_preserves_phase_and_claim_counts() -> None:
+    """GET EventDetail must not zero counters after ISSUE-254 strips phases."""
+    full = {
+        "storyline_id": "stl-idemp",
+        "grounding_status": "evidence_grounded",
+        "generated_by": "llm",
+        "phases": [
+            {"phase_order": 1, "entries": [{"description": "a"}]},
+            {"phase_order": 2, "entries": [{"description": "b"}]},
+        ],
+        "claim_refs": [{"claim_id": "c1"}, {"claim_id": "c2"}, {"claim_id": "c3"}],
+        "narrative_summary": "ok",
+    }
+    once = build_storyline_snapshot_summary(full)
+    twice = build_storyline_snapshot_summary(once)
+    assert once["phase_count"] == 2
+    assert once["claim_ref_count"] == 3
+    assert "phases" not in once
+    assert twice["phase_count"] == 2
+    assert twice["claim_ref_count"] == 3
+    projected = project_snapshot_for_api({"storyline": full})
+    assert projected is not None
+    assert projected["storyline"]["phase_count"] == 2
+    assert projected["storyline"]["claim_ref_count"] == 3
+    assert "phases" not in projected["storyline"]
+
+
 def test_dict_projection_preserves_enum_values_at_type_boundaries() -> None:
     evidence = build_evidence_snapshot_summary({"collection_status": CollectionStatus.COMPLETED})
     storyline = build_storyline_snapshot_summary(
@@ -225,6 +252,8 @@ def test_project_closed_freeze_extracts_bounded_summary_without_dump() -> None:
     assert projected["evidence_count"] == 1
     assert projected["evidence_gaps"][0]["missing_source"] == "endpoint"
     assert projected["storyline"]["grounding_status"] == "ungrounded"
+    assert projected["storyline"]["phase_count"] == 1
+    assert projected["storyline"]["claim_ref_count"] == 1
     assert "phases" not in projected["storyline"]
     assert "evidence_output" not in projected
     assert "report" not in projected

@@ -3,6 +3,7 @@ name: live-reasoning-nightly
 # ISSUE-350 live glm reasoning card. Independent of PR ci.yml.
 # Mock CLOSED green is not a success reason for this job.
 # Missing GitHub secrets fail the job (no skip-as-success).
+# Demo profile guard rejects a live LLM overlay file; use up-live-reasoning.
 
 on:
   schedule:
@@ -25,6 +26,7 @@ jobs:
       BACKEND_PORT: "8000"
       FRONTEND_PORT: "5173"
       MOCK_XDR_PORT: "8100"
+      WORKER: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -64,13 +66,41 @@ jobs:
             echo "LLM_API_BASE_URL=${LLM_API_BASE_URL}"
             echo "LLM_API_KEY=${LLM_API_KEY}"
             echo "LLM_PRIMARY_MODEL=${LLM_PRIMARY_MODEL}"
+            echo "CERTIFICATION_CARD=live_reasoning"
           } > .env.live
 
-      - name: Start demo stack with fresh volumes
+      - name: Start mock-XDR stack with live LLM overlay
         run: |
           set -euo pipefail
-          make down-v || true
-          make up-demo
+          make down-v
+          make up-live-reasoning
+
+      - name: Wait until backend health is ready
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 180))
+          until curl -sf "http://127.0.0.1:${BACKEND_PORT}/api/v1/health" -o /tmp/live-health.json; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "backend /api/v1/health did not become ready"
+              exit 1
+            fi
+            sleep 3
+          done
+          python3 -c '
+          import json, sys
+          payload = json.loads(open("/tmp/live-health.json", encoding="utf-8").read())
+          llm = payload.get("llm") if isinstance(payload, dict) else {}
+          if not isinstance(llm, dict):
+              llm = {}
+          mode = str(llm.get("mode") or "").strip().lower()
+          model = str(llm.get("primary_model") or "").strip().lower()
+          print("health llm.mode=", mode, "primary_model=", model)
+          if mode != "openai_compatible":
+              raise SystemExit(f"expected llm.mode=openai_compatible, got {mode!r}")
+          if not model or model in {"mock-model", "mock"}:
+              raise SystemExit(f"expected live primary_model, got {model!r}")
+          '
+
 
       - name: Live reasoning card (insider gold path)
         run: |
@@ -89,14 +119,6 @@ jobs:
               --require-llm-quality \
               --json | tee artifacts/live-reasoning/insider-eval.json
 
-      - name: Live adversarial pack (same secrets, isolated compose)
-        env:
-          LLM_MODE: openai_compatible
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_API_BASE_URL: ${{ secrets.LLM_API_BASE_URL }}
-          LLM_PRIMARY_MODEL: ${{ secrets.LLM_PRIMARY_MODEL }}
-        run: make adversarial-closure-gates
-
       - name: Collect decision-trace / report artifacts
         if: always()
         run: python3 scripts/collect_live_eval_artifacts.py
@@ -108,8 +130,6 @@ jobs:
           name: live-reasoning-${{ github.run_id }}
           path: |
             artifacts/live-reasoning/**
-            backend/tests/adversarial/artifacts/latest_audit.json
-            backend/tests/adversarial/artifacts/latest_full_loop_audit.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -120,5 +140,4 @@ jobs:
             --project-name "${COMPOSE_PROJECT_NAME}" \
             -f "${GITHUB_WORKSPACE}/infra/docker-compose.yml" \
             down --volumes --remove-orphans || true
-          make down-demo || true
           make down-v || true

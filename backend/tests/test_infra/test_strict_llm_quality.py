@@ -29,12 +29,12 @@ def quality_mod():
     return _load_module(SCRIPTS / "strict_llm_quality.py", "strict_llm_quality_under_test")
 
 
-def _success_calls() -> list[dict[str, str]]:
+def _success_calls(*, model_name: str = "glm-4") -> list[dict[str, str]]:
     return [
-        {"prompt_key": "triage_extract", "status": "success"},
-        {"prompt_key": "plan_generate", "status": "success"},
-        {"prompt_key": "risk_score", "status": "success"},
-        {"prompt_key": "response_plan", "status": "success"},
+        {"prompt_key": "triage_extract", "status": "success", "model_name": model_name},
+        {"prompt_key": "plan_generate", "status": "success", "model_name": model_name},
+        {"prompt_key": "risk_score", "status": "success", "model_name": model_name},
+        {"prompt_key": "response_plan", "status": "success", "model_name": model_name},
     ]
 
 
@@ -47,8 +47,8 @@ def _exfil_success_kwargs(**overrides):
         "response_plan_generated_by": "llm",
         "llm_calls": [
             *_success_calls(),
-            {"prompt_key": "storyline_generate", "status": "success"},
-            {"prompt_key": "report_generate", "status": "success"},
+            {"prompt_key": "storyline_generate", "status": "success", "model_name": "glm-4"},
+            {"prompt_key": "report_generate", "status": "success", "model_name": "glm-4"},
         ],
         "storyline_generated_by": "llm",
         "storyline_phase_count": 4,
@@ -105,6 +105,50 @@ def test_llm_success_on_exfil_passes(quality_mod) -> None:
     assert summary["ok"] is True
     assert summary["storyline_generated_by"] == "llm"
     assert summary["report_quality"] == "complete"
+
+
+def test_mock_model_success_fails_live_card(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="mock-model"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(llm_calls=_success_calls(model_name="mock-model"))
+        )
+
+
+def test_missing_model_name_fails_live_card(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="missing"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(
+                llm_calls=[
+                    {"prompt_key": "triage_extract", "status": "success"},
+                    {"prompt_key": "plan_generate", "status": "success", "model_name": "glm-4"},
+                    {"prompt_key": "risk_score", "status": "success", "model_name": "glm-4"},
+                    {"prompt_key": "response_plan", "status": "success", "model_name": "glm-4"},
+                    {"prompt_key": "report_generate", "status": "success", "model_name": "glm-4"},
+                ]
+            )
+        )
+
+
+def test_insider_threat_event_type_is_exfil_like(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="generated_by=template"):
+        quality_mod.evaluate_llm_quality(
+            event_id="evt-insider-type",
+            event_type="insider_threat",
+            final_verdict="confirmed_threat",
+            scenario_id=None,
+            response_plan_generated_by="template",
+            llm_calls=_success_calls(),
+        )
+
+
+def test_coverage_merge_note_fails_even_if_generated_by_llm(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="entity_coverage_merge"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(
+                response_plan_generated_by="llm",
+                response_plan_strategy="containment_quality_gate: entity_coverage_merge",
+            )
+        )
 
 
 def test_rule_storyline_on_exfil_fails_live_card(quality_mod) -> None:
@@ -175,8 +219,11 @@ def test_live_reasoning_nightly_workflow_is_independent_and_fail_closed() -> Non
     assert "fail-closed" in text
     assert "secrets.LLM_API_KEY" in text
     assert "insider_data_exfiltration" in text
-    assert "adversarial-closure-gates" in text
     assert "live-glm-eval" in text
+    assert "CERTIFICATION_CARD=live_reasoning" in text
+    assert "make up-demo" not in text
+    assert "adversarial-closure-gates" not in text
+    assert "up-live-reasoning" in text
     ci_text = ci.read_text(encoding="utf-8")
     assert "live-glm-eval" not in ci_text
     assert "live-reasoning-nightly.yml" not in ci_text

@@ -29,6 +29,10 @@ make demo-full-loop
 # 单场景：EVAL_SCENARIO=insider_data_exfiltration make demo-full-loop
 # compat 剖面（非 strict CLOSED）：make eval-full-loop
 # Live 研判卡（与 CLOSED 管道卡拆开）：EVAL_REQUIRE_LLM_QUALITY=1 make eval-full-loop
+# Mock LLM_MODE=mock 时研判卡必须红（mock-model 不是 live glm）。
+# Live glm：写 LLM-only .env.live（含 CERTIFICATION_CARD=live_reasoning），然后
+#   make down-v && make up-live-reasoning
+# 不要 make up-demo + .env.live（demo-guard 会 fail-closed）。
 ```
 
 分步剖面（`bootstrap-demo-full-loop` 会停在 `waiting_approval`，需脚本审批后 `eval-full-loop` 收口）：

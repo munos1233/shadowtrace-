@@ -381,6 +381,11 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
                 f"response_plan actions={action_count}",
                 f"plan_id={data.get('plan_id') or 'none'}",
                 f"generated_by={data.get('generated_by') or 'unknown'}",
+                (
+                    f"strategy={_safe_scalar_text(data.get('strategy_summary'))}"
+                    if _safe_scalar_text(data.get("strategy_summary"))
+                    else ""
+                ),
             ]
         )
 

@@ -21,7 +21,7 @@ CORE_PROMPT_KEYS = (
     "response_plan",
 )
 
-_EXFIL_EVENT_TYPES = frozenset({"data_exfiltration"})
+_EXFIL_EVENT_TYPES = frozenset({"data_exfiltration", "insider_threat"})
 _EXFIL_SCENARIOS = frozenset(
     {
         "insider_data_exfiltration",
@@ -29,6 +29,13 @@ _EXFIL_SCENARIOS = frozenset(
     }
 )
 _TIMEOUT_STATUSES = frozenset({"llm_timeout", "timeout"})
+_MOCK_MODEL_NAMES = frozenset({"mock-model", "mock"})
+_GATE_INJECTION_MARKERS = (
+    "entity_coverage_merge",
+    "identity_containment_dedup",
+    "rule fallback after ungrounded",
+    "containment_quality_gate_unsatisfied",
+)
 
 
 def _llm_call_detail(entry: dict[str, Any]) -> dict[str, Any]:
@@ -53,6 +60,7 @@ def collect_llm_calls_from_trace(entries: list[Any]) -> list[dict[str, Any]]:
                 "error_class": detail.get("error_class"),
                 "error_detail": detail.get("error_detail"),
                 "agent_name": detail.get("agent_name") or entry.get("actor"),
+                "model_name": detail.get("model_name") or detail.get("model"),
             }
         )
     return calls
@@ -137,6 +145,44 @@ def _generated_by_from_trace(entries: list[Any]) -> str | None:
     return found
 
 
+def _response_strategy_from_trace(entries: list[Any]) -> str:
+    """Concatenate response_agent titles/details so gate-injection notes are visible."""
+    blobs: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        actor = str(entry.get("actor") or "")
+        detail = _llm_call_detail(entry)
+        agent_name = str(detail.get("agent_name") or actor)
+        if agent_name not in _RESPONSE_AGENT_NAMES and actor not in _RESPONSE_AGENT_NAMES:
+            continue
+        for value in (
+            entry.get("title"),
+            detail.get("strategy_summary"),
+            detail.get("structured_conclusion"),
+            detail.get("decision_summary"),
+            detail.get("brief"),
+        ):
+            if isinstance(value, str) and value.strip():
+                blobs.append(value.strip())
+    return " ".join(blobs)
+
+
+def _mock_model_successes(llm_calls: list[dict[str, Any]]) -> list[str]:
+    watched = set(CORE_PROMPT_KEYS) | {"report_generate"}
+    bad: list[str] = []
+    for row in llm_calls:
+        key = str(row.get("prompt_key") or "")
+        if key not in watched:
+            continue
+        if str(row.get("status") or "") != "success":
+            continue
+        model = str(row.get("model_name") or "").strip().lower()
+        if not model or model in _MOCK_MODEL_NAMES:
+            bad.append(f"{key}:{model or 'missing'}")
+    return bad
+
+
 def evaluate_llm_quality(
     *,
     event_id: str,
@@ -148,6 +194,7 @@ def evaluate_llm_quality(
     storyline_generated_by: str | None = None,
     storyline_phase_count: int = 0,
     report_quality: str | None = None,
+    response_plan_strategy: str | None = None,
 ) -> dict[str, Any]:
     """Return a quality summary or raise RuntimeError when the Live card fails."""
     by_prompt: dict[str, list[dict[str, Any]]] = {key: [] for key in CORE_PROMPT_KEYS}
@@ -192,8 +239,16 @@ def evaluate_llm_quality(
         "storyline_generated_by": storyline_generated_by,
         "storyline_phase_count": int(storyline_phase_count or 0),
         "report_quality": report_quality,
+        "response_plan_strategy": response_plan_strategy,
         "health_window_consulted": False,
     }
+
+    mock_hits = _mock_model_successes(llm_calls)
+    if mock_hits:
+        raise RuntimeError(
+            "live reasoning card FAIL: mock-model (or missing model_name) is not "
+            f"live glm for {event_id}: {mock_hits}"
+        )
 
     if missing or failed_keys or all_timeout:
         raise RuntimeError(
@@ -218,6 +273,14 @@ def evaluate_llm_quality(
                 f"confirmed_threat exfil event {event_id} "
                 f"(event_type={event_type!r} scenario={scenario_id!r}); "
                 "rule fallback is not Agent reasoning success"
+            )
+        strategy_blob = (response_plan_strategy or "").lower()
+        hit = next((marker for marker in _GATE_INJECTION_MARKERS if marker in strategy_blob), None)
+        if hit:
+            raise RuntimeError(
+                "live reasoning card FAIL: response_plan was completed by quality-gate "
+                f"injection ({hit}) on confirmed_threat exfil event {event_id}; "
+                "entity_coverage_merge / identity_containment_dedup is not Agent reasoning"
             )
         storyline_by = (storyline_generated_by or "").strip().lower()
         if storyline_by != "llm" or int(storyline_phase_count or 0) < 1:
@@ -336,6 +399,7 @@ def assert_llm_quality_acceptance(
     )
     llm_calls = collect_llm_calls_from_trace(trace_entries)
     generated_by = _generated_by_from_event(event) or _generated_by_from_trace(trace_entries)
+    strategy = _response_strategy_from_trace(trace_entries)
     storyline_generated_by, storyline_phase_count = _load_storyline_adoption(client, event_id)
     report_quality = _load_report_quality(client, event_id)
     return evaluate_llm_quality(
@@ -348,4 +412,5 @@ def assert_llm_quality_acceptance(
         storyline_generated_by=storyline_generated_by,
         storyline_phase_count=storyline_phase_count,
         report_quality=report_quality,
+        response_plan_strategy=strategy,
     )
