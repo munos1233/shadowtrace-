@@ -82,7 +82,8 @@ SEVERITY_RULES: dict[str, list[tuple[str, str]]] = {
     # data_exfiltration / insider_threat with an external IP present → HIGH
     # (ISSUE-032 spec: "数据外泄类加外部 IP 为 high").  Without an external IP
     # (e.g. pure internal server-to-server exfiltration) severity is MEDIUM —
-    # the check is applied in _apply_severity_rules via _external_ip_in_text().
+    # the check is applied in _apply_severity_rules via _has_external_ip()
+    # (alert text and merged EntitySet dst_ip).
     "high": [
         ("event_type", "data_exfiltration"),
         ("event_type", "insider_threat"),
@@ -122,6 +123,7 @@ _IOC_URL_PATTERN: _re.Pattern[str] = _re.compile(r"https?://[^\s,;\"'<>]+")
 def _apply_severity_rules(
     event_type: EventType,
     alert_text: str = "",
+    entities: EntitySet | None = None,
 ) -> tuple[Severity, bool]:
     """Assign severity and need_investigation via SEVERITY_RULES.
 
@@ -146,10 +148,11 @@ def _apply_severity_rules(
     for rule_key, rule_val in SEVERITY_RULES.get("high", []):
         if rule_key == "event_type" and rule_val == event_type_value:
             # ISSUE-032 spec: data_exfiltration / insider_threat → HIGH only
-            # when an external IP is present in the alert text.  Pure internal
-            # exfiltration (no external IP) → MEDIUM.
+            # when an external IP is present. Gold-path incidents often keep
+            # dst_ip on the source EntitySet while title/description omit it;
+            # scanning alert text alone would leave those events MEDIUM.
             if event_type_value in {"data_exfiltration", "insider_threat"}:
-                if alert_text and _external_ip_in_text(alert_text):
+                if _has_external_ip(alert_text, entities):
                     severity = Severity.HIGH
                     return severity, True
                 severity = Severity.MEDIUM
@@ -198,6 +201,24 @@ def _external_ip_in_text(alert_text: str) -> bool:
         if not is_internal_ip(ip_match):
             return True
     return False
+
+
+def _external_ip_in_entities(entities: EntitySet | None) -> bool:
+    """Return True when *entities* already carries an external destination IP."""
+    if entities is None:
+        return False
+    for ip_entity in entities.ips:
+        addr = ip_entity.address or ""
+        if addr and not is_internal_ip(addr):
+            return True
+    return False
+
+
+def _has_external_ip(alert_text: str = "", entities: EntitySet | None = None) -> bool:
+    """ISSUE-032 HIGH gate: external IP in alert text or merged EntitySet."""
+    if alert_text and _external_ip_in_text(alert_text):
+        return True
+    return _external_ip_in_entities(entities)
 
 
 def _extract_iocs(
@@ -598,7 +619,9 @@ class TriageAgent(BaseAgent[TriageAgentInput, TriageResult]):
 
         # 4. Severity + need_investigation.
         severity, need_investigation = _apply_severity_rules(
-            event_type, alert_text=input.raw_event_summary
+            event_type,
+            alert_text=input.raw_event_summary,
+            entities=entities,
         )
 
         # 5. IOC extraction.
@@ -1104,7 +1127,9 @@ __all__ = [
     "TriageAgent",
     "_apply_severity_rules",
     "_extract_iocs",
+    "_external_ip_in_entities",
     "_external_ip_in_text",
+    "_has_external_ip",
     "_map_event_type",
     "_resolve_alert_type_from_snapshot",
 ]
