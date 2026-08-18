@@ -117,7 +117,7 @@ def _main_scenario_evidence(event_id: str = "evt-sl-001") -> list[dict[str, Any]
         _make_evidence(
             source="dns",
             evidence_type="dns_query",
-            description="DNS 解析 cloud-storage.example.com 到 203.0.113.88",
+            description="DNS 解析 unknown-upload-example.com 到 203.0.113.88",
             timestamp=base + timedelta(minutes=4),
         ),
     ]

@@ -936,7 +936,7 @@ async def test_mock_storyline_golden_binds_prompt_evidence_ids() -> None:
             "evidence_id": "evd-bind-dns",
             "source": "dns",
             "evidence_type": "dns_query",
-            "description": "DNS 解析 cloud-storage.example.com 到 203.0.113.88",
+            "description": "DNS 解析 unknown-upload-example.com 到 203.0.113.88",
             "timestamp": "2024-06-15T09:04:00Z",
         },
     ]

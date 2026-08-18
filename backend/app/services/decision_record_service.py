@@ -24,7 +24,7 @@ from app.models.decision_record import (
     DecisionStage,
 )
 from app.models.react import ReActUncertaintyCode
-from app.services.agent_trace_service import TraceProjection
+from app.services.agent_trace_service import TraceProjection, response_gate_trace_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -393,16 +393,14 @@ def _enrich_agent_output(
             enriched.setdefault("selected_action", f"response_plan:{plan_id.strip()}")
         action_count = len(actions) if isinstance(actions, list) else 0
         generated = output_data.get("generated_by")
-        strategy = output_data.get("strategy_summary")
-        strategy_bit = ""
-        if isinstance(strategy, str) and strategy.strip():
-            strategy_bit = f" strategy={strategy.strip()[:180]}"
+        gate_hits = response_gate_trace_tokens(output_data.get("strategy_summary"))
+        gate_bit = f" gates={','.join(gate_hits)}" if gate_hits else ""
         enriched.setdefault(
             "decision_summary",
             (
                 f"response_plan actions={action_count} "
                 f"plan_id={plan_id or 'none'} generated_by={generated or 'unknown'}"
-                f"{strategy_bit}"
+                f"{gate_bit}"
             )[:512],
         )
         if generated is not None:

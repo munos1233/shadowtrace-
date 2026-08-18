@@ -192,6 +192,25 @@ def test_decision_basis_synthesizes_typed_agent_brief() -> None:
     assert "summary_unavailable" not in basis
 
 
+def test_response_agent_brief_keeps_gate_tokens_not_free_text_strategy() -> None:
+    """ISSUE-255: allowlisted gates= may appear; LLM strategy prose must not."""
+    prose = "This free-text strategy must not become decision_summary"
+    basis = TraceProjection.decision_basis(
+        {
+            "plan_id": "pln-gate-1",
+            "generated_by": "llm",
+            "strategy_summary": f"{prose}; containment_quality_gate: entity_coverage_merge",
+            "actions": [{"tool_name": "isolate_host"}],
+        },
+        agent_name="response_agent",
+    )
+    conclusion = basis["structured_conclusion"]
+    assert "generated_by=llm" in conclusion
+    assert "gates=entity_coverage_merge" in conclusion
+    assert prose not in conclusion
+    assert "strategy=" not in conclusion
+
+
 def test_decision_basis_synthesizes_rag_agent_brief() -> None:
     """ISSUE-255: rag_agent typed retrieval fields → non-empty brief, never CoT."""
     basis = TraceProjection.decision_basis(

@@ -30,6 +30,7 @@ _EXFIL_SCENARIOS = frozenset(
 )
 _TIMEOUT_STATUSES = frozenset({"llm_timeout", "timeout"})
 _MOCK_MODEL_NAMES = frozenset({"mock-model", "mock"})
+# Keep in sync with app.services.agent_trace_service._RESPONSE_GATE_TRACE_MARKERS.
 _GATE_INJECTION_MARKERS = (
     "entity_coverage_merge",
     "identity_containment_dedup",

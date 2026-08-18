@@ -141,6 +141,30 @@ def test_insider_threat_event_type_is_exfil_like(quality_mod) -> None:
         )
 
 
+def test_gate_tokens_in_trace_title_fail_live_card(quality_mod) -> None:
+    found = quality_mod._response_strategy_from_trace(
+        [
+            {
+                "entry_type": "agent_execution",
+                "actor": "response_agent",
+                "title": (
+                    "response_agent 完成响应方案：response_plan actions=4 "
+                    "plan_id=pln-1 generated_by=llm gates=entity_coverage_merge"
+                ),
+                "detail": {},
+            }
+        ]
+    )
+    assert "entity_coverage_merge" in found
+    with pytest.raises(RuntimeError, match="entity_coverage_merge"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(
+                response_plan_generated_by="llm",
+                response_plan_strategy=found,
+            )
+        )
+
+
 def test_coverage_merge_note_fails_even_if_generated_by_llm(quality_mod) -> None:
     with pytest.raises(RuntimeError, match="entity_coverage_merge"):
         quality_mod.evaluate_llm_quality(
