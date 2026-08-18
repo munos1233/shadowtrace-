@@ -9,6 +9,7 @@ build/
 .venv/
 venv/
 .env
+.env.live
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
