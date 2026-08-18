@@ -364,6 +364,11 @@ jobs:
           path: backend/coverage.xml
           if-no-files-found: error
 
+      # Timing tests above do not migrate this fresh Postgres. Truncating ORM
+      # table names before alembic leaves relation "action" missing (ISSUE-267).
+      - name: Apply migrations
+        run: uv run --frozen python -m alembic upgrade head
+
       - name: Clean-service random-order retest (ISSUE-267)
         env:
           SHADOWTRACE_TEST_SHUFFLE_SEED: "267"
