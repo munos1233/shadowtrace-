@@ -342,3 +342,32 @@ async def test_get_event_overlays_bounded_triage_severity_from_wm() -> None:
     assert "triage_result" not in snap
     assert "CoT must not leak" not in str(snap)
     service._store.get.assert_any_await(event_id, "triage_result")
+
+
+@pytest.mark.asyncio
+async def test_get_event_overlays_bounded_triage_event_type_from_wm() -> None:
+    event_id = "evt-overlay-triage-event-type"
+    row = _reporting_row(
+        event_id,
+        snapshot={"risk_assessment": {"risk_score": 77, "severity": "high"}},
+    )
+    service = _service_with_row(
+        row,
+        store_values={
+            "triage_result": {
+                "event_type": "data_exfiltration",
+                "severity": "high",
+                "decision_summary": "event_type=data_exfiltration, severity=high",
+                "reasoning": "CoT must not leak",
+            }
+        },
+    )
+
+    event = await service.get_event(event_id)
+
+    assert event is not None
+    snap = event.event_context_snapshot or {}
+    assert event.event_type == EventType.MALICIOUS_PROCESS
+    assert snap.get("triage_event_type") == "data_exfiltration"
+    assert "triage_result" not in snap
+    assert "CoT must not leak" not in str(snap)

@@ -262,6 +262,22 @@ class TestApplySeverityRules:
         )
         assert severity == Severity.HIGH  # external IP → HIGH, not CRITICAL
 
+    def test_insider_threat_with_external_ip_is_high(self):
+        severity, need = _apply_severity_rules(
+            EventType.INSIDER_THREAT,
+            alert_text="insider packed finance data to 203.0.113.88",
+        )
+        assert severity == Severity.HIGH
+        assert need is True
+
+    def test_insider_threat_without_external_ip_is_medium(self):
+        severity, need = _apply_severity_rules(
+            EventType.INSIDER_THREAT,
+            alert_text="insider packed finance data on internal host 10.20.30.23",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
     def test_bilateral_does_not_trigger_critical(self):
         """Word 'bilateral' should NOT match the \blateral\b boundary check."""
         severity, need = _apply_severity_rules(

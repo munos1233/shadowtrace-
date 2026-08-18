@@ -561,6 +561,8 @@ export interface EventContextSnapshot {
   risk_assessment?: RiskAssessment | null;
   /** ISSUE-330: bounded triage severity for explicit dual-source disclosure. */
   triage_severity?: Severity | null;
+  /** Triage event_type when it differs from the authoritative source type. */
+  triage_event_type?: EventType | null;
   execution_jobs?: ExecutionJobResponse[];
   execution_summary?: {
     jobs?: ExecutionJobResponse[];

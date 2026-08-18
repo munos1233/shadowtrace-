@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from app.agents.conflict_detector import RULE_IAM_ABSENT_BUT_EDR_ACTIVE
 from app.agents.triage_risk_consistency import (
     INCONSISTENCY_DISCLOSURE_HEADER,
     format_triage_decision_excerpt,
@@ -24,8 +25,9 @@ from app.models.agent_io import (
 )
 from app.models.detection_context_snapshot import DetectionContextSnapshot
 from app.models.enums import ActionCategory, FinalVerdict, Severity
-from app.models.evidence import EvidenceGap
+from app.models.evidence import EvidenceConflict, EvidenceGap
 from app.models.report import ReportSection
+from app.services.risk_verdict_projection import UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT
 
 PLACEHOLDER_NO_ACTIONS = "暂无处置动作"
 PLACEHOLDER_NO_VERIFICATION = "暂无验证结果"
@@ -75,6 +77,58 @@ SECTION_SPECS: tuple[tuple[str, str], ...] = (
 
 SECTION_KEYS: tuple[str, ...] = tuple(key for key, _ in SECTION_SPECS)
 SECTION_TITLES: dict[str, str] = dict(SECTION_SPECS)
+
+
+def _conflict_rule_name(conflict: EvidenceConflict | dict[str, Any]) -> str:
+    detail: Any
+    if isinstance(conflict, EvidenceConflict):
+        detail = conflict.detail
+    elif isinstance(conflict, dict):
+        detail = conflict.get("detail")
+    else:
+        return ""
+    if not isinstance(detail, dict):
+        return ""
+    return str(detail.get("rule_name") or "").strip()
+
+
+def _join_action_targets(actions: list[Action], *, fallback: str) -> str:
+    targets = [str(action.target).strip() for action in actions if str(action.target or "").strip()]
+    return "、".join(targets) if targets else fallback
+
+
+def _containment_recommendation_tips(response_actions: list[Action]) -> list[str]:
+    """Map executed RESPONSE tools to recs; never invent reset_password."""
+    disable = [action for action in response_actions if action.tool_name == "disable_account"]
+    reset = [action for action in response_actions if action.tool_name == "reset_password"]
+    isolate = [action for action in response_actions if action.tool_name == "isolate_host"]
+    block_ips = [action for action in response_actions if action.tool_name == "block_ip"]
+    block_domains = [action for action in response_actions if action.tool_name == "block_domain"]
+    tips: list[str] = []
+    if disable:
+        tips.append(
+            "禁用账号 "
+            f"{_join_action_targets(disable, fallback='涉事账号')} "
+            "并复核会话失效，排查横向移动痕迹。"
+        )
+    elif reset:
+        tips.append(
+            "冻结账号 "
+            f"{_join_action_targets(reset, fallback='涉事账号')} "
+            "会话并强制改密，排查横向移动痕迹。"
+        )
+    if isolate:
+        tips.append(
+            f"隔离主机 {_join_action_targets(isolate, fallback='涉事主机')}，并复核隔离生效。"
+        )
+    network_bits: list[str] = []
+    if block_ips:
+        network_bits.append(_join_action_targets(block_ips, fallback="外联 IP"))
+    if block_domains:
+        network_bits.append("域名 " + _join_action_targets(block_domains, fallback="外联域名"))
+    if network_bits:
+        tips.append("阻断外联 " + " 与 ".join(network_bits) + "。")
+    return tips
 
 
 def _fmt_ts(value: datetime | None) -> str:
@@ -228,6 +282,8 @@ def build_decision_brief(
     ]
     if need_investigation is not None:
         parts.append(f"需深入调查={'是' if need_investigation else '否'}")
+    if UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT in (risk_assessment.verdict_reason_codes or []):
+        parts.append(f"identity/endpoint conflict {RULE_IAM_ABSENT_BUT_EDR_ACTIVE} unresolved")
     brief = "；".join(parts) + "。"
     triage_excerpt = format_triage_decision_excerpt(
         triage_result,
@@ -926,7 +982,13 @@ class ReportSectionBuilder:
                 f"conf={item.confidence:.2f} | {item.description}"
             )
         if evidence_output.conflicts:
-            lines.append(f"conflicts={len(evidence_output.conflicts)}")
+            for conflict in evidence_output.conflicts:
+                rule = _conflict_rule_name(conflict)
+                description = (conflict.description or "").strip() or "unspecified"
+                if rule:
+                    lines.append(f"conflict_rule={rule}: {description}")
+                else:
+                    lines.append(f"conflict: {description}")
         gap_lines = _format_evidence_gaps(evidence_output.gaps)
         if gap_lines:
             lines.append("evidence_gaps:")
@@ -1149,9 +1211,16 @@ class ReportSectionBuilder:
                 f"replan_count={replan_count}，escalated=true），"
                 "请安全运营人员复核失败动作、决定是否人工处置或关闭事件。"
             )
-        if risk_assessment.severity in {Severity.HIGH, Severity.CRITICAL}:
+        containment = _containment_recommendation_tips(response_actions)
+        if containment:
+            tips.extend(containment)
+            tips.append("保全敏感文件访问与外传日志，评估数据泄露范围。")
+        elif risk_assessment.severity in {Severity.HIGH, Severity.CRITICAL}:
             tips.append("对高价值主机执行隔离或进程阻断，并复核外联阻断生效。")
-            tips.append("冻结涉事账号会话并强制改密，排查横向移动痕迹。")
+            if any(action.tool_name == "reset_password" for action in response_actions):
+                tips.append("冻结涉事账号会话并强制改密，排查横向移动痕迹。")
+            else:
+                tips.append("禁用或冻结涉事账号，排查横向移动痕迹。")
             tips.append("保全敏感文件访问与外传日志，评估数据泄露范围。")
         elif final_verdict in {
             FinalVerdict.FALSE_POSITIVE,

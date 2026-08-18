@@ -9,11 +9,13 @@ from app.agents.rules.response_plan_quality_gate import (
     IDENTITY_CONTAINMENT_TOOLS,
     apply_containment_quality_gate,
     apply_evidence_sufficiency_gate,
+    apply_exfil_domain_containment_gate,
     apply_identity_containment_dedup_gate,
     deduplicate_identity_containment,
     entity_containment_coverage_needs,
     evidence_blocks_high_impact_actions,
     evidence_insufficiency_reason_code,
+    exfil_domain_containment_needs,
     has_actionable_containment_targets,
     requires_threat_aligned_containment,
 )
@@ -711,6 +713,47 @@ def test_has_actionable_includes_domains_but_coverage_needs_ignore_them() -> Non
     entities = EntitySet(domains=[DomainEntity(entity_id="dom-1", fqdn="evil.example")])
     assert has_actionable_containment_targets(entities) is True
     assert entity_containment_coverage_needs(entities) == ()
+    needs = exfil_domain_containment_needs(entities)
+    assert len(needs) == 1
+    assert needs[0].tool_name == "block_domain"
+    assert needs[0].canonical_target == "evil.example"
+
+
+def test_exfil_domain_gate_demotes_llm_without_injecting_block_domain() -> None:
+    entities = EntitySet(domains=[DomainEntity(entity_id="dom-1", fqdn="evil.example")])
+    kept, generated_by, strategy = apply_exfil_domain_containment_gate(
+        candidates=[_Candidate("isolate_host", "PC-FIN-023")],
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        strategy="LLM ok",
+        severity=Severity.HIGH,
+        risk_assessment=_risk(),
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        entities=entities,
+        disposition_only=False,
+    )
+    assert [item.tool_name for item in kept] == ["isolate_host"]
+    assert generated_by is ResponsePlanGeneratedBy.TEMPLATE
+    assert "domain_containment_missing" in strategy
+
+
+def test_exfil_domain_gate_keeps_llm_when_block_domain_covers_entityset() -> None:
+    entities = EntitySet(domains=[DomainEntity(entity_id="dom-1", fqdn="evil.example")])
+    kept, generated_by, strategy = apply_exfil_domain_containment_gate(
+        candidates=[
+            _Candidate("isolate_host", "PC-FIN-023"),
+            _Candidate("block_domain", "evil.example"),
+        ],
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        strategy="LLM ok",
+        severity=Severity.HIGH,
+        risk_assessment=_risk(),
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        entities=entities,
+        disposition_only=False,
+    )
+    assert generated_by is ResponsePlanGeneratedBy.LLM
+    assert "domain_containment_missing" not in strategy
+    assert any(item.tool_name == "block_domain" for item in kept)
 
 
 def test_apply_gate_noop_on_empty_entityset() -> None:

@@ -272,6 +272,59 @@ class _IncompleteInsiderLLM:
         )
 
 
+class _MissingDomainInsiderLLM:
+    """328 triad without block_domain — must not stamp LLM adoption."""
+
+    async def chat(self, *args: Any, **kwargs: Any) -> Any:
+        import json
+
+        from app.core.llm.base import LLMResponse
+
+        payload = {
+            "actions": [
+                {
+                    "tool_name": "disable_account",
+                    "target_type": "account",
+                    "target": "zhangsan",
+                    "parameters": {},
+                    "reason": "Disable suspected insider account",
+                },
+                {
+                    "tool_name": "isolate_host",
+                    "target_type": "host",
+                    "target": "PC-FIN-023",
+                    "parameters": {},
+                    "reason": "Isolate finance endpoint",
+                },
+                {
+                    "tool_name": "block_ip",
+                    "target_type": "ip",
+                    "target": "203.0.113.88",
+                    "parameters": {},
+                    "reason": "Block destination IP",
+                },
+                {
+                    "tool_name": "create_ticket",
+                    "target_type": "ticket",
+                    "target": "ticket",
+                    "parameters": {
+                        "title": "Data exfiltration response",
+                        "description": "Automated containment plan",
+                    },
+                    "reason": "Track investigation actions",
+                },
+            ],
+            "strategy_summary": "Disable account, isolate host, and block dest IP",
+        }
+        return LLMResponse(
+            content=json.dumps(payload),
+            model_name="mock",
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+        )
+
+
 def _playbook_ref(playbook_id: str) -> dict[str, str | int]:
     return {
         "playbook_id": playbook_id,
@@ -479,19 +532,23 @@ async def test_main_scenario_has_disable_account_and_block_ip() -> None:
     assert "disable_account" in tool_names
     assert "isolate_host" in tool_names
     assert "block_ip" in tool_names
+    assert "block_domain" in tool_names
     assert "create_ticket" in tool_names
     disable = next(a for a in plan.actions if a.tool_name == "disable_account")
     isolate = next(a for a in plan.actions if a.tool_name == "isolate_host")
     block = next(a for a in plan.actions if a.tool_name == "block_ip")
+    domain = next(a for a in plan.actions if a.tool_name == "block_domain")
     assert disable.target == "zhangsan"
     assert isolate.target == "PC-FIN-023"
     assert block.target == "203.0.113.88"
+    assert domain.target == "unknown-upload-example.com"
     assert isolate.action_level is ActionLevel.L3
     assert plan.generated_by is ResponsePlanGeneratedBy.LLM
     strategy = plan.strategy_summary or ""
     assert "entity_coverage_merge" not in strategy
     assert "identity_containment_dedup" not in strategy
     assert "rule fallback after ungrounded" not in strategy
+    assert "domain_containment_missing" not in strategy
 
 
 @pytest.mark.asyncio
@@ -519,6 +576,33 @@ async def test_incomplete_insider_plan_stamps_template_not_llm() -> None:
     assert plan.generated_by is ResponsePlanGeneratedBy.TEMPLATE
     strategy = plan.strategy_summary or ""
     assert "identity_containment_dedup" in strategy or "entity_coverage_merge" in strategy
+
+
+@pytest.mark.asyncio
+async def test_insider_plan_missing_block_domain_stamps_template() -> None:
+    """Anti-cheat: 328 triad without block_domain is not LLM adoption."""
+    event_id = f"evt-{uuid4().hex[:8]}"
+    wm = _FakeWorkingMemory()
+    _seed_wm(
+        wm,
+        event_id,
+        triage=_triage(
+            event_type=EventType.DATA_EXFILTRATION,
+            severity=Severity.HIGH,
+            entities=_insider_entities(),
+        ),
+    )
+    agent = ResponseAgent(
+        llm_client=_MissingDomainInsiderLLM(),
+        working_memory=wm,
+        event_service=_FakeEventService(final_verdict=FinalVerdict.CONFIRMED_THREAT),
+        capability_manifest=build_mock_capability_manifest(),
+        scenario_id="insider_data_exfiltration",
+    )
+    plan = await agent.execute(_agent_input(event_id))
+    assert plan.generated_by is ResponsePlanGeneratedBy.TEMPLATE
+    assert "domain_containment_missing" in (plan.strategy_summary or "")
+    assert not any(action.tool_name == "block_domain" for action in plan.actions)
 
 
 @pytest.mark.asyncio
@@ -1194,6 +1278,13 @@ async def test_playbook_resolution_failure_falls_through_to_llm() -> None:
                         "reason": "contain exfil staging host",
                     },
                     {
+                        "tool_name": "block_domain",
+                        "target_type": "domain",
+                        "target": "evil.example",
+                        "parameters": {},
+                        "reason": "block exfil domain",
+                    },
+                    {
                         "tool_name": "create_ticket",
                         "target_type": "ticket",
                         "target": "ticket",
@@ -1445,6 +1536,13 @@ async def test_playbook_pydantic_validation_error_falls_through_to_llm() -> None
                         "target": "PC-FIN-023",
                         "parameters": {},
                         "reason": "contain exfil staging host",
+                    },
+                    {
+                        "tool_name": "block_domain",
+                        "target_type": "domain",
+                        "target": "evil.example",
+                        "parameters": {},
+                        "reason": "block exfil domain",
                     },
                     {
                         "tool_name": "create_ticket",
@@ -2523,6 +2621,13 @@ async def test_llm_explicit_internal_block_ip_not_dropped_by_rule_filter() -> No
                         "target": "svc-analytics-47",
                         "parameters": {},
                         "reason": "Disable compromised service account",
+                    },
+                    {
+                        "tool_name": "block_domain",
+                        "target_type": "domain",
+                        "target": "storage-sync-cdn.example",
+                        "parameters": {},
+                        "reason": "Block exfil domain from EntitySet",
                     },
                 ],
                 "strategy_summary": "LLM explicit internal block",

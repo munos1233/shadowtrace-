@@ -158,8 +158,30 @@ def test_insider_goldens_use_scenario_exfil_domain() -> None:
         payload = _load_golden(prompt_key, "insider_data_exfiltration.json")
         blob = json.dumps(payload, ensure_ascii=False)
         assert leftover not in blob, f"{prompt_key} still mentions leftover domain {leftover}"
-        if prompt_key in {"triage_extract", "storyline_generate"}:
+        if prompt_key in {
+            "triage_extract",
+            "storyline_generate",
+            "response_plan",
+            "report_generate",
+        }:
             assert scenario_domain in blob, f"{prompt_key} must cite {scenario_domain}"
+    response_tools = [
+        str(action.get("tool_name") or "")
+        for action in _load_golden("response_plan", "insider_data_exfiltration.json")["content"][
+            "actions"
+        ]
+        if isinstance(action, dict)
+    ]
+    assert "block_domain" in response_tools
+    recs = str(
+        _load_golden("report_generate", "insider_data_exfiltration.json")["content"]["sections"][
+            "recommendations"
+        ]
+    )
+    assert "强制改密" not in recs
+    assert "reset_password" not in recs.lower()
+    assert "禁用" in recs
+    assert "zhangsan" in recs
 
 
 def test_adversarial_report_golden_recommends_dest_not_vpn_src() -> None:

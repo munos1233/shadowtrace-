@@ -191,6 +191,30 @@ def test_valid_payload_passes_validation(event_type: str) -> None:
     jsonschema.validate(instance=envelope, schema=doc)
 
 
+def test_approval_required_validates_non_null_impact_assessment() -> None:
+    doc = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    envelope = {
+        "type": "approval_required",
+        "event_id": "evt-20260712-a1b2c3d4",
+        "sequence": 1,
+        "timestamp": "2026-07-12T10:00:00Z",
+        "payload": _example_payload("approval_required"),
+    }
+    assert envelope["payload"]["impact_assessment"] is not None
+    jsonschema.validate(instance=envelope, schema=doc)
+
+
+def test_envelope_schema_error_helper_catches_referencing_failures() -> None:
+    from app.core.socketio_manager import _is_envelope_schema_error
+
+    class _WrappedReferencingError(Exception):
+        pass
+
+    assert _is_envelope_schema_error(jsonschema.ValidationError("bad envelope"))
+    assert _is_envelope_schema_error(_WrappedReferencingError("unresolvable $ref"))
+    assert _is_envelope_schema_error(RuntimeError("other")) is False
+
+
 def test_writeback_updated_rejects_raw_result() -> None:
     """writeback_updated payload MUST NOT contain raw_result (intro §4.2.4)."""
     doc = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -1411,6 +1435,17 @@ def _example_payload(event_type: str) -> dict:
             "summary": "Isolate host workstation-01",
             "target_count": 1,
             "deadline": "2026-07-12T10:30:00Z",
+            "impact_assessment": {
+                "action_id": "act-0a1b2c3d",
+                "impact_score": 72,
+                "affected_scope": "host workstation-01",
+                "reversible": True,
+                "business_disruption": "medium",
+                "assessment_detail": "isolate_host blast radius",
+                "affected_entity_count": 1,
+                "affected_targets": ["workstation-01"],
+                "assessed_by": "ImpactAssessmentService",
+            },
         },
         "approval_updated": {
             "action_id": "act-0a1b2c3d",

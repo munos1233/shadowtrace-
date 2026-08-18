@@ -168,6 +168,22 @@ describe("EventOverviewCard", () => {
     expect(screen.queryByTestId("overview-triage-severity-tag")).not.toBeInTheDocument();
   });
 
+  it("shows triage event type chip when it differs from source type", () => {
+    renderCard(
+      makeDetail({
+        event_type: "insider_threat",
+        classification_source: "source",
+        event_context_snapshot: {
+          triage_event_type: "data_exfiltration",
+        },
+      }),
+    );
+    expect(screen.getByTestId("event-type-chip")).toHaveTextContent("insider_threat");
+    expect(screen.getByTestId("overview-triage-event-type-tag")).toHaveTextContent(
+      "分诊 data_exfiltration",
+    );
+  });
+
   it("falls back to event.severity when risk_assessment is absent", () => {
     renderCard(makeDetail({ severity: "medium", event_context_snapshot: {} }));
     expect(screen.getByText("中")).toBeInTheDocument();

@@ -12,6 +12,7 @@ from app.models.agent_io import ScoringMode
 
 # Stable machine-readable reason code (API / decision-trace / UI contract).
 EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT = "evidence_limited_demoted_from_confirmed_threat"
+UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT = "unresolved_identity_endpoint_conflict"
 
 RISK_ASSESSMENT_SNAPSHOT_KEY = "risk_assessment"
 
@@ -77,6 +78,7 @@ def merge_risk_assessment_into_snapshot(
 
 
 __all__ = [
+    "UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT",
     "EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT",
     "RISK_ASSESSMENT_SNAPSHOT_KEY",
     "merge_risk_assessment_into_snapshot",

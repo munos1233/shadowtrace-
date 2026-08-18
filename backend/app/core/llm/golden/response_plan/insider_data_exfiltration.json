@@ -23,6 +23,13 @@
         "reason": "Block external exfiltration destination"
       },
       {
+        "tool_name": "block_domain",
+        "target_type": "domain",
+        "target": "unknown-upload-example.com",
+        "parameters": {},
+        "reason": "Block exfiltration upload domain"
+      },
+      {
         "tool_name": "create_ticket",
         "target_type": "ticket",
         "target": "ticket",
@@ -33,7 +40,7 @@
         "reason": "Track investigation actions"
       }
     ],
-    "strategy_summary": "Disable insider account zhangsan, isolate PC-FIN-023, and block destination 203.0.113.88"
+    "strategy_summary": "Disable insider account zhangsan, isolate PC-FIN-023, block destination 203.0.113.88, and block domain unknown-upload-example.com"
   },
   "model_name": "mock-model",
   "prompt_tokens": 180,

@@ -36,6 +36,7 @@ _GATE_INJECTION_MARKERS = (
     "identity_containment_dedup",
     "rule fallback after ungrounded",
     "containment_quality_gate_unsatisfied",
+    "domain_containment_missing",
 )
 
 
@@ -281,7 +282,8 @@ def evaluate_llm_quality(
             raise RuntimeError(
                 "live reasoning card FAIL: response_plan was completed by quality-gate "
                 f"injection ({hit}) on confirmed_threat exfil event {event_id}; "
-                "entity_coverage_merge / identity_containment_dedup is not Agent reasoning"
+                "entity_coverage_merge / identity_containment_dedup / "
+                "domain_containment_missing is not Agent reasoning"
             )
         storyline_by = (storyline_generated_by or "").strip().lower()
         if storyline_by != "llm" or int(storyline_phase_count or 0) < 1:

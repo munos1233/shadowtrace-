@@ -542,6 +542,17 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
             return True
         return False
 
+    @staticmethod
+    def _llm_recommendations_unusable(llm_content: str, executed_content: str) -> bool:
+        """Drop LLM recs that prescribe reset when the executed plan disabled the account."""
+        executed_lower = executed_content.lower()
+        has_disable = "tool=disable_account" in executed_lower
+        has_reset = "tool=reset_password" in executed_lower
+        if not has_disable or has_reset:
+            return False
+        blob = llm_content.lower()
+        return "强制改密" in llm_content or "reset_password" in blob
+
     def _merge_sections(
         self,
         base: list[ReportSection],
@@ -589,6 +600,11 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
                     if missing:
                         content = "\n".join([content, *missing])
             elif section.key == "recommendations" and section.key in overrides:
+                executed = next((item for item in base if item.key == "executed_actions"), None)
+                executed_text = executed.content if executed is not None else ""
+                llm_content = overrides[section.key]
+                if self._llm_recommendations_unusable(llm_content, executed_text):
+                    content = section.content
                 missing = self._missing_required_lines(
                     section.content,
                     content,

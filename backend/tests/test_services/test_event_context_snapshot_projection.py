@@ -285,6 +285,25 @@ def test_project_snapshot_exposes_bounded_triage_severity_not_payload() -> None:
     assert "severity=medium" not in blob
 
 
+def test_project_snapshot_exposes_bounded_triage_event_type_not_payload() -> None:
+    projected = project_snapshot_for_api(
+        {
+            "risk_assessment": {"risk_score": 77, "severity": "high"},
+            "triage_result": {
+                "event_type": "data_exfiltration",
+                "severity": "high",
+                "decision_summary": "event_type=data_exfiltration, severity=high",
+                "reasoning": "CoT must not leak",
+            },
+        }
+    )
+    assert projected is not None
+    assert projected["triage_event_type"] == "data_exfiltration"
+    assert "triage_result" not in projected
+    blob = orjson.dumps(projected).decode()
+    assert "CoT must not leak" not in blob
+
+
 def test_project_hard_whitelist_drops_unknown_heavy_keys() -> None:
     projected = project_snapshot_for_api(
         {

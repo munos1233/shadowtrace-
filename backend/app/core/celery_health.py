@@ -111,7 +111,15 @@ def check_investigation_intent_beat_schedule(*, task_mode: str) -> dict[str, Any
     from app.core.celery_app import _build_beat_schedule
     from app.core.config import TaskMode
 
-    schedule = _build_beat_schedule(task_mode=TaskMode.CELERY)
+    try:
+        mode_enum = TaskMode(mode)
+    except ValueError:
+        return {
+            "status": "degraded",
+            "dispatch_scheduled": False,
+            "reconcile_scheduled": False,
+        }
+    schedule = _build_beat_schedule(task_mode=mode_enum)
     dispatch_key = "shadowtrace-dispatch-investigation-intents"
     reconcile_key = "shadowtrace-reconcile-investigation-intents"
     dispatch_scheduled = dispatch_key in schedule

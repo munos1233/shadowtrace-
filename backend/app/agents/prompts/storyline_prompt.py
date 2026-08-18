@@ -104,6 +104,7 @@ def build_storyline_messages(
     technique_matches: list[dict[str, Any]],
     graph_paths: list[list[str]],
     entity_names: list[str],
+    evidence_conflicts: list[dict[str, Any]] | None = None,
 ) -> list[LLMMessage]:
     """Build JSON-mode messages for attack storyline generation."""
     system = (
@@ -118,12 +119,24 @@ def build_storyline_messages(
         "Use only evidence_id values present in the context. Omit entries you "
         "cannot ground. Do not invent storyline_id or event_id. No chain-of-thought."
     )
+    compact_conflicts = [
+        item
+        for item in (evidence_conflicts or [])
+        if isinstance(item, dict) and item.get("rule_name")
+    ]
+    if any(item.get("rule_name") == "iam_absent_but_edr_active" for item in compact_conflicts):
+        system += (
+            " evidence_conflicts includes iam_absent_but_edr_active: name that "
+            "identity/endpoint conflict in the narrative. Do not reduce it to a "
+            "conflict count."
+        )
     # Keep context compact: do not re-embed the schema inside the payload.
     context = {
         "evidence": evidence_entries,
         "attack_techniques": technique_matches,
         "graph_attack_paths": graph_paths,
         "key_entity_names": entity_names,
+        "evidence_conflicts": compact_conflicts,
     }
     user = (
         "Generate the attack storyline and respond with JSON only.\n"

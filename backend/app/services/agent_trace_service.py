@@ -42,6 +42,7 @@ _RESPONSE_GATE_TRACE_MARKERS = (
     "identity_containment_dedup",
     "rule fallback after ungrounded",
     "containment_quality_gate_unsatisfied",
+    "domain_containment_missing",
 )
 _MAX_AUDIT_DEPTH = 32
 _RAW_KEYS = frozenset({"raw_payload", "raw_data", "source_snapshot", "raw_result", "prompt"})

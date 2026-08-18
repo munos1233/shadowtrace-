@@ -29,6 +29,7 @@ from app.agents.rules.response_plan_quality_gate import (
     CONTAINMENT_TOOLS,
     apply_containment_quality_gate,
     apply_evidence_sufficiency_gate,
+    apply_exfil_domain_containment_gate,
     apply_identity_containment_dedup_gate,
     evidence_blocks_high_impact_actions,
     requires_threat_aligned_containment,
@@ -843,6 +844,18 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             strategy=strategy,
             disposition_only=disposition_only,
         )
+        if not evidence_high_impact_blocked:
+            candidates, generated_by, strategy = apply_exfil_domain_containment_gate(
+                candidates=candidates,
+                generated_by=generated_by,
+                strategy=strategy,
+                severity=severity,
+                risk_assessment=input.risk_assessment,
+                final_verdict=ctx.get("final_verdict"),
+                entities=entities,
+                disposition_only=disposition_only,
+                evidence_output=input.evidence_output,
+            )
         tool_index = baseline_tool_index()
 
         def _resolve_tool_level(tool_name: str) -> ActionLevel:

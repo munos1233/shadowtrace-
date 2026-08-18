@@ -334,6 +334,11 @@ def test_response_prompt_issue360_live_path_stacks_with_357_and_omits_inconsiste
     assert "plan isolate_host for every host listed in entities.hosts" in system
     assert "Coverage contract (ISSUE-328, not domain)" in system
     assert "for each EntitySet account propose disable_account" in system
+    assert "Domain containment (not ISSUE-328)" in system
+    assert (
+        "for each EntitySet domain used as an exfil or C2 destination propose block_domain"
+        in system
+    )
     assert "block_ip policy (ISSUE-361)" in system
     assert "dst_ip" in system
     assert "explicit_source_block" in system

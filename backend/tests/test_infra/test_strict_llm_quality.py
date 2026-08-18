@@ -165,6 +165,18 @@ def test_gate_tokens_in_trace_title_fail_live_card(quality_mod) -> None:
         )
 
 
+def test_domain_containment_missing_fails_even_if_generated_by_llm(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="domain_containment_missing"):
+        quality_mod.evaluate_llm_quality(
+            **_exfil_success_kwargs(
+                response_plan_generated_by="llm",
+                response_plan_strategy=(
+                    "domain_containment_missing: EntitySet domains lack block_domain"
+                ),
+            )
+        )
+
+
 def test_coverage_merge_note_fails_even_if_generated_by_llm(quality_mod) -> None:
     with pytest.raises(RuntimeError, match="entity_coverage_merge"):
         quality_mod.evaluate_llm_quality(

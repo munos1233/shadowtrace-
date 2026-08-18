@@ -138,3 +138,17 @@ def test_investigation_intent_beat_schedule_ok_in_celery_mode(
     assert result["dispatch_scheduled"] is True
     assert result["reconcile_scheduled"] is True
     get_settings.cache_clear()
+
+
+def test_investigation_intent_beat_schedule_uses_passed_mode_not_forced_celery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TASK_MODE", "background")
+    get_settings.cache_clear()
+    background = check_investigation_intent_beat_schedule(task_mode="background")
+    assert background["status"] == "not_applicable"
+    celery = check_investigation_intent_beat_schedule(task_mode="celery")
+    assert celery["status"] == "ok"
+    get_settings.cache_clear()

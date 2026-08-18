@@ -301,6 +301,21 @@ def test_risk_storyline_response_wire_models_and_prompts() -> None:
         entity_names=[],
     )
     assert "JSON only" in story_msgs[1].content
+    conflict_msgs = build_storyline_messages(
+        evidence_entries=[],
+        technique_matches=[],
+        graph_paths=[],
+        entity_names=[],
+        evidence_conflicts=[
+            {
+                "rule_name": "iam_absent_but_edr_active",
+                "description": "IAM absent but EDR active",
+            }
+        ],
+    )
+    assert "iam_absent_but_edr_active" in conflict_msgs[0].content
+    assert "conflict count" in conflict_msgs[0].content
+    assert "iam_absent_but_edr_active" in conflict_msgs[1].content
     response_msgs = build_response_plan_messages(
         triage_result=triage,
         risk_assessment=RiskAssessment(

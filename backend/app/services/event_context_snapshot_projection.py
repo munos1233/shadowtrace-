@@ -18,6 +18,7 @@ from typing import Any
 import orjson
 
 from app.models.agent_io import AttackStoryline, EvidenceOutput
+from app.models.enums import EventType
 from app.models.evidence import EvidenceGap
 
 # Keys allowed on API-facing snapshots (hard whitelist).
@@ -33,6 +34,7 @@ SNAPSHOT_SUMMARY_KEYS = frozenset(
         "analysis_only_complete",
         "risk_assessment",
         "triage_severity",
+        "triage_event_type",
         "classification_override",
         "execution_substate",
     }
@@ -259,6 +261,7 @@ def _bound_risk_assessment(risk: dict[str, Any]) -> dict[str, Any]:
 
 
 _ALLOWED_TRIAGE_SEVERITY = frozenset({"low", "medium", "high", "critical"})
+_ALLOWED_TRIAGE_EVENT_TYPE = frozenset(item.value for item in EventType)
 
 
 def bound_triage_severity(value: Any) -> str | None:
@@ -267,6 +270,16 @@ def bound_triage_severity(value: Any) -> str | None:
         return None
     text = value.value if isinstance(value, Enum) else str(value).strip().lower()
     if text in _ALLOWED_TRIAGE_SEVERITY:
+        return text
+    return None
+
+
+def bound_triage_event_type(value: Any) -> str | None:
+    """API-safe triage event_type token; never copies the triage payload."""
+    if value is None:
+        return None
+    text = value.value if isinstance(value, Enum) else str(value).strip().lower()
+    if text in _ALLOWED_TRIAGE_EVENT_TYPE:
         return text
     return None
 
@@ -396,6 +409,14 @@ def project_snapshot_for_api(snapshot: dict[str, Any] | None) -> dict[str, Any] 
     if triage_severity is not None:
         projected["triage_severity"] = triage_severity
 
+    triage_event_type = bound_triage_event_type(snapshot.get("triage_event_type"))
+    if triage_event_type is None:
+        triage = snapshot.get("triage_result")
+        if isinstance(triage, dict):
+            triage_event_type = bound_triage_event_type(triage.get("event_type"))
+    if triage_event_type is not None:
+        projected["triage_event_type"] = triage_event_type
+
     if "analysis_only_complete" in snapshot:
         projected["analysis_only_complete"] = bool(snapshot.get("analysis_only_complete"))
     if "report_generated" in snapshot:
@@ -494,6 +515,7 @@ def _hard_project_api_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "SNAPSHOT_SUMMARY_KEYS",
+    "bound_triage_event_type",
     "bound_triage_severity",
     "build_evidence_snapshot_summary",
     "build_storyline_snapshot_summary",

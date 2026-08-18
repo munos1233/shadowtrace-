@@ -298,6 +298,7 @@ services:
       INGESTION_POLL_INTERVAL_S: ${INGESTION_POLL_INTERVAL_S:-60}
       BEHAVIOR_OBSERVATION_RETRY_ENABLED: "true"
       BEHAVIOR_OBSERVATION_RETRY_INTERVAL_S: ${BEHAVIOR_OBSERVATION_RETRY_INTERVAL_S:-120}
+      TASK_MODE: celery
       CELERY_BROKER_URL: redis://redis:6379/0
       # Backend owns migrate + playbook seed (ISSUE-245).
       SEED_PLAYBOOK_RELEASE: "false"
@@ -310,9 +311,15 @@ services:
         "-A", "app.core.celery_app",
         "beat",
         "--loglevel", "info",
+        "--pidfile", "/tmp/celerybeat.pid",
+        "--schedule", "/tmp/celerybeat-schedule",
       ]
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' >/dev/null || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "test -f /tmp/celerybeat.pid && kill -0 \"$(cat /tmp/celerybeat.pid)\"",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5

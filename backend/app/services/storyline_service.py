@@ -145,6 +145,7 @@ class StorylineService:
         technique_matches = _extract_techniques(event_context)
         graph_paths = _extract_graph_paths(event_context)
         entity_names = _extract_entity_names(event_context)
+        evidence_conflicts = _extract_conflicts(event_context)
 
         # --- LLM path ---
         if self._llm_client is not None and evidence_list:
@@ -155,6 +156,7 @@ class StorylineService:
                     technique_matches=technique_matches,
                     graph_paths=graph_paths,
                     entity_names=entity_names,
+                    evidence_conflicts=evidence_conflicts,
                     scenario_id=_scenario_id_from_context(event_context),
                 )
                 if storyline is not None:
@@ -193,6 +195,7 @@ class StorylineService:
         technique_matches: list[dict[str, Any]],
         graph_paths: list[list[str]],
         entity_names: list[str],
+        evidence_conflicts: list[dict[str, Any]] | None = None,
         scenario_id: str | None = None,
     ) -> AttackStoryline | None:
         """Call LLM, validate evidence_ids, backfill technique_ids, return."""
@@ -204,6 +207,7 @@ class StorylineService:
             technique_matches=technique_matches[:10],
             graph_paths=graph_paths[:3],
             entity_names=entity_names[:10],
+            evidence_conflicts=evidence_conflicts,
         )
         response = await self._llm_client.chat(
             messages,
@@ -494,6 +498,34 @@ def _extract_evidence(event_context: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(evidence_list, list):
             return [e for e in evidence_list if isinstance(e, dict)]
     return []
+
+
+def _extract_conflicts(event_context: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence_output = event_context.get("evidence_output")
+    raw_conflicts: list[Any]
+    if isinstance(evidence_output, dict):
+        maybe = evidence_output.get("conflicts")
+        raw_conflicts = maybe if isinstance(maybe, list) else []
+    else:
+        maybe = getattr(evidence_output, "conflicts", None)
+        raw_conflicts = list(maybe) if maybe else []
+    compact: list[dict[str, Any]] = []
+    for item in raw_conflicts:
+        if isinstance(item, dict):
+            detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            rule_name = str(detail.get("rule_name") or item.get("rule_name") or "").strip()
+            description = str(item.get("description") or "").strip()
+        else:
+            detail = getattr(item, "detail", None)
+            detail = detail if isinstance(detail, dict) else {}
+            rule_name = str(detail.get("rule_name") or "").strip()
+            description = str(getattr(item, "description", "") or "").strip()
+        if not rule_name and not description:
+            continue
+        compact.append({"rule_name": rule_name, "description": description[:300]})
+        if len(compact) >= 10:
+            break
+    return compact
 
 
 def _extract_techniques(event_context: dict[str, Any]) -> list[dict[str, Any]]:

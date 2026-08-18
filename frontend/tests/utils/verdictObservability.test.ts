@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT,
+  UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT,
   isHighRiskNoneMismatch,
   labelVerdictReasonCode,
   resolveVerdictDemotionCodes,
@@ -47,5 +48,11 @@ describe("verdictObservability", () => {
     expect(
       labelVerdictReasonCode(EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT),
     ).toContain("证据不足");
+  });
+
+  it("labels unresolved identity/endpoint conflict", () => {
+    expect(labelVerdictReasonCode(UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT)).toContain(
+      "iam_absent_but_edr_active",
+    );
   });
 });

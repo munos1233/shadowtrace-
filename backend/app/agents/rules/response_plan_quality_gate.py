@@ -679,6 +679,70 @@ def apply_identity_containment_dedup_gate(
     return deduped, generated_by, strategy
 
 
+def exfil_domain_containment_needs(entities: EntitySet) -> tuple[EntityCoverageNeed, ...]:
+    """EntitySet domain → ``block_domain`` obligations (not ISSUE-328).
+
+    ISSUE-328 coverage merge never injects domain tools. This helper only lists
+    needs so a separate gate can demote ``generated_by`` when the LLM omitted them.
+    """
+    needs: list[EntityCoverageNeed] = []
+    for domain in entities.domains:
+        canonical = (domain.fqdn or domain.entity_id or "").strip()
+        aliases = _alias_set(domain.fqdn, domain.entity_id)
+        if not canonical or not aliases:
+            continue
+        needs.append(
+            EntityCoverageNeed(
+                tool_name="block_domain",
+                target_type="domain",
+                canonical_target=canonical,
+                aliases=aliases,
+            )
+        )
+    return tuple(needs)
+
+
+def apply_exfil_domain_containment_gate(
+    *,
+    candidates: list[_CandidateT],
+    generated_by: ResponsePlanGeneratedBy,
+    strategy: str,
+    severity: Severity,
+    risk_assessment: RiskAssessment,
+    final_verdict: FinalVerdict | str | None,
+    entities: EntitySet,
+    disposition_only: bool,
+    evidence_output: EvidenceOutput | None = None,
+) -> tuple[list[_CandidateT], ResponsePlanGeneratedBy, str]:
+    """Demote LLM stamp when EntitySet domains lack ``block_domain``; never inject."""
+    if disposition_only:
+        return candidates, generated_by, strategy
+    if not requires_threat_aligned_containment(
+        severity=severity,
+        risk_assessment=risk_assessment,
+        final_verdict=final_verdict,
+        entities=entities,
+        disposition_only=disposition_only,
+        evidence_output=evidence_output,
+    ):
+        return candidates, generated_by, strategy
+    needs = exfil_domain_containment_needs(entities)
+    if not needs:
+        return candidates, generated_by, strategy
+    missing = [
+        need
+        for need in needs
+        if not any(_item_covers_need(item, need) for item in candidates)
+    ]
+    if not missing:
+        return candidates, generated_by, strategy
+    note = "domain_containment_missing: EntitySet domains lack block_domain"
+    strategy = f"{strategy}; {note}" if strategy else note
+    if generated_by is ResponsePlanGeneratedBy.LLM:
+        generated_by = ResponsePlanGeneratedBy.TEMPLATE
+    return candidates, generated_by, strategy
+
+
 def apply_containment_quality_gate(
     *,
     candidates: list[_CandidateT],
@@ -777,9 +841,11 @@ __all__ = [
     "EntityCoverageNeed",
     "apply_containment_quality_gate",
     "apply_evidence_sufficiency_gate",
+    "apply_exfil_domain_containment_gate",
     "apply_identity_containment_dedup_gate",
     "deduplicate_identity_containment",
     "entity_containment_coverage_needs",
+    "exfil_domain_containment_needs",
     "evidence_blocks_high_impact_actions",
     "evidence_insufficiency_reason_code",
     "has_actionable_containment_targets",

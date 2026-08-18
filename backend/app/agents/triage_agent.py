@@ -79,12 +79,13 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 SEVERITY_RULES: dict[str, list[tuple[str, str]]] = {
-    # data_exfiltration with an external IP present → HIGH (ISSUE-032 spec:
-    # "数据外泄类加外部 IP 为 high").  Without an external IP (e.g. pure
-    # internal server-to-server exfiltration) severity is MEDIUM — the check
-    # is applied in _apply_severity_rules via _external_ip_in_text().
+    # data_exfiltration / insider_threat with an external IP present → HIGH
+    # (ISSUE-032 spec: "数据外泄类加外部 IP 为 high").  Without an external IP
+    # (e.g. pure internal server-to-server exfiltration) severity is MEDIUM —
+    # the check is applied in _apply_severity_rules via _external_ip_in_text().
     "high": [
         ("event_type", "data_exfiltration"),
+        ("event_type", "insider_threat"),
         ("event_type", "malicious_process"),
         ("event_type", "host_compromise"),
         ("event_type", "lateral_movement"),
@@ -144,10 +145,10 @@ def _apply_severity_rules(
     # Check high rules.
     for rule_key, rule_val in SEVERITY_RULES.get("high", []):
         if rule_key == "event_type" and rule_val == event_type_value:
-            # ISSUE-032 spec: data_exfiltration → HIGH only when an external
-            # IP is present in the alert text.  Pure internal exfiltration
-            # (no external IP) → MEDIUM.
-            if event_type_value == "data_exfiltration":
+            # ISSUE-032 spec: data_exfiltration / insider_threat → HIGH only
+            # when an external IP is present in the alert text.  Pure internal
+            # exfiltration (no external IP) → MEDIUM.
+            if event_type_value in {"data_exfiltration", "insider_threat"}:
                 if alert_text and _external_ip_in_text(alert_text):
                     severity = Severity.HIGH
                     return severity, True
@@ -191,7 +192,7 @@ def _external_ip_in_text(alert_text: str) -> bool:
     """Return True when *alert_text* contains at least one external (non-internal) IP.
 
     Used by ``_apply_severity_rules`` to decide whether a data_exfiltration
-    event qualifies for HIGH severity per ISSUE-032.
+    or insider_threat event qualifies for HIGH severity per ISSUE-032.
     """
     for ip_match in IP_PATTERN.findall(alert_text):
         if not is_internal_ip(ip_match):

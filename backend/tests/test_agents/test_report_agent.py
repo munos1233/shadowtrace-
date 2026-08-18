@@ -13,6 +13,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.agents.conflict_detector import RULE_IAM_ABSENT_BUT_EDR_ACTIVE
 from app.agents.report_agent import (
     GENERATED_BY_LLM,
     GENERATED_BY_TEMPLATE,
@@ -75,11 +76,12 @@ from app.models.enums import (
     Severity,
     WritebackReadiness,
 )
-from app.models.evidence import Evidence, EvidenceGap
-from app.models.ids import new_evidence_id, report_id_for_event
+from app.models.evidence import Evidence, EvidenceConflict, EvidenceGap
+from app.models.ids import new_conflict_id, new_evidence_id, report_id_for_event
 from app.models.report import ReportSection
 from app.providers.llm.openai_compatible import OpenAICompatibleLLMClient
 from app.services.agent_trace_service import TraceProjection
+from app.services.risk_verdict_projection import UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT
 
 
 class _FakeWorkingMemory:
@@ -1245,6 +1247,103 @@ def test_llm_overview_preserves_human_escalation_note() -> None:
     assert recommendations.content.startswith("LLM-generated remediation tips.")
     assert "人工升级" in recommendations.content
     assert "replan_count=3" in recommendations.content
+
+
+def _containment_response_plan(event_id: str) -> ResponsePlan:
+    def _action(tool_name: str, target: str, level: ActionLevel) -> Action:
+        return Action(
+            action_id=f"act-{tool_name[:8]}",
+            event_id=event_id,
+            plan_revision=1,
+            action_fingerprint=f"fp-{tool_name}",
+            action_category=ActionCategory.RESPONSE,
+            action_name=tool_name,
+            tool_name=tool_name,
+            action_level=level,
+            target=target,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+        )
+
+    return ResponsePlan(
+        plan_id="plan-containment",
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        actions=[
+            _action("disable_account", "zhangsan", ActionLevel.L3),
+            _action("isolate_host", "PC-FIN-023", ActionLevel.L4),
+            _action("block_ip", "203.0.113.88", ActionLevel.L2),
+            _action("block_domain", "unknown-upload-example.com", ActionLevel.L2),
+        ],
+    )
+
+
+def test_recommendations_follow_disable_account_not_password_reset() -> None:
+    builder = ReportSectionBuilder()
+    event_id = "evt-report-disable-recs"
+    sections = builder.build(
+        event_id=event_id,
+        evidence_output=_main_evidence(event_id),
+        risk_assessment=_high_risk(),
+        triage_result=_main_triage(),
+        response_plan=_containment_response_plan(event_id),
+    )
+    recommendations = next(section for section in sections if section.key == "recommendations")
+    executed = next(section for section in sections if section.key == "executed_actions")
+    assert "tool=disable_account" in executed.content
+    assert "强制改密" not in recommendations.content
+    assert "reset_password" not in recommendations.content
+    assert "禁用账号 zhangsan" in recommendations.content
+    assert "PC-FIN-023" in recommendations.content
+    assert "203.0.113.88" in recommendations.content
+    assert "unknown-upload-example.com" in recommendations.content
+
+
+def test_llm_recs_prescribing_password_reset_are_dropped_when_disable_executed() -> None:
+    builder = ReportSectionBuilder()
+    event_id = "evt-report-disable-merge"
+    sections = builder.build(
+        event_id=event_id,
+        evidence_output=_main_evidence(event_id),
+        risk_assessment=_high_risk(),
+        triage_result=_main_triage(),
+        response_plan=_containment_response_plan(event_id),
+    )
+    merged = ReportAgent(llm_client=None)._merge_sections(
+        sections,
+        {"recommendations": "1. 冻结账号 zhangsan 会话并强制改密。"},
+    )
+    recommendations = next(section for section in merged if section.key == "recommendations")
+    assert "强制改密" not in recommendations.content
+    assert "禁用账号 zhangsan" in recommendations.content
+
+
+def test_decision_brief_names_iam_absent_conflict_not_count_only() -> None:
+    event_id = "evt-report-iam-conflict"
+    evidence = _main_evidence(event_id)
+    conflict = EvidenceConflict(
+        conflict_id=new_conflict_id(),
+        event_id=event_id,
+        description="IAM 无成功登录记录（账号 zhangsan），但 EDR 观察到该账号的进程活动",
+        evidence_ids=[evidence.evidence_list[0].evidence_id],
+        sources=[EvidenceSource.IDENTITY, EvidenceSource.ENDPOINT],
+        detail={"rule_name": RULE_IAM_ABSENT_BUT_EDR_ACTIVE, "severity": "high"},
+    )
+    evidence = evidence.model_copy(update={"conflicts": [conflict]})
+    risk = _high_risk().model_copy(
+        update={"verdict_reason_codes": [UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT]}
+    )
+    sections = ReportSectionBuilder().build(
+        event_id=event_id,
+        evidence_output=evidence,
+        risk_assessment=risk,
+        triage_result=_main_triage(),
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+    )
+    overview = next(section for section in sections if section.key == "overview")
+    chain = next(section for section in sections if section.key == "evidence_chain")
+    assert RULE_IAM_ABSENT_BUT_EDR_ACTIVE in overview.content
+    assert "conflicts=" not in chain.content.split("conflict_rule=", 1)[0]
+    assert f"conflict_rule={RULE_IAM_ABSENT_BUT_EDR_ACTIVE}" in chain.content
+    assert "conflicts=" not in chain.content
 
 
 def test_llm_failure_metadata_redacts_and_codes() -> None:
