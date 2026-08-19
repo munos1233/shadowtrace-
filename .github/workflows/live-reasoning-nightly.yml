@@ -67,6 +67,8 @@ jobs:
             echo "LLM_API_KEY=${LLM_API_KEY}"
             echo "LLM_PRIMARY_MODEL=${LLM_PRIMARY_MODEL}"
             echo "CERTIFICATION_CARD=live_reasoning"
+            echo "LLM_TIMEOUT_SECONDS=90"
+            echo "LLM_THINKING_TYPE=disabled"
           } > .env.live
 
       - name: Start mock-XDR stack with live LLM overlay

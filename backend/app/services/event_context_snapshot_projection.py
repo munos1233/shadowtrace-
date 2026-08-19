@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Any
 
 import orjson
+from pydantic import ValidationError
 
 from app.models.agent_io import AttackStoryline, EvidenceOutput
 from app.models.enums import EventType
@@ -307,23 +308,78 @@ def merge_evidence_summary_into_snapshot(
     return _shrink_summary_sections(merged)
 
 
+def is_storyline_snapshot_summary(value: Any) -> bool:
+    """True when ``value`` is the ISSUE-254 observability blob, not AttackStoryline.
+
+    The bounded snapshot keeps ``phase_count`` / ``claim_ref_count`` and drops
+    ``phases`` / ``event_id``. GET /timeline must never ``model_validate`` that
+    shape — ``AttackStoryline`` forbids the extra counters and requires
+    ``event_id``.
+    """
+    if not isinstance(value, dict):
+        return False
+    has_phases_list = isinstance(value.get("phases"), list)
+    has_summary_counters = "phase_count" in value or "claim_ref_count" in value
+    if has_summary_counters and not has_phases_list:
+        return True
+    if has_phases_list:
+        return False
+    if "event_id" in value:
+        return False
+    return bool(value.get("storyline_id") or value.get("generated_by") or has_summary_counters)
+
+
+def parse_attack_storyline(value: Any) -> AttackStoryline | None:
+    """Return a full AttackStoryline, or None for missing/summary/invalid payloads.
+
+    Never promotes a snapshot summary into a fake empty storyline.
+    """
+    if value is None:
+        return None
+    if isinstance(value, AttackStoryline):
+        return value
+    if is_storyline_snapshot_summary(value):
+        return None
+    try:
+        return AttackStoryline.model_validate(value)
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
 def merge_storyline_summary_into_snapshot(
     snapshot: dict[str, Any] | None,
     storyline: AttackStoryline | dict[str, Any],
 ) -> dict[str, Any]:
     """Merge bounded storyline summary (incl. grounding_status) into the snapshot.
 
-    Replaces only the ``storyline`` key with a bounded object. Do not call this on
-    a CLOSED freeze if full ``storyline.phases`` must remain for rebuild — use
-    ``project_snapshot_for_api`` on the read path instead.
+    Replaces observability counters on the ``storyline`` key. If the durable row
+    already holds a CLOSED freeze ``phases`` list, keep it — later summary merges
+    must not strip the freeze used by ``rebuild_context``. API responses still
+    pass ``project_snapshot_for_api``.
     """
     merged = dict(snapshot) if isinstance(snapshot, dict) else {}
     existing = merged.get("storyline")
     base = dict(existing) if isinstance(existing, dict) else {}
-    # Never retain full phases/entries/claim payloads from a prior dump.
+    freeze_phases = base["phases"] if isinstance(base.get("phases"), list) else None
+    freeze_claim_refs = base["claim_refs"] if isinstance(base.get("claim_refs"), list) else None
+    # Strip heavy fields from the observability blob unless a freeze already owns them.
     for heavy in ("phases", "entries", "claim_refs", "prompt", "messages"):
         base.pop(heavy, None)
     base.update(build_storyline_snapshot_summary(storyline))
+    if freeze_phases is not None:
+        incoming_phases: list[Any] | None = None
+        if isinstance(storyline, AttackStoryline) and storyline.phases:
+            incoming_phases = [phase.model_dump(mode="json") for phase in storyline.phases]
+        elif isinstance(storyline, dict) and isinstance(storyline.get("phases"), list):
+            incoming_phases = list(storyline["phases"])
+        base["phases"] = incoming_phases if incoming_phases else freeze_phases
+    if freeze_claim_refs is not None:
+        incoming_refs: list[Any] | None = None
+        if isinstance(storyline, AttackStoryline) and storyline.claim_refs:
+            incoming_refs = [ref.model_dump(mode="json") for ref in storyline.claim_refs]
+        elif isinstance(storyline, dict) and isinstance(storyline.get("claim_refs"), list):
+            incoming_refs = list(storyline["claim_refs"])
+        base["claim_refs"] = incoming_refs if incoming_refs else freeze_claim_refs
     merged["storyline"] = base
     return _shrink_summary_sections(merged)
 
@@ -519,10 +575,12 @@ __all__ = [
     "bound_triage_severity",
     "build_evidence_snapshot_summary",
     "build_storyline_snapshot_summary",
+    "is_storyline_snapshot_summary",
     "merge_analysis_only_complete_into_snapshot",
     "merge_evidence_summary_into_snapshot",
     "merge_report_generated_into_snapshot",
     "merge_report_quality_into_snapshot",
     "merge_storyline_summary_into_snapshot",
+    "parse_attack_storyline",
     "project_snapshot_for_api",
 ]

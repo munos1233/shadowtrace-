@@ -2001,6 +2001,70 @@ async def test_merge_storyline_snapshot_summary_grounding(
 
 
 @pytest.mark.asyncio
+async def test_merge_storyline_snapshot_skips_closed_freeze(
+    event_service: EventService,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """CLOSED freeze phases must survive a later ISSUE-254 summary merge."""
+    from app.models.agent_io import (
+        AttackStoryline,
+        StorylineGeneratedBy,
+        StorylineGroundingStatus,
+    )
+
+    sfx = _sfx()
+    created = await event_service.ingest_source_object(
+        IngestableSource(
+            reference=_ref(kind=SourceObjectKind.INCIDENT, object_id=f"INC-stl254c-{sfx}"),
+            title="snapshot-storyline-closed",
+            event_type=EventType.MALICIOUS_PROCESS,
+            severity=Severity.MEDIUM,
+            source_type="mock_xdr",
+        )
+    )
+    assert created.event_id
+    freeze_phase = {
+        "phase_order": 1,
+        "phase_name": "initial_access",
+        "tactic": "Initial Access",
+        "narrative": "freeze",
+        "entries": [],
+    }
+    async with session_factory() as session:
+        async with session.begin():
+            row = await session.get(orm.SecurityEvent, created.event_id)
+            assert row is not None
+            row.status = EventStatus.CLOSED.value
+            row.event_context_snapshot = {
+                "storyline": {
+                    "storyline_id": f"stl-{sfx}",
+                    "event_id": created.event_id,
+                    "generated_by": "llm",
+                    "grounding_status": "evidence_grounded",
+                    "phases": [freeze_phase],
+                    "claim_refs": [],
+                    "narrative_summary": "closed freeze",
+                }
+            }
+
+    later = AttackStoryline(
+        storyline_id=f"stl-{sfx}",
+        event_id=created.event_id,
+        narrative_summary="should not strip freeze",
+        phases=[],
+        generated_by=StorylineGeneratedBy.LLM,
+        grounding_status=StorylineGroundingStatus.EVIDENCE_GROUNDED,
+    )
+    await event_service.merge_storyline_context_snapshot(created.event_id, later)
+
+    async with session_factory() as session:
+        row = await session.get(orm.SecurityEvent, created.event_id)
+        assert row is not None
+        snap = dict(row.event_context_snapshot or {})
+    assert snap["storyline"]["phases"][0]["narrative"] == "freeze"
+
+
+@pytest.mark.asyncio
 async def test_merge_report_generated_snapshot_flag(
     event_service: EventService,
     session_factory: async_sessionmaker[AsyncSession],

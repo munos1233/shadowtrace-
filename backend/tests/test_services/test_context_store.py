@@ -311,6 +311,65 @@ async def test_rebuild_closed_from_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_rebuild_closed_overlays_journal_storyline_over_snapshot_summary(
+    store: EventContextStore,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis_client: RedisClient,
+) -> None:
+    """ISSUE-254 summary in the CLOSED freeze is not GET /timeline input."""
+    event_id = await _seed_event(
+        session_factory,
+        status="closed",
+        snapshot={
+            "storyline": {
+                "storyline_id": "sty-closed-rebuild",
+                "generated_by": "llm",
+                "grounding_status": "evidence_grounded",
+                "phase_count": 1,
+                "claim_ref_count": 0,
+                "narrative_summary": "summary only",
+                "schema_version": "1.0",
+            }
+        },
+    )
+    await store.init_context(event_id, _summary(event_id, status=EventStatus.CLOSED))
+    full = {
+        "storyline_id": "sty-closed-rebuild",
+        "event_id": event_id,
+        "narrative_summary": "journal full storyline",
+        "generated_by": "llm",
+        "schema_version": "1.0",
+        "grounding_status": "evidence_grounded",
+        "phases": [
+            {
+                "phase_order": 1,
+                "phase_name": "initial_access",
+                "tactic": "Initial Access",
+                "narrative": "login",
+                "entries": [
+                    {
+                        "timestamp": "2026-07-27T08:00:00Z",
+                        "description": "login",
+                        "evidence_id": "ev-closed-rebuild",
+                        "technique_id": "T1078",
+                        "severity_hint": "high",
+                    }
+                ],
+            }
+        ],
+        "claim_refs": [],
+    }
+    await store.set(event_id, "storyline", full)
+    await redis_client.get_client().delete(ctx_key(event_id))
+
+    ctx = await store.rebuild_context(event_id)
+
+    assert ctx.storyline is not None
+    assert ctx.storyline["event_id"] == event_id
+    assert ctx.storyline["phases"][0]["entries"][0]["evidence_id"] == "ev-closed-rebuild"
+
+
+@pytest.mark.asyncio
 async def test_rebuild_from_journal_when_snapshot_empty(
     store: EventContextStore,
     session_factory: async_sessionmaker[AsyncSession],

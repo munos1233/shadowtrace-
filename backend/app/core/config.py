@@ -146,6 +146,15 @@ class Settings(BaseSettings):
     llm_primary_model: str = Field(default="mock-model", alias="LLM_PRIMARY_MODEL")
     llm_fallback_models: str = Field(default="", alias="LLM_FALLBACK_MODELS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
+    llm_thinking_type: str = Field(
+        default="",
+        alias="LLM_THINKING_TYPE",
+        description=(
+            "Optional OpenAI-compatible chat-completions extension. Empty omits "
+            "the field (OpenAI/Azure). ``disabled`` stops glm-class models from "
+            "spending max_tokens on reasoning_content and returning empty JSON."
+        ),
+    )
     structured_prompt_fast_fail: bool = Field(
         default=False,
         alias="STRUCTURED_PROMPT_FAST_FAIL",
@@ -213,6 +222,14 @@ class Settings(BaseSettings):
         normalized = str(value or "chat").strip().lower()
         if normalized not in {"chat", "models"}:
             raise ValueError("LLM_PROBE_METHOD must be 'chat' or 'models'")
+        return normalized
+
+    @field_validator("llm_thinking_type", mode="before")
+    @classmethod
+    def validate_llm_thinking_type(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"", "disabled", "enabled", "auto"}:
+            raise ValueError("LLM_THINKING_TYPE must be empty, 'disabled', 'enabled', or 'auto'")
         return normalized
 
     @field_validator("decision_rationale_mode", mode="before")

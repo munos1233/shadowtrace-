@@ -1390,6 +1390,11 @@ class EventService:
                     )
                     if row is None:
                         return
+                    if EventStatus(row.status) is EventStatus.CLOSED:
+                        # CLOSED freeze is rebuild_context input. A summary merge
+                        # would strip storyline.phases and make GET /timeline 500.
+                        # EventDetail still projects via project_snapshot_for_api.
+                        return
                     payload = (
                         storyline.model_dump(mode="json")
                         if hasattr(storyline, "model_dump")

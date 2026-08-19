@@ -606,6 +606,41 @@ async def test_report_agent_passes_llm_timeout_to_client(
 
 
 @pytest.mark.asyncio
+async def test_report_agent_inherits_settings_llm_timeout(
+    wm: _FakeWorkingMemory,
+    event_service: _FakeEventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "90")
+    get_settings.cache_clear()
+    try:
+        event_id = f"evt-report-timeout-settings-{uuid4().hex[:8]}"
+        await wm.write(event_id, "triage_result", _main_triage().model_dump(mode="json"))
+        event_service.final_verdicts[event_id] = FinalVerdict.CONFIRMED_THREAT
+        _TimeoutCapturingLLM.last_timeout = None
+        agent = ReportAgent(
+            llm_client=_TimeoutCapturingLLM(),
+            working_memory=wm,
+            event_service=event_service,
+        )
+        assert agent.llm_timeout_seconds == 90.0
+        report = await agent.execute(
+            ReportAgentInput(
+                event_id=event_id,
+                evidence_output=_main_evidence(event_id),
+                risk_assessment=_high_risk(),
+            )
+        )
+        assert _TimeoutCapturingLLM.last_timeout == 90.0
+        assert report.generated_by == GENERATED_BY_TEMPLATE
+        assert report.report_quality.value == "degraded_template"
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_llm_timeout_records_audit_and_falls_back_to_template(
     wm: _FakeWorkingMemory,
     event_service: _FakeEventService,

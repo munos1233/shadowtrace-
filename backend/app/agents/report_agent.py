@@ -66,7 +66,8 @@ logger = logging.getLogger(__name__)
 
 GENERATED_BY_LLM = "llm"
 GENERATED_BY_TEMPLATE = "template"
-LLM_TIMEOUT_SECONDS = 30.0
+# Kept as a last-resort fallback when Settings cannot be loaded in tests.
+_REPORT_LLM_TIMEOUT_FALLBACK_SECONDS = 30.0
 # ISSUE-358: partial LLM sections may merge. This trio only stamps
 # ``generated_by=llm``; it does not replace ISSUE-212 chapter-content checks.
 CORE_LLM_SECTION_KEYS: tuple[str, ...] = (
@@ -130,6 +131,23 @@ _DISPOSITION_IDLE_MARKERS = (NOT_EXECUTED_ACTIONS, NOT_EXECUTED_VERIFICATION)
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 
+def _resolve_report_llm_timeout(explicit: float | None) -> float:
+    """Use the caller override, else ``LLM_TIMEOUT_SECONDS``, else 30s.
+
+    Report generation is a long structured prompt. Hardcoding 30s here ignored
+    live overlays that set ``LLM_TIMEOUT_SECONDS=90`` and caused
+    ``report_quality=degraded_template`` while other agents inherited settings.
+    """
+    if explicit is not None:
+        return float(explicit)
+    try:
+        from app.core.config import get_settings
+
+        return float(get_settings().llm_timeout_seconds)
+    except Exception:
+        return _REPORT_LLM_TIMEOUT_FALLBACK_SECONDS
+
+
 class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
     """Generate, persist, and publish a 15-section investigation report."""
 
@@ -151,7 +169,7 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         detection_context_service: Any | None = None,
         section_builder: ReportSectionBuilder | None = None,
         scenario_id: str | None = None,
-        llm_timeout_seconds: float = LLM_TIMEOUT_SECONDS,
+        llm_timeout_seconds: float | None = None,
     ) -> None:
         # Durable publish without a guard is forbidden (ISSUE-270). When callers
         # wire event_service / publication_service but omit output_guard, install
@@ -175,7 +193,7 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         self.detection_context_service = detection_context_service
         self.section_builder = section_builder or ReportSectionBuilder()
         self.scenario_id = scenario_id
-        self.llm_timeout_seconds = float(llm_timeout_seconds)
+        self.llm_timeout_seconds = _resolve_report_llm_timeout(llm_timeout_seconds)
         self.last_content_sha256: str | None = None
         self.last_report_markdown: str | None = None
         self._trace_fallback_detail: str | None = None

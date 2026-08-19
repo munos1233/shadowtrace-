@@ -139,6 +139,18 @@ def test_staging_env_is_not_subject_to_production_gate() -> None:
     assert settings.production_fail_closed_violations() == []
 
 
+def test_llm_thinking_type_defaults_empty_and_accepts_disabled() -> None:
+    settings = Settings(APP_ENV="development")
+    assert settings.llm_thinking_type == ""
+    disabled = Settings(APP_ENV="development", LLM_THINKING_TYPE="Disabled")
+    assert disabled.llm_thinking_type == "disabled"
+
+
+def test_llm_thinking_type_rejects_unknown_values() -> None:
+    with pytest.raises(PydanticValidationError):
+        Settings(APP_ENV="development", LLM_THINKING_TYPE="reasoner")
+
+
 def test_event_chat_can_be_disabled_independently() -> None:
     settings = Settings(APP_ENV="development", EVENT_CHAT_ENABLED=False)
 

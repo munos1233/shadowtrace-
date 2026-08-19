@@ -199,7 +199,8 @@ make eval-full-loop
 | investigate | `include_response_execution=true`，通常 `generate_report=true` | bootstrap 默认二者皆 false |
 | 审批收场 | `scripts/dynamic_eval_approve.py` / `make eval-full-loop` | 人工 UI 或脚本；**禁止**靠超时收场 |
 | `APPROVAL_TIMEOUT_MINUTES` | 评测可在本地 `.env` 设 `2~5` | **30**（勿为评测改仓库默认） |
-| `LLM_TIMEOUT_SECONDS` | 评测可设 `45~60` | `.env.example` 默认 `30` |
+| `LLM_TIMEOUT_SECONDS` | 评测 / live 报告建议 `90`（ReportAgent 继承该值，不再写死 30s） | `.env.example` 默认 `30` |
+| `LLM_THINKING_TYPE` | live glm 建议 `disabled`（不发送则部分模型把 token 花在 reasoning_content） | 默认空，请求里不带 `thinking` 字段 |
 
 **Bootstrap 可选剖面**（默认行为不变）：
 

@@ -1021,6 +1021,7 @@ async def _build_investigation_agents() -> dict[str, Any]:
         publication_service=publication_service,
         detection_context_service=get_detection_context_service(),
         event_bus=event_bus,
+        llm_timeout_seconds=float(settings.llm_timeout_seconds),
     )
     graph_sync = await get_graph_sync_service()
     graph_agent = GraphAgent(

@@ -22,20 +22,32 @@ class _EventService:
         return object() if self._exists else None
 
 
+_JOURNAL_UNSET = object()
+
+
 class _ContextStore:
     def __init__(
         self,
         storyline: dict[str, Any] | None,
         *,
         context_exists: bool = True,
+        journal_storyline: Any = _JOURNAL_UNSET,
     ) -> None:
         self._storyline = storyline
         self._context_exists = context_exists
+        self._journal_storyline = journal_storyline
 
     async def get_full_context(self, event_id: str) -> EventContext:
         if not self._context_exists:
             raise KeyError(f"security_event not found: {event_id}")
         return EventContext(storyline=self._storyline)
+
+    async def get_versioned_field(self, event_id: str, key: str) -> tuple[Any, int]:
+        if key != "storyline":
+            return None, 0
+        if self._journal_storyline is _JOURNAL_UNSET:
+            return self._storyline, 1
+        return self._journal_storyline, 1
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +62,7 @@ def _client(
     *,
     event_exists: bool = True,
     context_exists: bool = True,
+    journal_storyline: Any = _JOURNAL_UNSET,
 ) -> TestClient:
     async def _principal() -> Principal:
         return Principal(subject="analyst-1", roles=["analyst"])
@@ -58,7 +71,11 @@ def _client(
         return _EventService(exists=event_exists)
 
     def _context_store() -> _ContextStore:
-        return _ContextStore(storyline, context_exists=context_exists)
+        return _ContextStore(
+            storyline,
+            context_exists=context_exists,
+            journal_storyline=journal_storyline,
+        )
 
     app.dependency_overrides[get_principal] = _principal
     app.dependency_overrides[get_event_service] = _event_service
@@ -134,3 +151,51 @@ def test_timeline_openapi_declares_attack_storyline_response() -> None:
     operation = schema["paths"]["/api/v1/events/{event_id}/timeline"]["get"]
     response_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
     assert response_ref.endswith("/AttackStoryline")
+
+
+def _snapshot_summary() -> dict[str, Any]:
+    """ISSUE-254 bounded blob: counters, no phases, no event_id."""
+    return {
+        "storyline_id": "sty-api-070",
+        "grounding_status": "evidence_grounded",
+        "generated_by": "llm",
+        "phase_count": 5,
+        "claim_ref_count": 2,
+        "narrative_summary": "summary only",
+        "schema_version": "1.0",
+    }
+
+
+def test_timeline_snapshot_summary_is_not_ready_not_500() -> None:
+    """CLOSED rebuild may put the snapshot summary in EventContext.storyline."""
+    response = _client(
+        _snapshot_summary(),
+        journal_storyline=None,
+    ).get("/api/v1/events/evt-api-070/timeline")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "storyline_not_ready"
+
+
+def test_timeline_loads_journal_when_context_only_has_snapshot_summary() -> None:
+    response = _client(
+        _snapshot_summary(),
+        journal_storyline=_storyline(),
+    ).get("/api/v1/events/evt-api-070/timeline")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["generated_by"] == "rule"
+    assert payload["event_id"] == "evt-api-070"
+    assert payload["phases"][0]["entries"][0]["evidence_id"] == "ev-api-070"
+    assert "phase_count" not in payload
+
+
+def test_timeline_rejects_journal_summary_the_same_way() -> None:
+    response = _client(
+        _snapshot_summary(),
+        journal_storyline=_snapshot_summary(),
+    ).get("/api/v1/events/evt-api-070/timeline")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "storyline_not_ready"

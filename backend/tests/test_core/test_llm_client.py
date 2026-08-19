@@ -706,6 +706,89 @@ async def test_versioned_base_url_is_preserved_with_injected_client() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_compatible_omits_thinking_field_by_default() -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_response("ok", model="primary-model"),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        await _client(http_client, audit=InMemoryLLMCallAuditRecorder()).chat(
+            MESSAGES,
+            event_id="evt-2026-thinking-omit",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+        )
+
+    assert "thinking" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_sends_thinking_type_when_configured() -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_response("ok", model="primary-model"),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        await _client(
+            http_client,
+            audit=InMemoryLLMCallAuditRecorder(),
+            thinking_type="disabled",
+        ).chat(
+            MESSAGES,
+            event_id="evt-2026-thinking-disabled",
+            agent_name="StorylineService",
+            prompt_key="storyline_generate",
+        )
+
+    assert captured["payload"]["thinking"] == {"type": "disabled"}
+
+
+def test_factory_forwards_thinking_type_from_settings() -> None:
+    settings = Settings(
+        LLM_MODE="openai_compatible",
+        LLM_API_BASE_URL="https://llm.example/v1",
+        LLM_API_KEY="test-key",
+        LLM_PRIMARY_MODEL="any-model",
+        LLM_THINKING_TYPE="disabled",
+        APP_ENV="development",
+    )
+    client = get_llm_client(
+        settings=settings,
+        audit_recorder=InMemoryLLMCallAuditRecorder(),
+    )
+    assert isinstance(client, OpenAICompatibleLLMClient)
+    assert client._thinking_type == "disabled"
+
+
+def test_factory_omits_thinking_type_when_unset() -> None:
+    settings = Settings(
+        LLM_MODE="openai_compatible",
+        LLM_API_BASE_URL="https://llm.example/v1",
+        LLM_API_KEY="test-key",
+        LLM_PRIMARY_MODEL="any-model",
+        APP_ENV="development",
+    )
+    client = get_llm_client(
+        settings=settings,
+        audit_recorder=InMemoryLLMCallAuditRecorder(),
+    )
+    assert isinstance(client, OpenAICompatibleLLMClient)
+    assert client._thinking_type is None
+
+
+@pytest.mark.asyncio
 async def test_budget_exceeded_is_not_wrapped_or_retried() -> None:
     requests = 0
 

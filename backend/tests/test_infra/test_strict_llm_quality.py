@@ -257,6 +257,8 @@ def test_live_reasoning_nightly_workflow_is_independent_and_fail_closed() -> Non
     assert "insider_data_exfiltration" in text
     assert "live-glm-eval" in text
     assert "CERTIFICATION_CARD=live_reasoning" in text
+    assert "LLM_TIMEOUT_SECONDS=90" in text
+    assert "LLM_THINKING_TYPE=disabled" in text
     assert "make up-demo" not in text
     assert "adversarial-closure-gates" not in text
     assert "up-live-reasoning" in text

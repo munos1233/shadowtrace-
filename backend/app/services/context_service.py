@@ -300,6 +300,30 @@ def _context_as_dict(ctx: EventContext) -> dict[str, Any]:
     return out
 
 
+def overlay_closed_snapshot_with_journal(
+    snapshot_ctx: EventContext,
+    journal_ctx: EventContext,
+) -> EventContext:
+    """Fill CLOSED freeze holes that ISSUE-254 summarized out of the snapshot.
+
+    The ORM snapshot is allowed to keep ``storyline`` as a bounded summary.
+    Journal / WorkingMemory remain the owner of the full AttackStoryline.
+    """
+    from app.services.event_context_snapshot_projection import parse_attack_storyline
+
+    merged = _context_as_dict(snapshot_ctx)
+    if journal_ctx.analysis_only_complete and not snapshot_ctx.analysis_only_complete:
+        merged["analysis_only_complete"] = True
+    if (
+        parse_attack_storyline(merged.get("storyline")) is None
+        and parse_attack_storyline(journal_ctx.storyline) is not None
+    ):
+        merged["storyline"] = journal_ctx.storyline
+    if not merged.get("evidence_output") and journal_ctx.evidence_output:
+        merged["evidence_output"] = journal_ctx.evidence_output
+    return EventContext.model_validate(merged)
+
+
 def _assemble_event_context(raw: dict[str, Any]) -> EventContext:
     """Build EventContext, always validating (ISSUE-094 §2: no ``model_construct``
     bypass). ``event`` is typed as ``EventSummary | None`` so the EventSummary-shaped
@@ -679,14 +703,12 @@ class EventContextStore:
                 ctx = _assemble_event_context(dict(se.event_context_snapshot))
                 # ISSUE-266: journal may hold analysis_only_complete=true after a
                 # post-freeze write; never downgrade snapshot truth once true.
+                # ISSUE-254: the durable snapshot storyline may be a bounded
+                # summary (phase_count / claim_ref_count). Overlay the journal
+                # AttackStoryline so GET /timeline and other EventContext
+                # consumers do not see the observability blob as the full field.
                 journal_ctx = await self._rebuild_from_journal(session, event_id)
-                if journal_ctx.analysis_only_complete and not ctx.analysis_only_complete:
-                    ctx = EventContext.model_validate(
-                        {
-                            **_context_as_dict(ctx),
-                            "analysis_only_complete": True,
-                        }
-                    )
+                ctx = overlay_closed_snapshot_with_journal(ctx, journal_ctx)
             else:
                 ctx = await self._rebuild_from_journal(session, event_id)
 
