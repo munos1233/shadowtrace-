@@ -20,15 +20,21 @@ from app.agents.prompts.response_prompt import (
     ResponsePlanLLMResponse,
     build_response_plan_messages,
 )
-from app.agents.rules.default_response_rules import ResponseRuleAction, get_rule_actions
+from app.agents.rules.default_response_rules import (
+    ResponseRuleAction,
+    get_rule_actions,
+    union_rule_actions,
+)
 from app.agents.rules.response_plan_quality_gate import (
     CONTAINMENT_TOOLS,
     apply_containment_quality_gate,
     apply_evidence_sufficiency_gate,
+    apply_exfil_domain_containment_gate,
     apply_identity_containment_dedup_gate,
     evidence_blocks_high_impact_actions,
     requires_threat_aligned_containment,
 )
+from app.core.config import live_reasoning_card_enabled
 from app.core.errors import LLMError
 from app.core.errors import ValidationError as ShadowValidationError
 from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
@@ -809,9 +815,13 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             not any(item.tool_name in CONTAINMENT_TOOLS for item in rule_actions)
             or (event_type is EventType.DATA_EXFILTRATION and severity is Severity.MEDIUM)
         ):
-            # DATA_EXFIL MEDIUM stays conservative (no L3 on the default plan).
-            # Coverage / ticket-only fallback still needs isolate_host + disable_account.
-            rule_actions = get_rule_actions(event_type, Severity.HIGH)
+            # DATA_EXFIL MEDIUM stays conservative on the default plan (no L3).
+            # Coverage / ticket-only fallback still needs isolate_host + disable_account
+            # without dropping MEDIUM network IOC tools (block_domain).
+            rule_actions = union_rule_actions(
+                rule_actions,
+                get_rule_actions(event_type, Severity.HIGH),
+            )
         rule_fallback_pool = policy_filter.filter_candidates(
             expand_rule_candidates(rule_actions, entities),
         )
@@ -834,6 +844,18 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
             strategy=strategy,
             disposition_only=disposition_only,
         )
+        if not evidence_high_impact_blocked:
+            candidates, generated_by, strategy = apply_exfil_domain_containment_gate(
+                candidates=candidates,
+                generated_by=generated_by,
+                strategy=strategy,
+                severity=severity,
+                risk_assessment=input.risk_assessment,
+                final_verdict=ctx.get("final_verdict"),
+                entities=entities,
+                disposition_only=disposition_only,
+                evidence_output=input.evidence_output,
+            )
         tool_index = baseline_tool_index()
 
         def _resolve_tool_level(tool_name: str) -> ActionLevel:
@@ -1022,6 +1044,11 @@ class ResponseAgent(BaseAgent[ResponseAgentInput, ResponsePlan]):
                         llm_candidates,
                         ResponsePlanGeneratedBy.LLM,
                         summary[:500],
+                    )
+                if live_reasoning_card_enabled():
+                    raise LLMError(
+                        "response_plan LLM returned empty candidates",
+                        details={"event_id": input.event_id},
                     )
             except SoftTimeLimitExceeded:
                 raise

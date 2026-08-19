@@ -69,6 +69,27 @@ def _events_schema() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(_SCHEMA_PATH.read_text(encoding="utf-8")))
 
 
+def _is_envelope_schema_error(exc: BaseException) -> bool:
+    """True when envelope validation failed; drop the message, keep the subscriber."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, jsonschema.ValidationError):
+            return True
+        schema_error = getattr(jsonschema, "SchemaError", None)
+        if schema_error is not None and isinstance(current, schema_error):
+            return True
+        if type(current).__name__ in {
+            "Unresolvable",
+            "_WrappedReferencingError",
+            "RefResolutionError",
+        }:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 # ---------------------------------------------------------------------------
 # SocketIOManager
 # ---------------------------------------------------------------------------
@@ -422,7 +443,9 @@ class SocketIOManager:
 
         try:
             jsonschema.validate(instance=socket_envelope, schema=_events_schema())
-        except jsonschema.ValidationError:
+        except Exception as exc:
+            if not _is_envelope_schema_error(exc):
+                raise
             logger.warning(
                 "SocketIOManager envelope failed schema validation event_id=%s type=%s — dropped",
                 event_id,
@@ -503,6 +526,7 @@ def reset_socketio_health_state_for_tests() -> None:
 __all__ = [
     "SocketIOManager",
     "_events_schema",
+    "_is_envelope_schema_error",
     "_sequence_key",
     "get_socketio_health",
     "reset_socketio_health_state_for_tests",

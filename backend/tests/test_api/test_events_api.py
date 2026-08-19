@@ -1040,6 +1040,273 @@ async def test_get_event_preserves_current_plan_failed_status(
 
 
 @pytest.mark.asyncio
+async def test_get_event_terminal_writeback_ignores_entity_accepted_outboxes(
+    client: TestClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ISSUE-312: entity ACCEPTED must not make EventDetail look pending.
+
+    Mixed fixture: one applicable EVENT_STATUS_UPDATE CONFIRMED + three
+    applicable=false entity submits still ACCEPTED. Terminal pending must be 0
+    and overall CONFIRMED; entity receipts are exposed separately.
+    """
+    import hashlib
+    from uuid import uuid4
+
+    from app.models.enums import DispositionIntentKind
+
+    sfx = uuid4().hex[:8]
+    event_id = f"evt-wb-mix-{sfx}"
+    now = datetime.now(UTC)
+
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="data_exfiltration",
+                    title="Mixed terminal/entity writeback",
+                    description="ISSUE-312 EventDetail channel split",
+                    status=EventStatus.CLOSED.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict=FinalVerdict.CONFIRMED_THREAT.value,
+                    risk_score=85,
+                    entities={},
+                    creation_source_ref={
+                        "source_kind": "incident",
+                        "source_product": "mock_xdr",
+                        "source_tenant_id": "t1",
+                        "connector_id": f"conn-{sfx}",
+                        "source_object_id": f"INC-{sfx}",
+                        "raw_payload_hash": hashlib.sha256(b"wb-mix").hexdigest(),
+                        "ingested_at": now.isoformat(),
+                    },
+                    source_reference_snapshots=[],
+                    disposition_policy=DispositionPolicy.REQUIRED.value,
+                    source_type="mock_xdr",
+                    occurred_at=now,
+                    row_version=1,
+                )
+            )
+            session.add(
+                orm.SourceConnector(
+                    connector_id=f"conn-{sfx}",
+                    source_product="mock_xdr",
+                    display_name="Writeback mix connector",
+                )
+            )
+            session.add(
+                orm.SourceObject(
+                    source_record_id=f"src-{sfx}",
+                    source_product="mock_xdr",
+                    source_tenant_id="t1",
+                    connector_id=f"conn-{sfx}",
+                    source_kind="incident",
+                    source_object_id=f"INC-{sfx}",
+                )
+            )
+            await session.flush()
+            session.add(
+                orm.Action(
+                    action_id=f"act-term-{sfx}",
+                    event_id=event_id,
+                    plan_revision=1,
+                    action_fingerprint=f"fp-term-{sfx}",
+                    action_category="response",
+                    action_name="update disposition",
+                    tool_name="update_source_event_disposition",
+                    action_level="l2",
+                    execution_owner="xdr_managed",
+                    status="success",
+                    writeback_required=True,
+                    writeback_applicable=True,
+                    writeback_readiness=WritebackReadiness.READY.value,
+                    writeback_status=WritebackStatus.CONFIRMED.value,
+                )
+            )
+            entity_tools = ("isolate_host", "block_ip", "disable_account")
+            for idx, tool in enumerate(entity_tools, start=1):
+                session.add(
+                    orm.Action(
+                        action_id=f"act-ent-{idx}-{sfx}",
+                        event_id=event_id,
+                        plan_revision=1,
+                        action_fingerprint=f"fp-ent-{idx}-{sfx}",
+                        action_category="response",
+                        action_name=tool,
+                        tool_name=tool,
+                        action_level="l2",
+                        execution_owner="xdr_managed",
+                        status="success",
+                        writeback_required=True,
+                        writeback_applicable=False,
+                        writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
+                    )
+                )
+            await session.flush()
+            session.add(
+                orm.DispositionOutbox(
+                    outbox_id=f"obx-term-{sfx}",
+                    writeback_id=f"wbk-term-{sfx}",
+                    disposition_id=f"disp-term-{sfx}",
+                    action_id=f"act-term-{sfx}",
+                    event_id=event_id,
+                    closure_cycle=1,
+                    source_record_id=f"src-{sfx}",
+                    source_locator_hash="h" * 64,
+                    source_sequence=1,
+                    intent_kind=DispositionIntentKind.EVENT_STATUS_UPDATE.value,
+                    logical_slot="event-status",
+                    idempotency_key=f"idem-term-{sfx}",
+                    command_payload={},
+                    command_payload_sha256="c" * 64,
+                    delivery_status="delivered",
+                    latest_writeback_status=WritebackStatus.CONFIRMED.value,
+                )
+            )
+            for idx, _tool in enumerate(entity_tools, start=1):
+                session.add(
+                    orm.DispositionOutbox(
+                        outbox_id=f"obx-ent-{idx}-{sfx}",
+                        writeback_id=f"wbk-ent-{idx}-{sfx}",
+                        disposition_id=f"disp-ent-{idx}-{sfx}",
+                        action_id=f"act-ent-{idx}-{sfx}",
+                        event_id=event_id,
+                        closure_cycle=1,
+                        source_record_id=f"src-{sfx}",
+                        source_locator_hash="h" * 64,
+                        source_sequence=idx + 1,
+                        intent_kind=DispositionIntentKind.ENTITY_ACTION_SUBMIT.value,
+                        logical_slot=f"entity-{idx}",
+                        idempotency_key=f"idem-ent-{idx}-{sfx}",
+                        command_payload={},
+                        command_payload_sha256="d" * 64,
+                        delivery_status="delivered",
+                        latest_writeback_status=WritebackStatus.ACCEPTED.value,
+                    )
+                )
+
+    resp = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["writeback_required"] is True
+    assert data["writeback_readiness"] == WritebackReadiness.READY.value
+    assert data["writeback_overall_status"] == WritebackStatus.CONFIRMED.value
+    assert data["pending_writeback_count"] == 0
+    assert data["entity_writeback_accepted_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_event_entity_only_does_not_invent_terminal_confirmed(
+    client: TestClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Anti-cheat: zeroing pending without a terminal row must not look CONFIRMED."""
+    import hashlib
+    from uuid import uuid4
+
+    from app.models.enums import DispositionIntentKind
+
+    sfx = uuid4().hex[:8]
+    event_id = f"evt-wb-entonly-{sfx}"
+    now = datetime.now(UTC)
+
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                orm.SecurityEvent(
+                    event_id=event_id,
+                    event_type="data_exfiltration",
+                    title="Entity-only writeback",
+                    description="must not invent terminal CONFIRMED",
+                    status=EventStatus.CLOSED.value,
+                    severity=Severity.HIGH.value,
+                    final_verdict=FinalVerdict.CONFIRMED_THREAT.value,
+                    risk_score=85,
+                    entities={},
+                    creation_source_ref={
+                        "source_kind": "incident",
+                        "source_product": "mock_xdr",
+                        "source_tenant_id": "t1",
+                        "connector_id": f"conn-{sfx}",
+                        "source_object_id": f"INC-{sfx}",
+                        "raw_payload_hash": hashlib.sha256(b"wb-ent").hexdigest(),
+                        "ingested_at": now.isoformat(),
+                    },
+                    source_reference_snapshots=[],
+                    disposition_policy=DispositionPolicy.REQUIRED.value,
+                    source_type="mock_xdr",
+                    occurred_at=now,
+                    row_version=1,
+                )
+            )
+            session.add(
+                orm.SourceConnector(
+                    connector_id=f"conn-{sfx}",
+                    source_product="mock_xdr",
+                    display_name="Entity-only connector",
+                )
+            )
+            session.add(
+                orm.SourceObject(
+                    source_record_id=f"src-{sfx}",
+                    source_product="mock_xdr",
+                    source_tenant_id="t1",
+                    connector_id=f"conn-{sfx}",
+                    source_kind="incident",
+                    source_object_id=f"INC-{sfx}",
+                )
+            )
+            await session.flush()
+            session.add(
+                orm.Action(
+                    action_id=f"act-ent-{sfx}",
+                    event_id=event_id,
+                    plan_revision=1,
+                    action_fingerprint=f"fp-ent-{sfx}",
+                    action_category="response",
+                    action_name="isolate_host",
+                    tool_name="isolate_host",
+                    action_level="l2",
+                    execution_owner="xdr_managed",
+                    status="success",
+                    writeback_required=True,
+                    writeback_applicable=False,
+                    writeback_readiness=WritebackReadiness.NOT_REQUIRED.value,
+                )
+            )
+            await session.flush()
+            session.add(
+                orm.DispositionOutbox(
+                    outbox_id=f"obx-ent-{sfx}",
+                    writeback_id=f"wbk-ent-{sfx}",
+                    disposition_id=f"disp-ent-{sfx}",
+                    action_id=f"act-ent-{sfx}",
+                    event_id=event_id,
+                    closure_cycle=1,
+                    source_record_id=f"src-{sfx}",
+                    source_locator_hash="h" * 64,
+                    source_sequence=1,
+                    intent_kind=DispositionIntentKind.ENTITY_ACTION_SUBMIT.value,
+                    logical_slot="entity-1",
+                    idempotency_key=f"idem-ent-{sfx}",
+                    command_payload={},
+                    command_payload_sha256="e" * 64,
+                    delivery_status="delivered",
+                    latest_writeback_status=WritebackStatus.ACCEPTED.value,
+                )
+            )
+
+    resp = client.get(f"/api/v1/events/{event_id}", headers=_hdr())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pending_writeback_count"] == 0
+    assert data["entity_writeback_accepted_count"] == 1
+    assert data["writeback_overall_status"] is None
+    assert data["writeback_readiness"] == WritebackReadiness.CAPABILITY_UNKNOWN.value
+
+
+@pytest.mark.asyncio
 async def test_get_event_returns_detail_without_detection_context_for_manual_event(
     client: TestClient,
     event_service: EventService,
@@ -1053,6 +1320,19 @@ async def test_get_event_returns_detail_without_detection_context_for_manual_eve
     assert data["event"]["event_id"] == event_id
     assert data["detection_context_snapshot"] is None
     assert data["detection_context_projection_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_real_event_context_store_rejects_side_effect_convergence_key(
+    context_store: EventContextStore,
+) -> None:
+    """Anti-cheat: stuffing the unknown field into working memory still fails."""
+    with pytest.raises(KeyError, match="side_effect_convergence"):
+        await context_store.set(
+            "evt-unknown-context-field",
+            "side_effect_convergence",
+            {"outstanding": []},
+        )
 
 
 @pytest.mark.asyncio

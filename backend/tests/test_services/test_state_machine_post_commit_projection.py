@@ -188,6 +188,10 @@ class _ProjectionStore:
         }.get(key, key)
 
     async def set(self, _event_id: str, key: str, value: Any) -> SetResult:
+        from app.services.context_service import CONTEXT_FIELD_NAMES
+
+        if key not in CONTEXT_FIELD_NAMES:
+            raise KeyError(f"unknown EventContext field: {key!r}")
         step = self._step_for_key(key)
         self.calls[step] += 1
         if self.raise_step == step:
@@ -440,6 +444,23 @@ async def test_closed_ttl_returned_degraded(
     )
     assert degraded.status is EventStatus.CLOSED
     assert any("closed_ttl:returned_degraded" in flag for flag in state.row.degraded_flags)
+
+
+@pytest.mark.asyncio
+async def test_closed_projection_does_not_write_unknown_side_effect_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISSUE-302a: CLOSED must not stuff EventContext.side_effect_convergence."""
+    service, state, store = _build_service(monkeypatch, initial=EventStatus.REPORTING)
+    result = await service.force_close(
+        state.row.event_id,
+        principal=Principal(subject="admin-1", roles=[ROLE_ADMIN]),
+        reason="close-without-unknown-context-key",
+    )
+    assert result.status is EventStatus.CLOSED
+    assert "side_effect_convergence" not in store.values
+    assert not any("side_effect_convergence" in str(flag) for flag in state.row.degraded_flags)
+    assert "redis_context_unavailable=true" not in state.row.degraded_flags
 
 
 @pytest.mark.asyncio

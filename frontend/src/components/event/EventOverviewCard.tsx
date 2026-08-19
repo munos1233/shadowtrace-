@@ -93,6 +93,9 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
     triageSeverity !== undefined &&
     triageSeverity !== null &&
     triageSeverity !== outwardSeverity;
+  const triageEventType = event.event_context_snapshot?.triage_event_type;
+  const showTriageEventTypeChip =
+    Boolean(triageEventType) && triageEventType !== event.event_type;
   const demotionCodes = useMemo(
     () =>
       resolveVerdictDemotionCodes({
@@ -203,6 +206,11 @@ export default function EventOverviewCard({ detail, onRefresh }: Props) {
             <Tag color={typeChipColor} data-testid="event-type-chip">
               {event.event_type || "暂无数据"}
             </Tag>
+            {showTriageEventTypeChip && triageEventType ? (
+              <Tag data-testid="overview-triage-event-type-tag">
+                分诊 {triageEventType}
+              </Tag>
+            ) : null}
             <Tag data-testid="classification-source-chip">
               {SOURCE_LABEL[classificationSource] ?? classificationSource}
             </Tag>

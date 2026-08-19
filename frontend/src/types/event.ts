@@ -561,6 +561,8 @@ export interface EventContextSnapshot {
   risk_assessment?: RiskAssessment | null;
   /** ISSUE-330: bounded triage severity for explicit dual-source disclosure. */
   triage_severity?: Severity | null;
+  /** Triage event_type when it differs from the authoritative source type. */
+  triage_event_type?: EventType | null;
   execution_jobs?: ExecutionJobResponse[];
   execution_summary?: {
     jobs?: ExecutionJobResponse[];
@@ -711,6 +713,8 @@ export interface EventDetailResponse extends SideEffectConvergenceProjection {
   writeback_readiness: WritebackReadiness;
   writeback_overall_status: WritebackStatus | null;
   pending_writeback_count: number;
+  /** ISSUE-312 entity submit receipts still ACCEPTED (not terminal pending). */
+  entity_writeback_accepted_count?: number;
   detection_context_snapshot?: DetectionContextSnapshotSummary | null;
   detection_context_projection_error?: DetectionContextProjectionErrorSummary | null;
   analysis_only_complete?: boolean;

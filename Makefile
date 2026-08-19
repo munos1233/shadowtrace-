@@ -42,6 +42,7 @@ COMPOSE_DEMO := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	PLAYBOOK_REQUIRED="$(DEMO_PLAYBOOK_REQUIRED)" \
 	SEED_PLAYBOOK_RELEASE=true \
 	TASK_MODE=celery \
+	OBS_CONFIG_DIR="$(CURDIR)/infra/observability" \
 	docker compose --project-name "$(COMPOSE_PROJECT_NAME)" \
 	-f "$(COMPOSE_FILE)" -f "$(OBS_COMPOSE_FILE)" \
 	--profile demo
@@ -65,10 +66,15 @@ CELERY_SIGKILL_ARTIFACT_DIR ?= $(CURDIR)/artifacts/issue-283
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo bootstrap-demo-analysis bootstrap-demo-full-loop smoke-demo demo-full-loop demo-guard-test up-observability down-observability llm-smoke test test-ci-lite lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix adversarial-closure-gates test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
+.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo bootstrap-demo-analysis bootstrap-demo-full-loop smoke-demo demo-full-loop demo-guard-test up-live-reasoning up-observability down-observability llm-smoke test test-ci-lite lint fmt migrate migrate-down load-kb integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix adversarial-closure-gates test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
 	$(COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
+
+# Live reasoning card stack: mock XDR + optional .env.live LLM overlay.
+# Does NOT run demo-guard (up-demo fail-closes when .env.live is present).
+up-live-reasoning:
+	$(MAKE) up WORKER=1
 
 down:
 	@demo_running=$$($(COMPOSE_DEMO) ps -q 2>/dev/null | wc -l | tr -d ' '); \
@@ -121,13 +127,14 @@ endif
 EVAL_MAX_EVENTS ?= 1
 EVAL_DECISION ?= approve
 EVAL_REQUIRE_CLOSED ?=
+EVAL_REQUIRE_LLM_QUALITY ?=
 BOOTSTRAP_AUTH_TOKEN ?= bootstrap-token
 BOOTSTRAP_GENERATE_REPORT ?= false
 BOOTSTRAP_INCLUDE_RESPONSE ?= false
 eval-full-loop:
 	@echo "[eval-full-loop] gold fixture=seed_mock_xdr_and_ingest scenario=$(EVAL_SCENARIO)"
 	@echo "[eval-full-loop] scripted $(EVAL_DECISION) — never finish via APPROVAL_TIMEOUT"
-	@echo "[eval-full-loop] profile=$(if $(EVAL_REQUIRE_CLOSED),strict CLOSED,compat)"
+	@echo "[eval-full-loop] profile=$(if $(EVAL_REQUIRE_CLOSED),strict CLOSED,compat)$(if $(EVAL_REQUIRE_LLM_QUALITY), + live reasoning card,)"
 	COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	BACKEND_PORT="$(BACKEND_PORT)" \
 	python3 "$(CURDIR)/scripts/dynamic_eval_full_loop.py" \
@@ -137,7 +144,8 @@ eval-full-loop:
 		--token "$(BOOTSTRAP_AUTH_TOKEN)" \
 		--max-events "$(EVAL_MAX_EVENTS)" \
 		--decision "$(EVAL_DECISION)" \
-		$(if $(EVAL_REQUIRE_CLOSED),--require-closed,)
+		$(if $(EVAL_REQUIRE_CLOSED),--require-closed,) \
+		$(if $(EVAL_REQUIRE_LLM_QUALITY),--require-llm-quality,)
 
 # ---------------------------------------------------------------------------
 # ISSUE-301 dynamic-eval matrix (fresh Compose project + volumes per scenario)
@@ -271,6 +279,8 @@ fmt:
 	cd backend && $(PYTHON) -m ruff check --fix app tests && $(PYTHON) -m ruff format app tests
 
 # --- ISSUE-347 adversarial quality profile (scorecard visibility; P0 stays fail-soft) ---
+# Mock-only host pytest + postgres/redis. NOT the live glm reasoning card.
+# Do not treat a green run here as EVAL_REQUIRE_LLM_QUALITY success.
 # Default mirrors backend-closure-gates-mock CI: unscored output_quality bucket in audit JSON.
 # Set ADVERSARIAL_OUTPUT_QUALITY_BLOCKING=true locally to drill blocking semantics.
 ADVERSARIAL_OUTPUT_QUALITY_BLOCKING ?= false

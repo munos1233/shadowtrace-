@@ -2,11 +2,11 @@
   "content": {
     "actions": [
       {
-        "tool_name": "reset_password",
+        "tool_name": "disable_account",
         "target_type": "account",
         "target": "zhangsan",
         "parameters": {},
-        "reason": "Reset credentials for suspected insider account"
+        "reason": "Disable suspected insider account used to archive and exfiltrate finance data"
       },
       {
         "tool_name": "isolate_host",
@@ -14,6 +14,20 @@
         "target": "PC-FIN-023",
         "parameters": {},
         "reason": "Isolate finance endpoint pending investigation"
+      },
+      {
+        "tool_name": "block_ip",
+        "target_type": "ip",
+        "target": "203.0.113.88",
+        "parameters": {},
+        "reason": "Block external exfiltration destination"
+      },
+      {
+        "tool_name": "block_domain",
+        "target_type": "domain",
+        "target": "unknown-upload-example.com",
+        "parameters": {},
+        "reason": "Block exfiltration upload domain"
       },
       {
         "tool_name": "create_ticket",
@@ -26,7 +40,7 @@
         "reason": "Track investigation actions"
       }
     ],
-    "strategy_summary": "Reset insider account credentials and isolate finance endpoint"
+    "strategy_summary": "Disable insider account zhangsan, isolate PC-FIN-023, block destination 203.0.113.88, and block domain unknown-upload-example.com"
   },
   "model_name": "mock-model",
   "prompt_tokens": 180,

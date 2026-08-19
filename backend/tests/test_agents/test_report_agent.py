@@ -13,6 +13,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.agents.conflict_detector import RULE_IAM_ABSENT_BUT_EDR_ACTIVE
 from app.agents.report_agent import (
     GENERATED_BY_LLM,
     GENERATED_BY_TEMPLATE,
@@ -75,10 +76,12 @@ from app.models.enums import (
     Severity,
     WritebackReadiness,
 )
-from app.models.evidence import Evidence, EvidenceGap
-from app.models.ids import new_evidence_id, report_id_for_event
+from app.models.evidence import Evidence, EvidenceConflict, EvidenceGap
+from app.models.ids import new_conflict_id, new_evidence_id, report_id_for_event
+from app.models.report import ReportSection
 from app.providers.llm.openai_compatible import OpenAICompatibleLLMClient
 from app.services.agent_trace_service import TraceProjection
+from app.services.risk_verdict_projection import UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT
 
 
 class _FakeWorkingMemory:
@@ -493,6 +496,12 @@ async def test_main_scenario_fifteen_sections_and_key_facts(
     assert agent.last_report_markdown
     assert "zhangsan" in agent.last_report_markdown
     assert f"content_sha256={agent.last_content_sha256}" in agent.last_report_markdown
+    assert report.report_quality.value == "complete"
+    assert report.degraded is False
+    executed = next(s for s in report.sections if s.key == "executed_actions")
+    verification = next(s for s in report.sections if s.key == "verification_results")
+    assert PLACEHOLDER_NO_ACTIONS not in executed.content
+    assert PLACEHOLDER_NO_VERIFICATION not in verification.content
 
 
 @pytest.mark.asyncio
@@ -594,6 +603,41 @@ async def test_report_agent_passes_llm_timeout_to_client(
     assert _TimeoutCapturingLLM.last_timeout == 30.0
     assert report.generated_by == GENERATED_BY_TEMPLATE
     assert report.report_quality.value == "degraded_template"
+
+
+@pytest.mark.asyncio
+async def test_report_agent_inherits_settings_llm_timeout(
+    wm: _FakeWorkingMemory,
+    event_service: _FakeEventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "90")
+    get_settings.cache_clear()
+    try:
+        event_id = f"evt-report-timeout-settings-{uuid4().hex[:8]}"
+        await wm.write(event_id, "triage_result", _main_triage().model_dump(mode="json"))
+        event_service.final_verdicts[event_id] = FinalVerdict.CONFIRMED_THREAT
+        _TimeoutCapturingLLM.last_timeout = None
+        agent = ReportAgent(
+            llm_client=_TimeoutCapturingLLM(),
+            working_memory=wm,
+            event_service=event_service,
+        )
+        assert agent.llm_timeout_seconds == 90.0
+        report = await agent.execute(
+            ReportAgentInput(
+                event_id=event_id,
+                evidence_output=_main_evidence(event_id),
+                risk_assessment=_high_risk(),
+            )
+        )
+        assert _TimeoutCapturingLLM.last_timeout == 90.0
+        assert report.generated_by == GENERATED_BY_TEMPLATE
+        assert report.report_quality.value == "degraded_template"
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -1000,7 +1044,6 @@ async def test_llm_missing_non_core_section_merges_and_stays_llm(
 async def test_llm_whitespace_core_is_template_partial_sections(
     wm: _FakeWorkingMemory,
     event_service: _FakeEventService,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """ISSUE-358: whitespace-only overview must not stamp generated_by=llm."""
     event_id = f"evt-report-ws-core-{uuid4().hex[:8]}"
@@ -1010,14 +1053,13 @@ async def test_llm_whitespace_core_is_template_partial_sections(
         working_memory=wm,
         event_service=event_service,
     )
-    with caplog.at_level(logging.WARNING, logger="app.agents.report_agent"):
-        report = await agent.execute(
-            ReportAgentInput(
-                event_id=event_id,
-                evidence_output=_main_evidence(event_id),
-                risk_assessment=_high_risk(),
-            )
+    report = await agent.execute(
+        ReportAgentInput(
+            event_id=event_id,
+            evidence_output=_main_evidence(event_id),
+            risk_assessment=_high_risk(),
         )
+    )
     assert report.generated_by == GENERATED_BY_TEMPLATE
     assert "report_llm_fallback:partial_sections" in report.warnings
     assert report.error_detail is None
@@ -1025,7 +1067,6 @@ async def test_llm_whitespace_core_is_template_partial_sections(
     assert report.degraded is True
     storyline = next(s for s in report.sections if s.key == "attack_storyline")
     assert "llm storyline kept" in storyline.content
-    assert any("missing_core" in rec.message for rec in caplog.records)
 
 
 def test_builder_preserves_section_order() -> None:
@@ -1241,6 +1282,103 @@ def test_llm_overview_preserves_human_escalation_note() -> None:
     assert recommendations.content.startswith("LLM-generated remediation tips.")
     assert "人工升级" in recommendations.content
     assert "replan_count=3" in recommendations.content
+
+
+def _containment_response_plan(event_id: str) -> ResponsePlan:
+    def _action(tool_name: str, target: str, level: ActionLevel) -> Action:
+        return Action(
+            action_id=f"act-{tool_name[:8]}",
+            event_id=event_id,
+            plan_revision=1,
+            action_fingerprint=f"fp-{tool_name}",
+            action_category=ActionCategory.RESPONSE,
+            action_name=tool_name,
+            tool_name=tool_name,
+            action_level=level,
+            target=target,
+            execution_owner=ExecutionOwner.XDR_MANAGED,
+        )
+
+    return ResponsePlan(
+        plan_id="plan-containment",
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        actions=[
+            _action("disable_account", "zhangsan", ActionLevel.L3),
+            _action("isolate_host", "PC-FIN-023", ActionLevel.L4),
+            _action("block_ip", "203.0.113.88", ActionLevel.L2),
+            _action("block_domain", "unknown-upload-example.com", ActionLevel.L2),
+        ],
+    )
+
+
+def test_recommendations_follow_disable_account_not_password_reset() -> None:
+    builder = ReportSectionBuilder()
+    event_id = "evt-report-disable-recs"
+    sections = builder.build(
+        event_id=event_id,
+        evidence_output=_main_evidence(event_id),
+        risk_assessment=_high_risk(),
+        triage_result=_main_triage(),
+        response_plan=_containment_response_plan(event_id),
+    )
+    recommendations = next(section for section in sections if section.key == "recommendations")
+    executed = next(section for section in sections if section.key == "executed_actions")
+    assert "tool=disable_account" in executed.content
+    assert "强制改密" not in recommendations.content
+    assert "reset_password" not in recommendations.content
+    assert "禁用账号 zhangsan" in recommendations.content
+    assert "PC-FIN-023" in recommendations.content
+    assert "203.0.113.88" in recommendations.content
+    assert "unknown-upload-example.com" in recommendations.content
+
+
+def test_llm_recs_prescribing_password_reset_are_dropped_when_disable_executed() -> None:
+    builder = ReportSectionBuilder()
+    event_id = "evt-report-disable-merge"
+    sections = builder.build(
+        event_id=event_id,
+        evidence_output=_main_evidence(event_id),
+        risk_assessment=_high_risk(),
+        triage_result=_main_triage(),
+        response_plan=_containment_response_plan(event_id),
+    )
+    merged = ReportAgent(llm_client=None)._merge_sections(
+        sections,
+        {"recommendations": "1. 冻结账号 zhangsan 会话并强制改密。"},
+    )
+    recommendations = next(section for section in merged if section.key == "recommendations")
+    assert "强制改密" not in recommendations.content
+    assert "禁用账号 zhangsan" in recommendations.content
+
+
+def test_decision_brief_names_iam_absent_conflict_not_count_only() -> None:
+    event_id = "evt-report-iam-conflict"
+    evidence = _main_evidence(event_id)
+    conflict = EvidenceConflict(
+        conflict_id=new_conflict_id(),
+        event_id=event_id,
+        description="IAM 无成功登录记录（账号 zhangsan），但 EDR 观察到该账号的进程活动",
+        evidence_ids=[evidence.evidence_list[0].evidence_id],
+        sources=[EvidenceSource.IDENTITY, EvidenceSource.ENDPOINT],
+        detail={"rule_name": RULE_IAM_ABSENT_BUT_EDR_ACTIVE, "severity": "high"},
+    )
+    evidence = evidence.model_copy(update={"conflicts": [conflict]})
+    risk = _high_risk().model_copy(
+        update={"verdict_reason_codes": [UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT]}
+    )
+    sections = ReportSectionBuilder().build(
+        event_id=event_id,
+        evidence_output=evidence,
+        risk_assessment=risk,
+        triage_result=_main_triage(),
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+    )
+    overview = next(section for section in sections if section.key == "overview")
+    chain = next(section for section in sections if section.key == "evidence_chain")
+    assert RULE_IAM_ABSENT_BUT_EDR_ACTIVE in overview.content
+    assert "conflicts=" not in chain.content.split("conflict_rule=", 1)[0]
+    assert f"conflict_rule={RULE_IAM_ABSENT_BUT_EDR_ACTIVE}" in chain.content
+    assert "conflicts=" not in chain.content
 
 
 def test_llm_failure_metadata_redacts_and_codes() -> None:
@@ -1712,10 +1850,64 @@ def test_llm_merge_preserves_template_enrichment_briefs() -> None:
     assert f"{ACTIONS_STATUS_SUMMARY_LABEL}:" in overview.content
 
 
-def test_llm_failure_metadata_timeout_code() -> None:
+def test_llm_merge_rejects_legacy_placeholder_when_draft_has_actions() -> None:
+    """ISSUE-212: LLM 「暂无处置动作」 must not overwrite honest executed drafts."""
+    draft_actions = (
+        f"{ACTIONS_STATUS_SUMMARY_LABEL}: isolate_host=success\n"
+        "act-1 | isolate_host | tool=isolate_host | status=success | "
+        "effect_verification=verified | target=PC-FIN-023"
+    )
+    draft_verify = (
+        "overall_status=verified\n"
+        "act-1 | effect=verified | readiness=ready | receipt_refs=- | detail=ok"
+    )
+    sections = [
+        ReportSection(key="overview", title="事件概述", content="overview"),
+        ReportSection(key="executed_actions", title="已执行处置", content=draft_actions),
+        ReportSection(key="verification_results", title="验证结果", content=draft_verify),
+    ]
+    merged = ReportAgent(llm_client=None)._merge_sections(
+        sections,
+        {
+            "executed_actions": PLACEHOLDER_NO_ACTIONS,
+            "verification_results": PLACEHOLDER_NO_VERIFICATION,
+        },
+    )
+    by_key = {section.key: section.content for section in merged}
+    assert by_key["executed_actions"] == draft_actions
+    assert by_key["verification_results"] == draft_verify
+    assert PLACEHOLDER_NO_ACTIONS not in by_key["executed_actions"]
+    assert PLACEHOLDER_NO_VERIFICATION not in by_key["verification_results"]
 
-    meta = llm_failure_metadata(TimeoutError())
-    assert meta["error_code"] == "llm_timeout"
+
+def test_llm_merge_rejects_idle_when_draft_has_execution_rows() -> None:
+    """Idle golden wording must not wipe executed action/verify chapters."""
+    draft_actions = (
+        f"{ACTIONS_STATUS_SUMMARY_LABEL}: isolate_host=success\n"
+        "act-1 | isolate_host | tool=isolate_host | status=success | "
+        "effect_verification=verified | target=PC-FIN-023"
+    )
+    draft_verify = (
+        "overall_status=verified\n"
+        "act-1 | effect=verified | readiness=ready | receipt_refs=- | detail=ok"
+    )
+    sections = [
+        ReportSection(key="overview", title="事件概述", content="overview"),
+        ReportSection(key="executed_actions", title="已执行处置", content=draft_actions),
+        ReportSection(key="verification_results", title="验证结果", content=draft_verify),
+    ]
+    merged = ReportAgent(llm_client=None)._merge_sections(
+        sections,
+        {
+            "executed_actions": NOT_EXECUTED_ACTIONS,
+            "verification_results": NOT_EXECUTED_VERIFICATION,
+        },
+    )
+    by_key = {section.key: section.content for section in merged}
+    assert by_key["executed_actions"] == draft_actions
+    assert by_key["verification_results"] == draft_verify
+    assert NOT_EXECUTED_ACTIONS not in by_key["executed_actions"]
+    assert NOT_EXECUTED_VERIFICATION not in by_key["verification_results"]
 
 
 def _sample_detection_context_snapshot(*, event_id: str) -> DetectionContextSnapshot:

@@ -138,6 +138,52 @@ def test_adversarial_scenario_golden_exists(prompt_key: str) -> None:
     assert path.is_file(), f"missing adversarial golden for {prompt_key}"
 
 
+def test_report_generate_goldens_forbid_legacy_incomplete_markers() -> None:
+    """ISSUE-212: mock goldens must not reuse 「暂无处置动作/暂无验证结果」."""
+    root = default_golden_root() / "report_generate"
+    forbidden = ("暂无处置动作", "暂无验证结果")
+    files = sorted(root.glob("*.json"))
+    assert files, f"missing report_generate goldens under {root}"
+    for path in files:
+        blob = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            assert marker not in blob, f"{path.name} still contains {marker!r}"
+
+
+def test_insider_goldens_use_scenario_exfil_domain() -> None:
+    """Triage/storyline Mock goldens must match the scenario pack IOC, not a leftover FQDN."""
+    scenario_domain = "unknown-upload-example.com"
+    leftover = "cloud-storage.example.com"
+    for prompt_key in ("triage_extract", "storyline_generate", "response_plan", "report_generate"):
+        payload = _load_golden(prompt_key, "insider_data_exfiltration.json")
+        blob = json.dumps(payload, ensure_ascii=False)
+        assert leftover not in blob, f"{prompt_key} still mentions leftover domain {leftover}"
+        if prompt_key in {
+            "triage_extract",
+            "storyline_generate",
+            "response_plan",
+            "report_generate",
+        }:
+            assert scenario_domain in blob, f"{prompt_key} must cite {scenario_domain}"
+    response_tools = [
+        str(action.get("tool_name") or "")
+        for action in _load_golden("response_plan", "insider_data_exfiltration.json")["content"][
+            "actions"
+        ]
+        if isinstance(action, dict)
+    ]
+    assert "block_domain" in response_tools
+    recs = str(
+        _load_golden("report_generate", "insider_data_exfiltration.json")["content"]["sections"][
+            "recommendations"
+        ]
+    )
+    assert "强制改密" not in recs
+    assert "reset_password" not in recs.lower()
+    assert "禁用" in recs
+    assert "zhangsan" in recs
+
+
 def test_adversarial_report_golden_recommends_dest_not_vpn_src() -> None:
     payload = _load_golden("report_generate", "adversarial_credential_db_staging_exfil.json")
     sections = payload["content"]["sections"]

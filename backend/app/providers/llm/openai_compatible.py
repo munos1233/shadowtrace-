@@ -49,6 +49,7 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         base_url: str,
         api_key: str,
         client: httpx.AsyncClient | None = None,
+        thinking_type: str | None = None,
         **kwargs: Any,
     ) -> None:
         if not base_url.strip():
@@ -58,6 +59,8 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         self._api_key = api_key
         self._client = client
         self._owns_client = client is None
+        token = (thinking_type or "").strip().lower()
+        self._thinking_type = token or None
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -90,6 +93,8 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if self._thinking_type:
+            payload["thinking"] = {"type": self._thinking_type}
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
         try:

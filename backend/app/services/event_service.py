@@ -682,6 +682,7 @@ class EventService:
 
     async def get_event(self, event_id: str) -> SecurityEvent | None:
         from app.services.event_context_snapshot_projection import (
+            bound_triage_event_type,
             bound_triage_severity,
             merge_evidence_summary_into_snapshot,
             merge_report_generated_into_snapshot,
@@ -807,6 +808,31 @@ class EventService:
                     )
             if extracted is not None:
                 snapshot["triage_severity"] = extracted
+
+        if bound_triage_event_type(snapshot.get("triage_event_type")) is None:
+            nested = snapshot.get("triage_result")
+            extracted_type = (
+                bound_triage_event_type(nested.get("event_type"))
+                if isinstance(nested, dict)
+                else None
+            )
+            if extracted_type is None:
+                try:
+                    triage_ctx = await self._store.get(event_id, "triage_result")
+                    if isinstance(triage_ctx, dict):
+                        extracted_type = bound_triage_event_type(triage_ctx.get("event_type"))
+                    else:
+                        extracted_type = bound_triage_event_type(
+                            getattr(triage_ctx, "event_type", None)
+                        )
+                except Exception:
+                    logger.debug(
+                        "overlay triage_event_type failed event_id=%s",
+                        event_id,
+                        exc_info=True,
+                    )
+            if extracted_type is not None:
+                snapshot["triage_event_type"] = extracted_type
 
         # ISSUE-254: always return a hard-projected API snapshot (never CLOSED dump).
         projected = project_snapshot_for_api(snapshot)
@@ -1363,6 +1389,11 @@ class EventService:
                         with_for_update=True,
                     )
                     if row is None:
+                        return
+                    if EventStatus(row.status) is EventStatus.CLOSED:
+                        # CLOSED freeze is rebuild_context input. A summary merge
+                        # would strip storyline.phases and make GET /timeline 500.
+                        # EventDetail still projects via project_snapshot_for_api.
                         return
                     payload = (
                         storyline.model_dump(mode="json")

@@ -262,6 +262,47 @@ class TestApplySeverityRules:
         )
         assert severity == Severity.HIGH  # external IP → HIGH, not CRITICAL
 
+    def test_insider_threat_with_external_ip_is_high(self):
+        severity, need = _apply_severity_rules(
+            EventType.INSIDER_THREAT,
+            alert_text="insider packed finance data to 203.0.113.88",
+        )
+        assert severity == Severity.HIGH
+        assert need is True
+
+    def test_insider_threat_without_external_ip_is_medium(self):
+        severity, need = _apply_severity_rules(
+            EventType.INSIDER_THREAT,
+            alert_text="insider packed finance data on internal host 10.20.30.23",
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
+    def test_insider_threat_entity_external_ip_without_text_is_high(self):
+        """Gold-path titles omit dst_ip; source EntitySet still satisfies ISSUE-032."""
+        entities = EntitySet(
+            ips=[IPEntity(entity_id="src-ip-1", address="203.0.113.88", scope="external")]
+        )
+        severity, need = _apply_severity_rules(
+            EventType.INSIDER_THREAT,
+            alert_text="Finance endpoint suspected data exfiltration",
+            entities=entities,
+        )
+        assert severity == Severity.HIGH
+        assert need is True
+
+    def test_insider_threat_entity_internal_ip_only_is_medium(self):
+        entities = EntitySet(
+            ips=[IPEntity(entity_id="src-ip-1", address="10.20.30.23", scope="internal")]
+        )
+        severity, need = _apply_severity_rules(
+            EventType.INSIDER_THREAT,
+            alert_text="Finance endpoint suspected data exfiltration",
+            entities=entities,
+        )
+        assert severity == Severity.MEDIUM
+        assert need is True
+
     def test_bilateral_does_not_trigger_critical(self):
         """Word 'bilateral' should NOT match the \blateral\b boundary check."""
         severity, need = _apply_severity_rules(
@@ -482,6 +523,45 @@ class TestTriageAgentBasic:
         )
         result = await agent._run(input_)
         assert result.event_type == EventType.MALICIOUS_PROCESS
+
+    @pytest.mark.asyncio
+    async def test_insider_source_entity_external_ip_is_high_without_ip_in_title(self):
+        """Gold path: title has no dst_ip; source EntitySet still yields HIGH."""
+        wm = _MockBoundWorkingMemory(writer_name="TriageAgent")
+        await wm.write(
+            "evt-gold-insider",
+            "source_snapshot",
+            {"alert_type": "insider_threat"},
+        )
+        agent = TriageAgent(working_memory=wm)
+        hint = EntitySet(
+            ips=[
+                IPEntity(
+                    entity_id="src-ip-1",
+                    address="203.0.113.88",
+                    scope="external",
+                )
+            ],
+            hosts=[
+                HostEntity(
+                    entity_id="src-host-1",
+                    hostname="PC-FIN-023",
+                    ip="10.20.30.23",
+                )
+            ],
+        )
+        input_ = _make_input(
+            "evt-gold-insider",
+            raw_event_summary="Finance endpoint suspected data exfiltration",
+            hint_entities=hint,
+        )
+        result = await agent._run(input_)
+        assert result.event_type == EventType.INSIDER_THREAT
+        assert result.severity == Severity.HIGH
+        stored = await wm.read("evt-gold-insider", "triage_result")
+        assert isinstance(stored, dict)
+        assert stored.get("event_type") == "insider_threat"
+        assert stored.get("severity") == "high"
 
     @pytest.mark.asyncio
     async def test_human_classification_override_wins_over_heuristic_keywords(self):

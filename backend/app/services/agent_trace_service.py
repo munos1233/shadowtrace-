@@ -33,6 +33,17 @@ logger = logging.getLogger(__name__)
 MAX_AUDIT_FIELD_BYTES = 1_048_576
 _MAX_DECISION_TEXT_CHARS = 4_096
 _MAX_DECISION_SUMMARY_CHARS = 512
+
+# Allowlisted quality-gate tokens for response_agent traces. Keep in sync with
+# scripts/strict_llm_quality.py ``_GATE_INJECTION_MARKERS``. Never copy free-text
+# ``strategy_summary`` into decision briefs (ISSUE-255).
+_RESPONSE_GATE_TRACE_MARKERS = (
+    "entity_coverage_merge",
+    "identity_containment_dedup",
+    "rule fallback after ungrounded",
+    "containment_quality_gate_unsatisfied",
+    "domain_containment_missing",
+)
 _MAX_AUDIT_DEPTH = 32
 _RAW_KEYS = frozenset({"raw_payload", "raw_data", "source_snapshot", "raw_result", "prompt"})
 _COT_KEYS = frozenset(
@@ -253,6 +264,12 @@ def _as_mapping(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def response_gate_trace_tokens(strategy: Any) -> list[str]:
+    """Return quality-gate injection markers present in a response strategy."""
+    text = strategy if isinstance(strategy, str) else ""
+    return [marker for marker in _RESPONSE_GATE_TRACE_MARKERS if marker in text]
+
+
 def _safe_scalar_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -376,11 +393,13 @@ def _synthesize_from_typed_fields(agent_name: str | None, data: dict[str, Any]) 
     if name == "response_agent":
         actions = data.get("actions") or []
         action_count = len(actions) if isinstance(actions, list) else 0
+        gate_hits = response_gate_trace_tokens(data.get("strategy_summary"))
         return _join_kv(
             [
                 f"response_plan actions={action_count}",
                 f"plan_id={data.get('plan_id') or 'none'}",
                 f"generated_by={data.get('generated_by') or 'unknown'}",
+                f"gates={','.join(gate_hits)}" if gate_hits else "",
             ]
         )
 
@@ -957,5 +976,6 @@ __all__ = [
     "TraceProjection",
     "ensure_decision_summary",
     "resolve_decision_rationale_mode",
+    "response_gate_trace_tokens",
     "synthesize_decision_summary",
 ]

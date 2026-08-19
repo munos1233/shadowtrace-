@@ -29,7 +29,10 @@ from app.models.enums import (
     WritebackReadiness,
 )
 from app.models.ids import new_disposition_id
-from app.models.verification_readiness import has_immediate_effect_pending
+from app.models.verification_readiness import (
+    has_immediate_effect_pending,
+    has_unverified_applicable_effects,
+)
 from app.models.workflow import validate_action_status_transition
 from app.services.context_service import EventContextStore
 from app.services.disposition_command_factory import DispositionCommandFactory
@@ -67,6 +70,7 @@ class DispositionActivationResult(BaseModel):
             "not_required",
             "already_submitted",
             "effect_not_ready",
+            "disposition_unresolved",
             "not_approved",
             "capability_blocked",
             "terminal_not_in_approved_set",
@@ -245,10 +249,15 @@ class EventDispositionService:
                 skipped_reason="capability_blocked",
             )
         if resolve.need_manual_resolution or resolve.disposition is None:
+            waiting_on_effects = has_immediate_effect_pending(
+                verification
+            ) or has_unverified_applicable_effects(verification)
             return DispositionActivationResult(
                 action_id=deferred.action_id,
                 activated=False,
-                skipped_reason="effect_not_ready",
+                skipped_reason=(
+                    "effect_not_ready" if waiting_on_effects else "disposition_unresolved"
+                ),
             )
 
         effect_resolution_ready = await self._after_effect_resolution_ready(

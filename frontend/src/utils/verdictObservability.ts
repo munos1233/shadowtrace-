@@ -2,10 +2,14 @@
 
 export const EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT =
   "evidence_limited_demoted_from_confirmed_threat";
+export const UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT =
+  "unresolved_identity_endpoint_conflict";
 
 const REASON_LABELS: Record<string, string> = {
   [EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT]:
     "证据不足：已从 confirmed_threat 降级为 none（风险分≠威胁结论）",
+  [UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT]:
+    "身份/终端冲突未消解：IAM 无登录但 EDR 观察到该账号进程（iam_absent_but_edr_active）",
 };
 
 export function labelVerdictReasonCode(code: string): string {

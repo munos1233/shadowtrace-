@@ -114,8 +114,9 @@ DEFAULT_RESPONSE_RULES: dict[EventType, dict[Severity, list[ResponseRuleAction]]
             ResponseRuleAction("disable_account", 1),
             ResponseRuleAction("isolate_host", 2),
             ResponseRuleAction("block_ip", 3),
-            _ticket(4),
-            _notify(5),
+            ResponseRuleAction("block_domain", 4),
+            _ticket(5),
+            _notify(6),
         ),
         Severity.CRITICAL: _actions(
             ResponseRuleAction("disable_account", 1),
@@ -241,6 +242,23 @@ _SEVERITY_ORDER: tuple[Severity, ...] = (
 )
 
 
+def union_rule_actions(*groups: list[ResponseRuleAction]) -> list[ResponseRuleAction]:
+    """Merge rule pools by tool_name, keeping first-seen order.
+
+    Used when lifting a conservative MEDIUM pool to include HIGH L3 tools without
+    dropping MEDIUM network IOC actions such as ``block_domain``.
+    """
+    merged: list[ResponseRuleAction] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            if item.tool_name in seen:
+                continue
+            seen.add(item.tool_name)
+            merged.append(item)
+    return merged
+
+
 def get_rule_actions(event_type: EventType, severity: Severity) -> list[ResponseRuleAction]:
     """Return the conservative rule action set for *event_type* at *severity*.
 
@@ -260,4 +278,5 @@ __all__ = [
     "RESPONSE_ONLY_TOOLS",
     "ResponseRuleAction",
     "get_rule_actions",
+    "union_rule_actions",
 ]

@@ -534,115 +534,22 @@ async def _build_writeback_info(
     event_id: str,
     policy: DispositionPolicy,
     session_factory: async_sessionmaker[AsyncSession],
-) -> tuple[WritebackReadiness, WritebackStatus | None, int]:
-    """Derive overall event-level writeback readiness / status / pending count."""
-    if policy == DispositionPolicy.NOT_REQUIRED:
-        return WritebackReadiness.NOT_REQUIRED, None, 0
+) -> tuple[WritebackReadiness, WritebackStatus | None, int, int]:
+    """Derive EventDetail writeback fields from ISSUE-312 terminal vs entity channels.
 
-    async with session_factory() as session:
-        # The UI aggregation reflects the *current* plan only: outboxes owned by
-        # superseded plan revisions or superseded Actions must not pollute the
-        # overall status/pending (ISSUE-185).
-        current_revision = await session.scalar(
-            select(func.max(orm.Action.plan_revision)).where(orm.Action.event_id == event_id)
-        )
+    Top-level readiness / overall / pending count terminal (applicable) writeback
+    only. Entity ACCEPTED receipts are returned separately and must not look like
+    unfinished EVENT_STATUS_UPDATE.
+    """
+    from app.services.event_writeback_aggregation import aggregate_event_writeback_channels
 
-        # Count non-superseded response/rollback actions of the current plan.
-        counts = await session.execute(
-            select(
-                func.count(orm.Action.action_id),
-                func.min(orm.Action.writeback_readiness),
-            ).where(
-                orm.Action.event_id == event_id,
-                orm.Action.plan_revision == current_revision,
-                orm.Action.action_category.in_(("response", "rollback")),
-                orm.Action.superseded_by_revision.is_(None),
-                orm.Action.status.not_in(("rejected", "superseded")),
-            )
-        )
-        total_actions, min_readiness_raw = counts.one()
-        total = int(total_actions or 0)
-
-        readiness = WritebackReadiness.READY
-        if total == 0:
-            readiness = WritebackReadiness.NOT_CONFIGURED
-        elif min_readiness_raw:
-            try:
-                readiness = WritebackReadiness(min_readiness_raw)
-            except ValueError:
-                readiness = WritebackReadiness.CAPABILITY_UNKNOWN
-
-        # Only outboxes bound to current-plan, non-superseded Actions count.
-        current_plan_action_filter = (
-            orm.Action.plan_revision == current_revision,
-            orm.Action.superseded_by_revision.is_(None),
-        )
-
-        # Count pending/active outbox records.
-        pending_count = await session.scalar(
-            select(func.count(orm.DispositionOutbox.outbox_id))
-            .join(orm.Action, orm.Action.action_id == orm.DispositionOutbox.action_id)
-            .where(
-                orm.DispositionOutbox.event_id == event_id,
-                *current_plan_action_filter,
-                orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
-                orm.DispositionOutbox.latest_writeback_status.in_(
-                    (
-                        WritebackStatus.PENDING.value,
-                        WritebackStatus.SENDING.value,
-                        WritebackStatus.ACCEPTED.value,
-                        WritebackStatus.UNKNOWN.value,
-                    )
-                ),
-            )
-        )
-        pending = int(pending_count or 0)
-
-        # Derive overall writeback status from all active outbox rows (not only
-        # pending-countable rows — FAILED/CONFLICT are terminal and excluded
-        # from pending_count but must still block close).
-        wb_status: WritebackStatus | None = None
-        status_rows = (
-            await session.scalars(
-                select(orm.DispositionOutbox.latest_writeback_status)
-                .join(orm.Action, orm.Action.action_id == orm.DispositionOutbox.action_id)
-                .where(
-                    orm.DispositionOutbox.event_id == event_id,
-                    *current_plan_action_filter,
-                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
-                )
-            )
-        ).all()
-        parsed_statuses: list[WritebackStatus] = []
-        for raw in status_rows:
-            if not raw:
-                continue
-            try:
-                parsed_statuses.append(WritebackStatus(str(raw)))
-            except ValueError:
-                continue
-
-        if parsed_statuses:
-            if any(s is WritebackStatus.FAILED for s in parsed_statuses):
-                wb_status = WritebackStatus.FAILED
-            elif any(s is WritebackStatus.CONFLICT for s in parsed_statuses):
-                wb_status = WritebackStatus.CONFLICT
-            elif any(s is WritebackStatus.UNKNOWN for s in parsed_statuses):
-                wb_status = WritebackStatus.UNKNOWN
-            elif any(
-                s
-                in (
-                    WritebackStatus.PENDING,
-                    WritebackStatus.SENDING,
-                    WritebackStatus.ACCEPTED,
-                )
-                for s in parsed_statuses
-            ):
-                wb_status = WritebackStatus.PENDING
-            elif all(s is WritebackStatus.CONFIRMED for s in parsed_statuses):
-                wb_status = WritebackStatus.CONFIRMED
-
-        return readiness, wb_status, pending
+    channels = await aggregate_event_writeback_channels(session_factory, event_id, policy)
+    return (
+        channels.terminal_readiness,
+        channels.terminal_overall_status,
+        channels.terminal_pending_count,
+        channels.entity_writeback_accepted_count,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -871,14 +778,16 @@ async def get_event(
     readiness = WritebackReadiness.NOT_REQUIRED
     wb_status: WritebackStatus | None = None
     pending_count = 0
+    entity_accepted_count = 0
 
     if required:
         try:
             from app.api.v1.deps import _get_session_factory
 
-            readiness, wb_status, pending_count = await _build_writeback_info(
+            readiness, wb_status, pending_count, entity_accepted = await _build_writeback_info(
                 event_id, event.disposition_policy, _get_session_factory()
             )
+            entity_accepted_count = entity_accepted
         except Exception:
             # DB unavailable: leave writeback info as defaults.
             readiness = WritebackReadiness.CAPABILITY_UNKNOWN
@@ -908,6 +817,7 @@ async def get_event(
         writeback_readiness=readiness,
         writeback_overall_status=wb_status,
         pending_writeback_count=pending_count,
+        entity_writeback_accepted_count=entity_accepted_count,
         detection_context_snapshot=detection_context_summary,
         detection_context_projection_error=detection_context_projection_error,
         background_side_effects_pending=side_effect_fields["background_side_effects_pending"],
@@ -972,7 +882,8 @@ async def _schedule_investigation(
 
     if mode == "analysis_only" and include_response:
         raise ValidationError(
-            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only",
+            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only; "
+            "this HTTP path is not the CLOSED gold path",
             error_code="full_loop_unavailable",
             details={"orchestration_mode": mode},
         )
@@ -1317,7 +1228,8 @@ async def investigate_event(
     orchestration_mode = (settings.orchestration_mode or "graph").strip().lower()
     if orchestration_mode == "analysis_only" and include_response:
         raise ValidationError(
-            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only",
+            "include_response_execution is unavailable when ORCHESTRATION_MODE=analysis_only; "
+            "this HTTP path is not the CLOSED gold path",
             error_code="full_loop_unavailable",
             details={"orchestration_mode": orchestration_mode},
         )

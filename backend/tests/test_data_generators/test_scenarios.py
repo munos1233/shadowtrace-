@@ -25,6 +25,7 @@ from app.data_generators.scenarios.insider_data_exfiltration import (
     EXFIL_IP,
     FILE_ZIP,
     HOST,
+    INCIDENT_ID,
     PROC_7Z,
     PROC_PS,
 )
@@ -55,6 +56,15 @@ def test_registry_contains_all_scenario_packs(scenario_id: str) -> None:
     assert scenario_id in SCENARIO_REGISTRY
     assert set(SCENARIO_REGISTRY) == set(SCENARIO_IDS)
     assert SCENARIO_REGISTRY[scenario_id].variant is ScenarioVariant.NORMAL
+
+
+@pytest.mark.parametrize("scenario_id", SCENARIO_IDS)
+def test_incident_normalized_stamps_scenario_id(scenario_id: str) -> None:
+    """ISSUE-199: ingest copies normalized.scenario so MockLLM skips default.json."""
+    scenario = build_scenario(scenario_id, seed=42)
+    assert scenario.incidents
+    for incident in scenario.incidents:
+        assert incident.normalized.get("scenario") == scenario_id
 
 
 @pytest.mark.parametrize("scenario_id", SCENARIO_IDS)
@@ -135,6 +145,29 @@ def test_suspicious_domain_access_outcome_and_risk_band() -> None:
     assert 40 <= risk <= 69
     assert outcome["expected_verdict"] != FinalVerdict.CONFIRMED_THREAT.value
     assert outcome.get("exfil_observed") is False
+
+
+def test_insider_instance_isolates_connectors_and_source_ids() -> None:
+    """ISSUE-EvalFreshness: --instance must not reuse fixed insider IDs/connectors."""
+    base = build_scenario("insider_data_exfiltration", seed=42, instance=0)
+    other = build_scenario("insider_data_exfiltration", seed=42, instance=1)
+    base_connectors = {c.connector_id for c in base.connectors}
+    other_connectors = {c.connector_id for c in other.connectors}
+    assert "conn-disposition" in base_connectors
+    assert "conn-disposition-1" in other_connectors
+    assert base_connectors.isdisjoint(other_connectors)
+
+    def _object_ids(scenario: MockXDRScenario) -> set[str]:
+        return {
+            *(item.reference.source_object_id for item in scenario.incidents),
+            *(item.reference.source_object_id for item in scenario.alerts),
+            *(item.reference.source_object_id for item in scenario.assets),
+            *(item.reference.source_object_id for item in scenario.logs),
+        }
+
+    assert _object_ids(base).isdisjoint(_object_ids(other))
+    assert INCIDENT_ID in _object_ids(base)
+    assert f"{INCIDENT_ID}-i1" in _object_ids(other)
 
 
 @pytest.mark.parametrize("scenario_id", SCENARIO_IDS)

@@ -26,11 +26,19 @@ from app.agents.report_section_builder import (
     DECISION_BRIEF_LABEL,
     EVIDENCE_LIMITED_REASON_LABEL,
     EVIDENCE_SUMMARY_LABEL,
+    INCOMPLETE_ACTIONS_PLACEHOLDER,
+    INCOMPLETE_VERIFICATION_PLACEHOLDER,
     INVESTIGATION_LIMITATION_HEADER,
+    NOT_EXECUTED_ACTIONS,
+    NOT_EXECUTED_VERIFICATION,
+    PLACEHOLDER_NO_ACTIONS,
+    PLACEHOLDER_NO_VERIFICATION,
     SECTION_KEYS,
     SECTION_SPECS,
     SECTION_TITLES,
     SOURCE_SUMMARY_LABEL,
+    UNAVAILABLE_ACTIONS,
+    UNAVAILABLE_VERIFICATION,
     ReportSectionBuilder,
 )
 from app.agents.triage_risk_consistency import (
@@ -58,7 +66,8 @@ logger = logging.getLogger(__name__)
 
 GENERATED_BY_LLM = "llm"
 GENERATED_BY_TEMPLATE = "template"
-LLM_TIMEOUT_SECONDS = 30.0
+# Kept as a last-resort fallback when Settings cannot be loaded in tests.
+_REPORT_LLM_TIMEOUT_FALLBACK_SECONDS = 30.0
 # ISSUE-358: partial LLM sections may merge. This trio only stamps
 # ``generated_by=llm``; it does not replace ISSUE-212 chapter-content checks.
 CORE_LLM_SECTION_KEYS: tuple[str, ...] = (
@@ -110,7 +119,33 @@ _EVIDENCE_LIMITED_MERGE_PREFIXES = (
     "- normalized.",
 )
 _ACTIONS_MERGE_PREFIXES = (f"{ACTIONS_STATUS_SUMMARY_LABEL}:",)
+_DISPOSITION_BAD_MARKERS = (
+    PLACEHOLDER_NO_ACTIONS,
+    PLACEHOLDER_NO_VERIFICATION,
+    INCOMPLETE_ACTIONS_PLACEHOLDER,
+    INCOMPLETE_VERIFICATION_PLACEHOLDER,
+    UNAVAILABLE_ACTIONS,
+    UNAVAILABLE_VERIFICATION,
+)
+_DISPOSITION_IDLE_MARKERS = (NOT_EXECUTED_ACTIONS, NOT_EXECUTED_VERIFICATION)
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+
+
+def _resolve_report_llm_timeout(explicit: float | None) -> float:
+    """Use the caller override, else ``LLM_TIMEOUT_SECONDS``, else 30s.
+
+    Report generation is a long structured prompt. Hardcoding 30s here ignored
+    live overlays that set ``LLM_TIMEOUT_SECONDS=90`` and caused
+    ``report_quality=degraded_template`` while other agents inherited settings.
+    """
+    if explicit is not None:
+        return float(explicit)
+    try:
+        from app.core.config import get_settings
+
+        return float(get_settings().llm_timeout_seconds)
+    except Exception:
+        return _REPORT_LLM_TIMEOUT_FALLBACK_SECONDS
 
 
 class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
@@ -134,7 +169,7 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         detection_context_service: Any | None = None,
         section_builder: ReportSectionBuilder | None = None,
         scenario_id: str | None = None,
-        llm_timeout_seconds: float = LLM_TIMEOUT_SECONDS,
+        llm_timeout_seconds: float | None = None,
     ) -> None:
         # Durable publish without a guard is forbidden (ISSUE-270). When callers
         # wire event_service / publication_service but omit output_guard, install
@@ -158,7 +193,7 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         self.detection_context_service = detection_context_service
         self.section_builder = section_builder or ReportSectionBuilder()
         self.scenario_id = scenario_id
-        self.llm_timeout_seconds = float(llm_timeout_seconds)
+        self.llm_timeout_seconds = _resolve_report_llm_timeout(llm_timeout_seconds)
         self.last_content_sha256: str | None = None
         self.last_report_markdown: str | None = None
         self._trace_fallback_detail: str | None = None
@@ -508,6 +543,34 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
         merged_lines = merged_content.splitlines()
         return [line for line in required if line not in merged_lines]
 
+    @staticmethod
+    def _llm_disposition_chapter_unusable(llm_content: str, draft_content: str) -> bool:
+        """Prefer the template draft when LLM wipes honest action/verify chapters."""
+        if any(marker in llm_content for marker in _DISPOSITION_BAD_MARKERS):
+            return True
+        if "incomplete_placeholder" in llm_content.lower():
+            return True
+        llm_idle = any(marker in llm_content for marker in _DISPOSITION_IDLE_MARKERS)
+        draft_idle = any(marker in draft_content for marker in _DISPOSITION_IDLE_MARKERS)
+        draft_legacy = any(
+            marker in draft_content
+            for marker in (PLACEHOLDER_NO_ACTIONS, PLACEHOLDER_NO_VERIFICATION)
+        )
+        if llm_idle and draft_content.strip() and not draft_idle and not draft_legacy:
+            return True
+        return False
+
+    @staticmethod
+    def _llm_recommendations_unusable(llm_content: str, executed_content: str) -> bool:
+        """Drop LLM recs that prescribe reset when the executed plan disabled the account."""
+        executed_lower = executed_content.lower()
+        has_disable = "tool=disable_account" in executed_lower
+        has_reset = "tool=reset_password" in executed_lower
+        if not has_disable or has_reset:
+            return False
+        blob = llm_content.lower()
+        return "强制改密" in llm_content or "reset_password" in blob
+
     def _merge_sections(
         self,
         base: list[ReportSection],
@@ -539,15 +602,27 @@ class ReportAgent(BaseAgent[ReportAgentInput, InvestigationReport]):
                 )
                 if missing:
                     content = "\n".join([content, *missing])
-            elif section.key == "executed_actions" and section.key in overrides:
-                missing = self._missing_required_lines(
-                    section.content,
-                    content,
-                    prefixes=_ACTIONS_MERGE_PREFIXES,
-                )
-                if missing:
-                    content = "\n".join([content, *missing])
+            elif (
+                section.key in {"executed_actions", "verification_results"}
+                and section.key in overrides
+            ):
+                llm_content = overrides[section.key]
+                if self._llm_disposition_chapter_unusable(llm_content, section.content):
+                    content = section.content
+                elif section.key == "executed_actions":
+                    missing = self._missing_required_lines(
+                        section.content,
+                        content,
+                        prefixes=_ACTIONS_MERGE_PREFIXES,
+                    )
+                    if missing:
+                        content = "\n".join([content, *missing])
             elif section.key == "recommendations" and section.key in overrides:
+                executed = next((item for item in base if item.key == "executed_actions"), None)
+                executed_text = executed.content if executed is not None else ""
+                llm_content = overrides[section.key]
+                if self._llm_recommendations_unusable(llm_content, executed_text):
+                    content = section.content
                 missing = self._missing_required_lines(
                     section.content,
                     content,

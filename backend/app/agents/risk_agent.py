@@ -10,6 +10,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from app.agents.base import BaseAgent
 from app.agents.confidence_calibration import DEFAULT_TEMPERATURE, calibrate_confidence
+from app.agents.conflict_detector import RULE_IAM_ABSENT_BUT_EDR_ACTIVE
 from app.agents.prompts.risk_prompt import (
     FACTOR_NAMES,
     RiskScoreLLMResponse,
@@ -28,6 +29,7 @@ from app.core.errors import LLMError
 from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 from app.core.llm.scenario_context import resolve_llm_scenario_id
 from app.models.agent_io import (
+    EvidenceOutput,
     LlmAdmissibility,
     RiskAgentInput,
     RiskAssessment,
@@ -37,6 +39,7 @@ from app.models.agent_io import (
 from app.models.enums import FinalVerdict
 from app.services.risk_verdict_projection import (
     EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT,
+    UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT,
 )
 
 if TYPE_CHECKING:
@@ -214,6 +217,8 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
         if adjustment.evidence_limited and verdict is FinalVerdict.CONFIRMED_THREAT:
             verdict = FinalVerdict.NONE
             reason_codes.append(EVIDENCE_LIMITED_DEMOTED_FROM_CONFIRMED_THREAT)
+        if _has_iam_absent_but_edr_active(input.evidence_output):
+            reason_codes.append(UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT)
 
         assessment = provisional.model_copy(update={"verdict_reason_codes": reason_codes})
         # Compatibility for unit tests that inspect the last resolved verdict.
@@ -433,3 +438,11 @@ class RiskAgent(BaseAgent[RiskAgentInput, RiskAssessment]):
         except Exception:
             logger.debug("optional WM read failed key=%s", key, exc_info=True)
             return None
+
+
+def _has_iam_absent_but_edr_active(evidence_output: EvidenceOutput) -> bool:
+    for conflict in evidence_output.conflicts:
+        detail = conflict.detail if isinstance(getattr(conflict, "detail", None), dict) else {}
+        if detail.get("rule_name") == RULE_IAM_ABSENT_BUT_EDR_ACTIVE:
+            return True
+    return False

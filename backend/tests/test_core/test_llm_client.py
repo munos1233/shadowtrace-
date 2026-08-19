@@ -26,7 +26,11 @@ from app.core.llm.base import (
     SQLAlchemyLLMCallAuditRecorder,
     bump_max_tokens,
     classify_llm_call_failure,
+    clear_event_llm_unavailable,
     ensure_json_mode_messages,
+    event_llm_unavailable_reason,
+    looks_like_length_truncation,
+    mark_event_llm_unavailable,
     sanitize_llm_error_detail,
 )
 from app.core.llm.factory import get_llm_client
@@ -73,6 +77,7 @@ def _client(
     fallback_models: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> OpenAICompatibleLLMClient:
+    clear_event_llm_unavailable()
     return OpenAICompatibleLLMClient(
         base_url="https://llm.example/v1",
         api_key="test-key",
@@ -459,6 +464,129 @@ async def test_length_truncated_invalid_json_bumps_tokens_before_repair() -> Non
     ]
 
 
+def test_looks_like_length_truncation_uses_completion_budget() -> None:
+    truncated = LLMInvalidJSONError(
+        "bad json",
+        invalid_content='{"event_type":"',
+        validation_error="JSONDecodeError: Unterminated string (line 1 column 20)",
+        finish_reason="stop",
+        completion_tokens=128,
+        requested_max_tokens=128,
+    )
+    assert looks_like_length_truncation(truncated, requested_max_tokens=128) is True
+    short = LLMInvalidJSONError(
+        "bad json",
+        invalid_content="{",
+        validation_error="JSONDecodeError: Expecting property name (line 1 column 2)",
+        finish_reason="stop",
+        completion_tokens=4,
+        requested_max_tokens=128,
+    )
+    assert looks_like_length_truncation(short, requested_max_tokens=128) is False
+    empty = LLMInvalidJSONError(
+        "empty",
+        invalid_content="",
+        validation_error="empty completion content",
+        error_class="empty_content",
+        finish_reason="length",
+        completion_tokens=128,
+        requested_max_tokens=128,
+    )
+    assert looks_like_length_truncation(empty, requested_max_tokens=128) is False
+
+
+@pytest.mark.asyncio
+async def test_token_exhausted_invalid_json_bumps_without_finish_reason_length() -> None:
+    """glm/Ark often omit finish_reason=length while filling max_tokens."""
+
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json=_response(
+                    '{"event_type":"host_compromise","confidence":',
+                    model=payload["model"],
+                    completion_tokens=payload["max_tokens"],
+                    finish_reason="stop",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"event_type":"host_compromise","confidence":0.66}',
+                model=payload["model"],
+            ),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        response = await _client(http_client, audit=audit).chat(
+            MESSAGES,
+            event_id="evt-2026-trunc-stop",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+            max_tokens=128,
+            response_model=TriagePayload,
+        )
+
+    assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.66)
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 128
+    assert calls[1]["max_tokens"] == bump_max_tokens(128)
+    assert all("Return corrected JSON only" not in c["messages"][-1]["content"] for c in calls)
+    assert audit.entries[0].error_detail is not None
+    assert "finish_reason=stop" in (audit.entries[0].error_detail or "")
+    assert "max_tokens=128" in (audit.entries[0].error_detail or "")
+    assert "completion_tokens=128" in (audit.entries[0].error_detail or "")
+
+
+@pytest.mark.asyncio
+async def test_short_invalid_json_does_not_count_as_truncation() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json=_response(
+                    "{",
+                    model=payload["model"],
+                    completion_tokens=2,
+                    finish_reason="stop",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"event_type":"host_compromise","confidence":0.66}',
+                model=payload["model"],
+            ),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        response = await _client(http_client, audit=audit).chat(
+            MESSAGES,
+            event_id="evt-2026-repair-not-trunc",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+            max_tokens=128,
+            response_model=TriagePayload,
+        )
+
+    assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.66)
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 128
+    assert calls[1]["max_tokens"] == 128
+    assert "Return corrected JSON only" in calls[1]["messages"][-1]["content"]
+
+
 def test_ensure_json_mode_messages_injects_hint_when_missing() -> None:
     ensured = ensure_json_mode_messages(MESSAGES)
     assert any("JSON" in message.content for message in ensured)
@@ -496,6 +624,90 @@ async def test_primary_timeout_does_not_retry_fallback() -> None:
     assert [(entry.model_name, entry.status, entry.fallback_level) for entry in audit.entries] == [
         ("primary-model", "llm_timeout", 0),
     ]
+
+
+@pytest.mark.asyncio
+async def test_event_timeout_short_circuits_later_prompts() -> None:
+    audit = InMemoryLLMCallAuditRecorder()
+
+    with respx.mock(base_url="https://llm.example/v1") as router:
+        route = router.post("/chat/completions")
+        route.side_effect = httpx.ReadTimeout("primary timed out")
+        async with httpx.AsyncClient(base_url="https://llm.example/v1") as http_client:
+            client = _client(http_client, audit=audit)
+            with pytest.raises(LLMTimeoutError):
+                await client.chat(
+                    MESSAGES,
+                    event_id="evt-2026-short-circuit",
+                    agent_name="PlannerAgent",
+                    prompt_key="plan_generate",
+                )
+            with pytest.raises(LLMTimeoutError) as second:
+                await client.chat(
+                    MESSAGES,
+                    event_id="evt-2026-short-circuit",
+                    agent_name="RiskAgent",
+                    prompt_key="risk_score",
+                )
+
+    assert "short_circuit" in (second.value.details or {})
+    assert route.call_count == 1
+    assert [entry.prompt_key for entry in audit.entries] == ["plan_generate", "risk_score"]
+    assert audit.entries[1].status == "llm_timeout"
+    assert audit.entries[1].error_detail == "llm_unavailable_short_circuit"
+    assert audit.entries[1].latency_ms == 0
+
+
+def test_event_llm_unavailable_map_is_bounded_and_clearable() -> None:
+    from app.core.llm.base import _MAX_EVENT_LLM_UNAVAILABLE  # noqa: SLF001
+
+    clear_event_llm_unavailable()
+    try:
+        mark_event_llm_unavailable("evt-old")
+        for index in range(_MAX_EVENT_LLM_UNAVAILABLE):
+            mark_event_llm_unavailable(f"evt-bound-{index}")
+        assert event_llm_unavailable_reason("evt-old") is None
+        assert event_llm_unavailable_reason(f"evt-bound-{_MAX_EVENT_LLM_UNAVAILABLE - 1}") == (
+            "llm_timeout"
+        )
+        clear_event_llm_unavailable("evt-bound-0")
+        assert event_llm_unavailable_reason("evt-bound-0") is None
+    finally:
+        clear_event_llm_unavailable()
+
+
+@pytest.mark.asyncio
+async def test_clearing_event_timeout_allows_later_chat() -> None:
+    audit = InMemoryLLMCallAuditRecorder()
+
+    with respx.mock(base_url="https://llm.example/v1") as router:
+        route = router.post("/chat/completions")
+        route.side_effect = [
+            httpx.ReadTimeout("primary timed out"),
+            httpx.Response(
+                200,
+                json=_response("recovered answer", model="primary-model", prompt_tokens=4),
+            ),
+        ]
+        async with httpx.AsyncClient(base_url="https://llm.example/v1") as http_client:
+            client = _client(http_client, audit=audit)
+            with pytest.raises(LLMTimeoutError):
+                await client.chat(
+                    MESSAGES,
+                    event_id="evt-2026-retry-after-timeout",
+                    agent_name="PlannerAgent",
+                    prompt_key="plan_generate",
+                )
+            clear_event_llm_unavailable("evt-2026-retry-after-timeout")
+            response = await client.chat(
+                MESSAGES,
+                event_id="evt-2026-retry-after-timeout",
+                agent_name="RiskAgent",
+                prompt_key="risk_score",
+            )
+
+    assert response.content == "recovered answer"
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -615,6 +827,89 @@ async def test_versioned_base_url_is_preserved_with_injected_client() -> None:
         )
 
     assert requested_urls == ["https://llm.example/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_omits_thinking_field_by_default() -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_response("ok", model="primary-model"),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        await _client(http_client, audit=InMemoryLLMCallAuditRecorder()).chat(
+            MESSAGES,
+            event_id="evt-2026-thinking-omit",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+        )
+
+    assert "thinking" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_sends_thinking_type_when_configured() -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_response("ok", model="primary-model"),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        await _client(
+            http_client,
+            audit=InMemoryLLMCallAuditRecorder(),
+            thinking_type="disabled",
+        ).chat(
+            MESSAGES,
+            event_id="evt-2026-thinking-disabled",
+            agent_name="StorylineService",
+            prompt_key="storyline_generate",
+        )
+
+    assert captured["payload"]["thinking"] == {"type": "disabled"}
+
+
+def test_factory_forwards_thinking_type_from_settings() -> None:
+    settings = Settings(
+        LLM_MODE="openai_compatible",
+        LLM_API_BASE_URL="https://llm.example/v1",
+        LLM_API_KEY="test-key",
+        LLM_PRIMARY_MODEL="any-model",
+        LLM_THINKING_TYPE="disabled",
+        APP_ENV="development",
+    )
+    client = get_llm_client(
+        settings=settings,
+        audit_recorder=InMemoryLLMCallAuditRecorder(),
+    )
+    assert isinstance(client, OpenAICompatibleLLMClient)
+    assert client._thinking_type == "disabled"
+
+
+def test_factory_omits_thinking_type_when_unset() -> None:
+    settings = Settings(
+        LLM_MODE="openai_compatible",
+        LLM_API_BASE_URL="https://llm.example/v1",
+        LLM_API_KEY="test-key",
+        LLM_PRIMARY_MODEL="any-model",
+        APP_ENV="development",
+    )
+    client = get_llm_client(
+        settings=settings,
+        audit_recorder=InMemoryLLMCallAuditRecorder(),
+    )
+    assert isinstance(client, OpenAICompatibleLLMClient)
+    assert client._thinking_type is None
 
 
 @pytest.mark.asyncio
@@ -807,6 +1102,76 @@ async def test_unknown_mock_prompt_fails_explicitly() -> None:
     assert [(entry.status, entry.fallback_level) for entry in audit.entries] == [
         ("llm_provider_error", 2)
     ]
+
+
+@pytest.mark.asyncio
+async def test_mock_storyline_golden_binds_prompt_evidence_ids() -> None:
+    from app.agents.prompts.storyline_prompt import build_storyline_messages
+
+    audit = InMemoryLLMCallAuditRecorder()
+    client = MockLLMClient(audit_recorder=audit)
+    evidence = [
+        {
+            "evidence_id": "evd-bind-login",
+            "source": "identity",
+            "evidence_type": "login",
+            "description": "账号 zhangsan 从 10.20.30.23 登录",
+            "timestamp": "2024-06-15T09:00:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-rar",
+            "source": "endpoint",
+            "evidence_type": "process_create",
+            "description": "主机 PC-FIN-023 上 rar.exe 进程启动",
+            "timestamp": "2024-06-15T09:01:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-file",
+            "source": "data_security",
+            "evidence_type": "file_access",
+            "description": "账号 zhangsan 访问文件 financial_data.zip",
+            "timestamp": "2024-06-15T09:02:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-net",
+            "source": "network_flow",
+            "evidence_type": "outbound",
+            "description": "PC-FIN-023 连接外部 IP 203.0.113.88",
+            "timestamp": "2024-06-15T09:03:00Z",
+        },
+        {
+            "evidence_id": "evd-bind-dns",
+            "source": "dns",
+            "evidence_type": "dns_query",
+            "description": "DNS 解析 unknown-upload-example.com 到 203.0.113.88",
+            "timestamp": "2024-06-15T09:04:00Z",
+        },
+    ]
+    messages = build_storyline_messages(
+        evidence_entries=evidence,
+        technique_matches=[],
+        graph_paths=[],
+        entity_names=["zhangsan"],
+    )
+    response = await client.chat(
+        messages,
+        event_id="evt-storyline-bind",
+        agent_name="storyline_service",
+        prompt_key="storyline_generate",
+        scenario_id="insider_data_exfiltration",
+        json_mode=True,
+    )
+    payload = json.loads(response.content)
+    bound_ids = {
+        str(entry.get("evidence_id") or "")
+        for phase in payload.get("phases") or []
+        for entry in (phase.get("entries") or [])
+        if isinstance(phase, dict)
+    }
+    catalog = {item["evidence_id"] for item in evidence}
+    assert bound_ids <= catalog
+    assert bound_ids, "production MockLLM must bind catalog evidence_id values"
+    assert "" not in bound_ids
 
 
 def test_mock_llm_client_requires_audit_recorder() -> None:

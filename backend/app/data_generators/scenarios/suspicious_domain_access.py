@@ -165,7 +165,11 @@ def build_suspicious_domain_access(
         gpt_verdict_label="needs_more_evidence",
         related_alert_refs=[alert_ref],
         impacted_asset_refs=[asset_ref],
-        normalized={"risk_score": risk_score, "exfil_observed": False},
+        normalized={
+            "risk_score": risk_score,
+            "exfil_observed": False,
+            "scenario": SCENARIO_ID,
+        },
     )
 
     timeline = telemetry_for_variant(

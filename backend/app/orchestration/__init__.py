@@ -32,7 +32,6 @@ from app.orchestration.replan_handler import (
     ReplanResult,
     replan_graph_node,
 )
-from app.orchestration.workflow_graph import planner_node, rag_node
 from app.orchestration.writeback_recovery_handler import (
     VERIFY_UNKNOWN_MAX_LOOKUPS,
     WritebackRecoveryAction,
@@ -74,3 +73,12 @@ __all__ = [
     "replan_graph_node",
     "writeback_recovery_graph_node",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Lazy-export graph nodes to avoid analysis_only_pipeline ↔ workflow_graph import cycle."""
+    if name in {"planner_node", "rag_node"}:
+        from app.orchestration.workflow_graph import planner_node, rag_node
+
+        return planner_node if name == "planner_node" else rag_node
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1023,16 +1023,18 @@ class VerifyAgent(BaseAgent[VerifyAgentInput, VerificationResult]):
                         activate_result.skipped_reason,
                         event_id,
                     )
-                    need_manual = True
-                    # Use the deferred action_id (not a synthetic wb-id) so
-                    # downstream resolve/retry endpoints can match the path
-                    # parameter.  The synthetic f"terminal_wb_{event_id}"
-                    # does not conform to the wbk-{8hex} format and would
-                    # always fail lookup.  (ISSUE-060 review SF-3)
                     _blocked_ref = activate_result.action_id or activate_result.writeback_id
                     if _blocked_ref is not None:
                         blocked_wb.add(_blocked_ref)
-                    overall_status = VerificationOverallStatus.MANUAL_RESOLUTION
+                    if activate_result.skipped_reason == "disposition_unresolved":
+                        # Required + unresolved verdict/disposition is terminal.
+                        # Do not stay VERIFYING waiting for a writeback that
+                        # will never become ready.
+                        overall_status = VerificationOverallStatus.FAILED
+                        need_manual = False
+                    else:
+                        need_manual = True
+                        overall_status = VerificationOverallStatus.MANUAL_RESOLUTION
                 elif not terminal_activated and activate_result.skipped_reason in (
                     "already_submitted",
                     "concurrent_head_conflict",

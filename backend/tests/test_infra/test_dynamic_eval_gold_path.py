@@ -149,6 +149,12 @@ def test_full_loop_refuses_require_closed_without_report(full_loop_mod) -> None:
         )
 
 
+def test_full_loop_parses_require_llm_quality(full_loop_mod) -> None:
+    args = full_loop_mod.parse_args(["--require-llm-quality", "--event-id", "evt-x"])
+    assert args.require_llm_quality is True
+    assert args.require_closed is False
+
+
 def test_assert_strict_closed_acceptance_requires_closed(full_loop_mod) -> None:
     class _Client:
         def get_json(self, path: str):
@@ -234,6 +240,56 @@ def test_assert_strict_closed_acceptance_passes_when_converged(full_loop_mod) ->
 
     result = full_loop_mod.assert_strict_closed_acceptance(_Client(), "evt-3")
     assert result["status"] == "closed"
+    assert result["writeback_overall_status"] == "confirmed"
+
+
+def test_assert_strict_closed_allows_entity_accepted_receipts(full_loop_mod) -> None:
+    """ISSUE-312: entity ACCEPTED must not fail terminal pending=0."""
+
+    class _Client:
+        def get_json(self, path: str):
+            if "/actions" in path:
+                return {
+                    "items": [
+                        {
+                            "action_id": "act-entity",
+                            "action_category": "response",
+                            "status": "success",
+                            "writeback_required": True,
+                            "writeback_applicable": False,
+                            "writeback_readiness": "not_required",
+                            "writeback_status": None,
+                        },
+                        {
+                            "action_id": "act-terminal",
+                            "action_category": "response",
+                            "status": "success",
+                            "writeback_required": True,
+                            "writeback_applicable": True,
+                            "writeback_readiness": "ready",
+                            "writeback_status": "confirmed",
+                        },
+                    ],
+                    "total": 2,
+                }
+            return {
+                "event": {"event_id": "evt-entity-ok", "status": "closed"},
+                "writeback_required": True,
+                "writeback_readiness": "ready",
+                "writeback_overall_status": "confirmed",
+                "pending_writeback_count": 0,
+                "entity_writeback_accepted_count": 3,
+            }
+
+        def request(self, method: str, path: str):
+            from dynamic_eval_approve import ApiResponse
+
+            return ApiResponse(
+                status=200,
+                data={"report": {"report_quality": "degraded_template"}},
+            )
+
+    result = full_loop_mod.assert_strict_closed_acceptance(_Client(), "evt-entity-ok")
     assert result["writeback_overall_status"] == "confirmed"
 
 
@@ -456,6 +512,9 @@ def test_deployment_docs_gold_path_honesty() -> None:
     assert "EMBEDDING_MODE" in text
     assert "-c 2" in text
     assert "docker-compose.eval.yml" in text
+    assert "dirty fixture" in text
+    assert "down-v" in text
+    assert "nested Docker" in text or "bridge-nf" in text
 
 
 def test_full_loop_documents_seed_fixture_not_post_events() -> None:
@@ -467,6 +526,8 @@ def test_full_loop_documents_seed_fixture_not_post_events() -> None:
     assert "--require-closed" in text
     assert "--analysis-only" in text
     assert "unwrap_event_detail" in text
+    assert "flush_mock_observation_via_compose" in text
+    assert "dirty fixture" in text
 
 
 def test_eval_compose_override_unpublishes_host_ports() -> None:
@@ -794,3 +855,56 @@ def test_run_gold_loop_fails_fast_when_waiting_without_actions(full_loop_mod) ->
             poll_interval_s=0.01,
             max_wait_s=5,
         )
+
+
+@pytest.fixture(scope="module")
+def seed_mod():
+    scripts_dir = str(SCRIPTS)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    return _load_module(SEED_PATH, "seed_mock_xdr_and_ingest_under_test")
+
+
+def test_gold_fixture_observation_degraded_does_not_fail_accepted_seed(seed_mod) -> None:
+    should_fail, reason = seed_mod.gold_fixture_should_fail(
+        {
+            "accepted": 1,
+            "rejected": 0,
+            "degraded": True,
+            "observation_degraded": True,
+            "errors": [
+                {"stage": "behavior_observation_projection", "error_category": "projection_failed"}
+            ],
+        }
+    )
+    assert should_fail is False
+    assert reason == ""
+
+
+def test_gold_fixture_still_fails_on_rejected_or_non_observation_degraded(seed_mod) -> None:
+    rejected_fail, _ = seed_mod.gold_fixture_should_fail(
+        {
+            "accepted": 1,
+            "rejected": 1,
+            "degraded": False,
+            "observation_degraded": False,
+            "errors": [],
+        }
+    )
+    assert rejected_fail is True
+    other_fail, _ = seed_mod.gold_fixture_should_fail(
+        {
+            "accepted": 1,
+            "rejected": 0,
+            "degraded": True,
+            "observation_degraded": False,
+            "errors": [{"stage": "adapter_poll", "error_category": "adapter_unavailable"}],
+        }
+    )
+    assert other_fail is True
+
+
+def test_dirty_fixture_error_mentions_down_v(seed_mod) -> None:
+    message = seed_mod.format_dirty_fixture_error(["source_checkpoint watermark/cursor present"])
+    assert "dirty fixture, run down-v or --fresh-volumes" in message
+    assert "source_checkpoint" in message

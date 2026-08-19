@@ -414,6 +414,7 @@ def test_makefile_eval_full_loop_supports_require_closed_flag() -> None:
     block_start = text.index("eval-full-loop:")
     block = text[block_start : text.index("eval-full-loop-matrix:", block_start)]
     assert "--require-closed" in block
+    assert "--require-llm-quality" in block
 
 
 def test_makefile_smoke_bootstrap_defaults_terminal_off() -> None:

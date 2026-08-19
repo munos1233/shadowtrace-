@@ -141,6 +141,28 @@
       "additionalProperties": false
     },
 
+    "BusinessDisruption": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high"]
+    },
+
+    "ImpactAssessment": {
+      "type": "object",
+      "required": ["action_id"],
+      "additionalProperties": false,
+      "properties": {
+        "action_id": { "type": "string" },
+        "impact_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "affected_scope": { "type": "string" },
+        "reversible": { "type": "boolean" },
+        "business_disruption": { "$ref": "#/definitions/BusinessDisruption" },
+        "assessment_detail": { "type": ["string", "null"] },
+        "affected_entity_count": { "type": "integer" },
+        "affected_targets": { "type": "array", "items": { "type": "string" } },
+        "assessed_by": { "type": ["string", "null"] }
+      }
+    },
+
     "ApprovalRequiredPayload": {
       "type": "object",
       "required": ["action_id", "action_name"],
@@ -152,7 +174,7 @@
         "deadline": { "type": "string", "format": "date-time" },
         "impact_assessment": {
           "oneOf": [
-            { "$ref": "https://shadowtrace.local/schemas/ImpactAssessment.json" },
+            { "$ref": "#/definitions/ImpactAssessment" },
             { "type": "null" }
           ],
           "description": "Impact assessment for the action requiring approval (ISSUE-079)."

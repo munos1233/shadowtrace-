@@ -58,6 +58,7 @@ from strict_closed_acceptance import (  # noqa: E402
     list_all_event_actions,
     strict_assert_budget as _strict_assert_budget,
 )
+from strict_llm_quality import assert_llm_quality_acceptance  # noqa: E402
 from dynamic_eval_diagnostics import (  # noqa: E402
     collect_event_diagnostics,
     format_eval_failure_message,
@@ -176,6 +177,27 @@ def _compose_cmd() -> list[str]:
     ]
 
 
+def flush_mock_observation_via_compose() -> None:
+    """Drop leftover mock observation projection keys before gold-path seed."""
+    cmd = _compose_cmd() + [
+        "exec",
+        "-T",
+        "redis",
+        "redis-cli",
+        "DEL",
+        "shadowtrace:mock_observation_projection",
+        "shadowtrace:mock_observation_idempotency",
+    ]
+    print("[dynamic-eval] flushing mock observation projection keys")
+    proc = subprocess.run(cmd, cwd=_ROOT_DIR, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(
+            "[dynamic-eval] WARN: observation key flush skipped "
+            f"(exit={proc.returncode}): {proc.stderr.strip()}",
+            file=sys.stderr,
+        )
+
+
 def seed_via_compose(
     *,
     scenario: str,
@@ -202,6 +224,13 @@ def seed_via_compose(
     print(f"[dynamic-eval] seeding via compose: scenario={scenario}")
     proc = subprocess.run(cmd, cwd=_ROOT_DIR, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
+        combined = f"{proc.stdout}\n{proc.stderr}"
+        if "dirty fixture" in combined:
+            raise RuntimeError(
+                "dirty fixture, run down-v or --fresh-volumes "
+                f"(or retry with --instance N+1; exit={proc.returncode}):\n"
+                f"{proc.stdout}\n{proc.stderr}"
+            )
         raise RuntimeError(
             "seed_mock_xdr_and_ingest failed "
             f"(exit={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
@@ -890,6 +919,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-llm-quality",
+        action="store_true",
+        help=(
+            "ISSUE-350 live reasoning card: per-event llm_call_log core-prompt "
+            "success; template+exfil+confirmed_threat FAIL. Independent of "
+            "--require-closed. Never uses GET /health success_rate."
+        ),
+    )
+    parser.add_argument(
         "--analysis-only",
         action="store_true",
         help=(
@@ -1014,6 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
             if item.get("event_id")
         }
         if args.seed_via_compose:
+            flush_mock_observation_via_compose()
             seed_summary = seed_via_compose(
                 scenario=args.scenario,
                 mock_xdr_url=args.mock_xdr_url,
@@ -1088,6 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
     result["scenario"] = args.scenario
     result["event_ids"] = event_ids
     result["require_closed"] = bool(args.require_closed)
+    result["require_llm_quality"] = bool(args.require_llm_quality)
     result["analysis_only"] = bool(args.analysis_only)
     result["notes"] = [
         "Gold fixture is seed_mock_xdr_and_ingest — not POST /events.",
@@ -1102,6 +1142,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.require_closed:
         result["notes"].append(
             "Strict profile (ISSUE-301): reporting/contained/verifying are not success."
+        )
+    if args.require_llm_quality:
+        quality: dict[str, Any] = {}
+        for event_id in event_ids:
+            quality[event_id] = assert_llm_quality_acceptance(
+                client, event_id, analysis_only=bool(args.analysis_only)
+            )
+        result["llm_quality"] = quality
+        result["notes"].append(
+            "Live reasoning card (ISSUE-350): per-event llm_call_log, not /health window."
         )
 
     if args.json:

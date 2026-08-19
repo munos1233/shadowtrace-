@@ -616,6 +616,44 @@ def requires_threat_aligned_containment(
     return int(risk_assessment.risk_score) >= RISK_CONTAINMENT_THRESHOLD
 
 
+_UNCONFIRMED_HIGH_BLAST_TOOLS = frozenset({"isolate_host", "disable_account"})
+
+
+def demote_unconfirmed_high_blast_actions(
+    *,
+    candidates: list[_CandidateT],
+    generated_by: ResponsePlanGeneratedBy,
+    strategy: str,
+    final_verdict: FinalVerdict | str | None,
+) -> tuple[list[_CandidateT], ResponsePlanGeneratedBy, str]:
+    """Drop isolate/disable when the verdict is unconfirmed and containment is not required.
+
+    Default playbooks for ``suspicious_domain`` MEDIUM are ``block_domain`` + ticket.
+    The containment *injection* gate already skips ``none`` + MEDIUM + score<70;
+    this demotes LLM overreach without injecting rule tools and without flipping
+    ``generated_by`` to template.
+    """
+
+    verdict: FinalVerdict | None = None
+    if final_verdict is not None:
+        try:
+            verdict = (
+                final_verdict
+                if isinstance(final_verdict, FinalVerdict)
+                else FinalVerdict(str(final_verdict))
+            )
+        except ValueError:
+            verdict = None
+    if verdict not in {FinalVerdict.NONE, FinalVerdict.FALSE_POSITIVE}:
+        return candidates, generated_by, strategy
+    kept = [item for item in candidates if item.tool_name not in _UNCONFIRMED_HIGH_BLAST_TOOLS]
+    if len(kept) == len(candidates):
+        return candidates, generated_by, strategy
+    note = "unconfirmed_verdict_blast_radius_demote"
+    strategy = f"{strategy}; {note}" if strategy else note
+    return kept, generated_by, strategy
+
+
 def deduplicate_identity_containment(
     candidates: list[_CandidateT],
 ) -> tuple[list[_CandidateT], bool]:
@@ -679,6 +717,70 @@ def apply_identity_containment_dedup_gate(
     return deduped, generated_by, strategy
 
 
+def exfil_domain_containment_needs(entities: EntitySet) -> tuple[EntityCoverageNeed, ...]:
+    """EntitySet domain → ``block_domain`` obligations (not ISSUE-328).
+
+    ISSUE-328 coverage merge never injects domain tools. This helper only lists
+    needs so a separate gate can demote ``generated_by`` when the LLM omitted them.
+    """
+    needs: list[EntityCoverageNeed] = []
+    for domain in entities.domains:
+        canonical = (domain.fqdn or domain.entity_id or "").strip()
+        aliases = _alias_set(domain.fqdn, domain.entity_id)
+        if not canonical or not aliases:
+            continue
+        needs.append(
+            EntityCoverageNeed(
+                tool_name="block_domain",
+                target_type="domain",
+                canonical_target=canonical,
+                aliases=aliases,
+            )
+        )
+    return tuple(needs)
+
+
+def apply_exfil_domain_containment_gate(
+    *,
+    candidates: list[_CandidateT],
+    generated_by: ResponsePlanGeneratedBy,
+    strategy: str,
+    severity: Severity,
+    risk_assessment: RiskAssessment,
+    final_verdict: FinalVerdict | str | None,
+    entities: EntitySet,
+    disposition_only: bool,
+    evidence_output: EvidenceOutput | None = None,
+) -> tuple[list[_CandidateT], ResponsePlanGeneratedBy, str]:
+    """Demote LLM stamp when EntitySet domains lack ``block_domain``; never inject."""
+    if disposition_only:
+        return candidates, generated_by, strategy
+    if not requires_threat_aligned_containment(
+        severity=severity,
+        risk_assessment=risk_assessment,
+        final_verdict=final_verdict,
+        entities=entities,
+        disposition_only=disposition_only,
+        evidence_output=evidence_output,
+    ):
+        return candidates, generated_by, strategy
+    needs = exfil_domain_containment_needs(entities)
+    if not needs:
+        return candidates, generated_by, strategy
+    missing = [
+        need
+        for need in needs
+        if not any(_item_covers_need(item, need) for item in candidates)
+    ]
+    if not missing:
+        return candidates, generated_by, strategy
+    note = "domain_containment_missing: EntitySet domains lack block_domain"
+    strategy = f"{strategy}; {note}" if strategy else note
+    if generated_by is ResponsePlanGeneratedBy.LLM:
+        generated_by = ResponsePlanGeneratedBy.TEMPLATE
+    return candidates, generated_by, strategy
+
+
 def apply_containment_quality_gate(
     *,
     candidates: list[_CandidateT],
@@ -706,7 +808,12 @@ def apply_containment_quality_gate(
         disposition_only=disposition_only,
         evidence_output=evidence_output,
     ):
-        return candidates, generated_by, strategy
+        return demote_unconfirmed_high_blast_actions(
+            candidates=candidates,
+            generated_by=generated_by,
+            strategy=strategy,
+            final_verdict=final_verdict,
+        )
 
     had_containment = bool(_containment_candidates(candidates))
     if not had_containment:
@@ -777,9 +884,12 @@ __all__ = [
     "EntityCoverageNeed",
     "apply_containment_quality_gate",
     "apply_evidence_sufficiency_gate",
+    "apply_exfil_domain_containment_gate",
     "apply_identity_containment_dedup_gate",
     "deduplicate_identity_containment",
+    "demote_unconfirmed_high_blast_actions",
     "entity_containment_coverage_needs",
+    "exfil_domain_containment_needs",
     "evidence_blocks_high_impact_actions",
     "evidence_insufficiency_reason_code",
     "has_actionable_containment_targets",

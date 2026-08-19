@@ -55,6 +55,10 @@ class MockLLMClient(BaseLLMClient):
             await self._check_budget(event_id=event_id, agent_name=agent_name)
             payload = self._load_golden(prompt_key, scenario_id)
             content_value = payload.get("content", payload)
+            if prompt_key == "storyline_generate":
+                from app.core.llm.storyline_golden_bind import bind_storyline_golden
+
+                content_value = bind_storyline_golden(content_value, messages)
             content = (
                 content_value
                 if isinstance(content_value, str)

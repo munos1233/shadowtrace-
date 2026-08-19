@@ -16,8 +16,10 @@ from enum import Enum
 from typing import Any
 
 import orjson
+from pydantic import ValidationError
 
 from app.models.agent_io import AttackStoryline, EvidenceOutput
+from app.models.enums import EventType
 from app.models.evidence import EvidenceGap
 
 # Keys allowed on API-facing snapshots (hard whitelist).
@@ -33,6 +35,7 @@ SNAPSHOT_SUMMARY_KEYS = frozenset(
         "analysis_only_complete",
         "risk_assessment",
         "triage_severity",
+        "triage_event_type",
         "classification_override",
         "execution_substate",
     }
@@ -195,6 +198,27 @@ def build_evidence_snapshot_summary(
     return _fit_bytes(summary, max_bytes=_MAX_EVIDENCE_SUMMARY_BYTES)
 
 
+def _count_or_preserved(
+    payload: dict[str, Any],
+    *,
+    list_key: str,
+    count_key: str,
+) -> int:
+    """Count a heavy list when present; otherwise keep a previously projected count.
+
+    ISSUE-254 strips ``phases`` / ``claim_refs`` after the first summary. Re-projecting
+    that summary must not re-derive the counter from a missing list (which looks like 0).
+    """
+    items = payload.get(list_key)
+    if isinstance(items, list):
+        return len(items)
+    raw = payload.get(count_key)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_storyline_snapshot_summary(
     storyline: AttackStoryline | dict[str, Any],
 ) -> dict[str, Any]:
@@ -212,14 +236,16 @@ def build_storyline_snapshot_summary(
     else:
         grounding = storyline.get("grounding_status")
         generated_by = storyline.get("generated_by")
-        phases = storyline.get("phases") or []
-        claim_refs = storyline.get("claim_refs") or []
         payload = {
             "storyline_id": str(storyline.get("storyline_id") or "")[:128],
             "grounding_status": _enum_value_or_text(grounding)[:64],
             "generated_by": _enum_value_or_text(generated_by)[:32],
-            "phase_count": len(phases) if isinstance(phases, list) else 0,
-            "claim_ref_count": len(claim_refs) if isinstance(claim_refs, list) else 0,
+            "phase_count": _count_or_preserved(
+                storyline, list_key="phases", count_key="phase_count"
+            ),
+            "claim_ref_count": _count_or_preserved(
+                storyline, list_key="claim_refs", count_key="claim_ref_count"
+            ),
             "narrative_summary": str(storyline.get("narrative_summary") or "")[
                 :_MAX_NARRATIVE_CHARS
             ],
@@ -236,6 +262,7 @@ def _bound_risk_assessment(risk: dict[str, Any]) -> dict[str, Any]:
 
 
 _ALLOWED_TRIAGE_SEVERITY = frozenset({"low", "medium", "high", "critical"})
+_ALLOWED_TRIAGE_EVENT_TYPE = frozenset(item.value for item in EventType)
 
 
 def bound_triage_severity(value: Any) -> str | None:
@@ -244,6 +271,16 @@ def bound_triage_severity(value: Any) -> str | None:
         return None
     text = value.value if isinstance(value, Enum) else str(value).strip().lower()
     if text in _ALLOWED_TRIAGE_SEVERITY:
+        return text
+    return None
+
+
+def bound_triage_event_type(value: Any) -> str | None:
+    """API-safe triage event_type token; never copies the triage payload."""
+    if value is None:
+        return None
+    text = value.value if isinstance(value, Enum) else str(value).strip().lower()
+    if text in _ALLOWED_TRIAGE_EVENT_TYPE:
         return text
     return None
 
@@ -271,23 +308,78 @@ def merge_evidence_summary_into_snapshot(
     return _shrink_summary_sections(merged)
 
 
+def is_storyline_snapshot_summary(value: Any) -> bool:
+    """True when ``value`` is the ISSUE-254 observability blob, not AttackStoryline.
+
+    The bounded snapshot keeps ``phase_count`` / ``claim_ref_count`` and drops
+    ``phases`` / ``event_id``. GET /timeline must never ``model_validate`` that
+    shape — ``AttackStoryline`` forbids the extra counters and requires
+    ``event_id``.
+    """
+    if not isinstance(value, dict):
+        return False
+    has_phases_list = isinstance(value.get("phases"), list)
+    has_summary_counters = "phase_count" in value or "claim_ref_count" in value
+    if has_summary_counters and not has_phases_list:
+        return True
+    if has_phases_list:
+        return False
+    if "event_id" in value:
+        return False
+    return bool(value.get("storyline_id") or value.get("generated_by") or has_summary_counters)
+
+
+def parse_attack_storyline(value: Any) -> AttackStoryline | None:
+    """Return a full AttackStoryline, or None for missing/summary/invalid payloads.
+
+    Never promotes a snapshot summary into a fake empty storyline.
+    """
+    if value is None:
+        return None
+    if isinstance(value, AttackStoryline):
+        return value
+    if is_storyline_snapshot_summary(value):
+        return None
+    try:
+        return AttackStoryline.model_validate(value)
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
 def merge_storyline_summary_into_snapshot(
     snapshot: dict[str, Any] | None,
     storyline: AttackStoryline | dict[str, Any],
 ) -> dict[str, Any]:
     """Merge bounded storyline summary (incl. grounding_status) into the snapshot.
 
-    Replaces only the ``storyline`` key with a bounded object. Do not call this on
-    a CLOSED freeze if full ``storyline.phases`` must remain for rebuild — use
-    ``project_snapshot_for_api`` on the read path instead.
+    Replaces observability counters on the ``storyline`` key. If the durable row
+    already holds a CLOSED freeze ``phases`` list, keep it — later summary merges
+    must not strip the freeze used by ``rebuild_context``. API responses still
+    pass ``project_snapshot_for_api``.
     """
     merged = dict(snapshot) if isinstance(snapshot, dict) else {}
     existing = merged.get("storyline")
     base = dict(existing) if isinstance(existing, dict) else {}
-    # Never retain full phases/entries/claim payloads from a prior dump.
+    freeze_phases = base["phases"] if isinstance(base.get("phases"), list) else None
+    freeze_claim_refs = base["claim_refs"] if isinstance(base.get("claim_refs"), list) else None
+    # Strip heavy fields from the observability blob unless a freeze already owns them.
     for heavy in ("phases", "entries", "claim_refs", "prompt", "messages"):
         base.pop(heavy, None)
     base.update(build_storyline_snapshot_summary(storyline))
+    if freeze_phases is not None:
+        incoming_phases: list[Any] | None = None
+        if isinstance(storyline, AttackStoryline) and storyline.phases:
+            incoming_phases = [phase.model_dump(mode="json") for phase in storyline.phases]
+        elif isinstance(storyline, dict) and isinstance(storyline.get("phases"), list):
+            incoming_phases = list(storyline["phases"])
+        base["phases"] = incoming_phases if incoming_phases else freeze_phases
+    if freeze_claim_refs is not None:
+        incoming_refs: list[Any] | None = None
+        if isinstance(storyline, AttackStoryline) and storyline.claim_refs:
+            incoming_refs = [ref.model_dump(mode="json") for ref in storyline.claim_refs]
+        elif isinstance(storyline, dict) and isinstance(storyline.get("claim_refs"), list):
+            incoming_refs = list(storyline["claim_refs"])
+        base["claim_refs"] = incoming_refs if incoming_refs else freeze_claim_refs
     merged["storyline"] = base
     return _shrink_summary_sections(merged)
 
@@ -373,6 +465,14 @@ def project_snapshot_for_api(snapshot: dict[str, Any] | None) -> dict[str, Any] 
     if triage_severity is not None:
         projected["triage_severity"] = triage_severity
 
+    triage_event_type = bound_triage_event_type(snapshot.get("triage_event_type"))
+    if triage_event_type is None:
+        triage = snapshot.get("triage_result")
+        if isinstance(triage, dict):
+            triage_event_type = bound_triage_event_type(triage.get("event_type"))
+    if triage_event_type is not None:
+        projected["triage_event_type"] = triage_event_type
+
     if "analysis_only_complete" in snapshot:
         projected["analysis_only_complete"] = bool(snapshot.get("analysis_only_complete"))
     if "report_generated" in snapshot:
@@ -418,7 +518,9 @@ def _hard_project_api_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
             cleaned["evidence_summary"],
             max_bytes=_MAX_EVIDENCE_SUMMARY_BYTES,
         )
-    if isinstance(cleaned.get("storyline"), dict):
+    if isinstance(cleaned.get("storyline"), dict) and _storyline_needs_reproject(
+        cleaned["storyline"]
+    ):
         cleaned["storyline"] = build_storyline_snapshot_summary(cleaned["storyline"])
     if isinstance(cleaned.get("evidence_gaps"), list):
         cleaned["evidence_gaps"] = [
@@ -469,13 +571,16 @@ def _hard_project_api_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "SNAPSHOT_SUMMARY_KEYS",
+    "bound_triage_event_type",
     "bound_triage_severity",
     "build_evidence_snapshot_summary",
     "build_storyline_snapshot_summary",
+    "is_storyline_snapshot_summary",
     "merge_analysis_only_complete_into_snapshot",
     "merge_evidence_summary_into_snapshot",
     "merge_report_generated_into_snapshot",
     "merge_report_quality_into_snapshot",
     "merge_storyline_summary_into_snapshot",
+    "parse_attack_storyline",
     "project_snapshot_for_api",
 ]

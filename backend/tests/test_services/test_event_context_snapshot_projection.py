@@ -132,6 +132,110 @@ def test_storyline_summary_from_dict_drops_heavy_fields() -> None:
     assert "prompt" not in summary
 
 
+def test_storyline_summary_reproject_preserves_phase_and_claim_counts() -> None:
+    """GET EventDetail must not zero counters after ISSUE-254 strips phases."""
+    full = {
+        "storyline_id": "stl-idemp",
+        "grounding_status": "evidence_grounded",
+        "generated_by": "llm",
+        "phases": [
+            {"phase_order": 1, "entries": [{"description": "a"}]},
+            {"phase_order": 2, "entries": [{"description": "b"}]},
+        ],
+        "claim_refs": [{"claim_id": "c1"}, {"claim_id": "c2"}, {"claim_id": "c3"}],
+        "narrative_summary": "ok",
+    }
+    once = build_storyline_snapshot_summary(full)
+    twice = build_storyline_snapshot_summary(once)
+    assert once["phase_count"] == 2
+    assert once["claim_ref_count"] == 3
+    assert "phases" not in once
+    assert twice["phase_count"] == 2
+    assert twice["claim_ref_count"] == 3
+    projected = project_snapshot_for_api({"storyline": full})
+    assert projected is not None
+    assert projected["storyline"]["phase_count"] == 2
+    assert projected["storyline"]["claim_ref_count"] == 3
+    assert "phases" not in projected["storyline"]
+
+
+def test_snapshot_summary_is_not_an_attack_storyline() -> None:
+    from pydantic import ValidationError
+
+    from app.services.event_context_snapshot_projection import (
+        is_storyline_snapshot_summary,
+        parse_attack_storyline,
+    )
+
+    summary = build_storyline_snapshot_summary(
+        {
+            "storyline_id": "stl-1",
+            "event_id": "evt-1",
+            "generated_by": "llm",
+            "grounding_status": "evidence_grounded",
+            "phases": [{"phase_order": 1, "entries": []}],
+            "claim_refs": [],
+            "narrative_summary": "ok",
+        }
+    )
+    assert is_storyline_snapshot_summary(summary) is True
+    assert parse_attack_storyline(summary) is None
+    with pytest.raises(ValidationError):
+        AttackStoryline.model_validate(summary)
+
+
+def test_parse_attack_storyline_accepts_full_payload() -> None:
+    from app.services.event_context_snapshot_projection import parse_attack_storyline
+
+    full = AttackStoryline(
+        storyline_id="stl-full",
+        event_id="evt-full",
+        narrative_summary="ok",
+        phases=[],
+        generated_by=StorylineGeneratedBy.LLM,
+        grounding_status=StorylineGroundingStatus.EVIDENCE_GROUNDED,
+    )
+    parsed = parse_attack_storyline(full.model_dump(mode="json"))
+    assert parsed is not None
+    assert parsed.event_id == "evt-full"
+    assert parsed.generated_by is StorylineGeneratedBy.LLM
+
+
+def test_merge_storyline_preserves_closed_freeze_phases() -> None:
+    freeze = {
+        "storyline": {
+            "storyline_id": "stl-freeze",
+            "event_id": "evt-freeze",
+            "generated_by": "llm",
+            "grounding_status": "evidence_grounded",
+            "phases": [
+                {
+                    "phase_order": 1,
+                    "phase_name": "initial_access",
+                    "tactic": "Initial Access",
+                    "narrative": "login",
+                    "entries": [],
+                }
+            ],
+            "claim_refs": [{"claim_id": "c1", "phase_order": 1, "evidence_ids": []}],
+            "narrative_summary": "full freeze",
+        }
+    }
+    later_summary = {
+        "storyline_id": "stl-freeze",
+        "generated_by": "llm",
+        "grounding_status": "evidence_grounded",
+        "phase_count": 1,
+        "claim_ref_count": 1,
+        "narrative_summary": "updated counters",
+        "schema_version": "1.0",
+    }
+    merged = merge_storyline_summary_into_snapshot(freeze, later_summary)
+    assert merged["storyline"]["phases"][0]["phase_name"] == "initial_access"
+    assert merged["storyline"]["claim_refs"][0]["claim_id"] == "c1"
+    assert merged["storyline"]["phase_count"] == 1
+
+
 def test_dict_projection_preserves_enum_values_at_type_boundaries() -> None:
     evidence = build_evidence_snapshot_summary({"collection_status": CollectionStatus.COMPLETED})
     storyline = build_storyline_snapshot_summary(
@@ -225,6 +329,8 @@ def test_project_closed_freeze_extracts_bounded_summary_without_dump() -> None:
     assert projected["evidence_count"] == 1
     assert projected["evidence_gaps"][0]["missing_source"] == "endpoint"
     assert projected["storyline"]["grounding_status"] == "ungrounded"
+    assert projected["storyline"]["phase_count"] == 1
+    assert projected["storyline"]["claim_ref_count"] == 1
     assert "phases" not in projected["storyline"]
     assert "evidence_output" not in projected
     assert "report" not in projected
@@ -254,6 +360,25 @@ def test_project_snapshot_exposes_bounded_triage_severity_not_payload() -> None:
     blob = orjson.dumps(projected).decode()
     assert "CoT must not leak" not in blob
     assert "severity=medium" not in blob
+
+
+def test_project_snapshot_exposes_bounded_triage_event_type_not_payload() -> None:
+    projected = project_snapshot_for_api(
+        {
+            "risk_assessment": {"risk_score": 77, "severity": "high"},
+            "triage_result": {
+                "event_type": "data_exfiltration",
+                "severity": "high",
+                "decision_summary": "event_type=data_exfiltration, severity=high",
+                "reasoning": "CoT must not leak",
+            },
+        }
+    )
+    assert projected is not None
+    assert projected["triage_event_type"] == "data_exfiltration"
+    assert "triage_result" not in projected
+    blob = orjson.dumps(projected).decode()
+    assert "CoT must not leak" not in blob
 
 
 def test_project_hard_whitelist_drops_unknown_heavy_keys() -> None:

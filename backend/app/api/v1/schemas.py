@@ -89,9 +89,15 @@ class EventCreateRequest(_StrictRequest):
 
 class InvestigateRequest(_StrictRequest):
     force_replan: bool = False
-    # When true, continue past analysis into ResponseAgent / approval (ISSUE-077 e2e).
-    # Default false keeps ISSUE-566 HTTP investigate analysis-complete at report.
-    include_response_execution: bool = False
+    include_response_execution: bool = Field(
+        default=False,
+        description=(
+            "When true, continue into ResponseAgent / approval / writeback. "
+            "Default false is analysis-only and is not the CLOSED gold path "
+            "(make up-demo + include_response_execution=true + Celery + "
+            "scenario-stamped ingest)."
+        ),
+    )
     # ISSUE-204: API default True for backward compat; product UI/auto paths pass false.
     generate_report: bool = True
 
@@ -231,9 +237,35 @@ class DetectionContextProjectionErrorSummary(BaseModel):
 class EventDetailResponse(BaseModel):
     event: SecurityEvent
     writeback_required: bool
-    writeback_readiness: WritebackReadiness
-    writeback_overall_status: WritebackStatus | None = None
-    pending_writeback_count: int = 0
+    writeback_readiness: WritebackReadiness = Field(
+        description=(
+            "ISSUE-312 terminal writeback readiness (writeback_applicable=true only). "
+            "Entity isolate/block/disable rows with applicable=false must not pull "
+            "this down to not_required."
+        ),
+    )
+    writeback_overall_status: WritebackStatus | None = Field(
+        default=None,
+        description=(
+            "ISSUE-312 terminal writeback overall status. Entity ENTITY_ACTION_SUBMIT "
+            "receipts that remain ACCEPTED after effect verification are not PENDING."
+        ),
+    )
+    pending_writeback_count: int = Field(
+        default=0,
+        description=(
+            "Count of unfinished terminal (applicable) outboxes. Independent entity "
+            "ACCEPTED receipts are counted in entity_writeback_accepted_count instead."
+        ),
+    )
+    entity_writeback_accepted_count: int = Field(
+        default=0,
+        description=(
+            "Current-plan entity submit receipts still ACCEPTED. ISSUE-312 allows "
+            "this after independent effect VERIFIED; it is not unfinished terminal "
+            "writeback."
+        ),
+    )
     detection_context_snapshot: DetectionContextSnapshotSummary | None = None
     detection_context_projection_error: DetectionContextProjectionErrorSummary | None = None
     analysis_only_complete: bool = False

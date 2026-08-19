@@ -29,7 +29,7 @@ async def dispatch_investigation_intents_sync(
     settings = get_settings()
     if not settings.auto_investigate_enabled:
         raise ValidationError(
-            "auto investigate is disabled",
+            "auto investigate is disabled; this path is not the CLOSED gold path",
             error_code="feature_disabled",
             details={"feature": "auto_investigate"},
         )

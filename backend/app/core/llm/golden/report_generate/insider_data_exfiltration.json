@@ -14,9 +14,9 @@
       "evidence_chain": "多源证据显示身份无交互登录冲突、终端进程与文件访问、网络外传及威胁情报命中 203.0.113.88。",
       "attack_storyline": "1. zhangsan 在 PC-FIN-023 执行异常进程\n2. 访问并打包敏感财务文件\n3. 外传到 203.0.113.88",
       "attack_mapping": "- T1560 Archive Collected Data\n- T1048 Exfiltration Over Alternative Protocol",
-      "executed_actions": "暂无处置动作",
-      "verification_results": "暂无验证结果",
-      "recommendations": "1. 隔离主机 PC-FIN-023 并阻断 203.0.113.88。\n2. 冻结账号 zhangsan 会话并强制改密。\n3. 保全财务文件访问与外传日志，评估泄露范围。\n4. 复核外联阻断与账号禁用生效情况。",
+      "executed_actions": "本调查未执行处置",
+      "verification_results": "本调查未执行验证",
+      "recommendations": "1. 禁用账号 zhangsan 并复核会话失效。\n2. 隔离主机 PC-FIN-023。\n3. 阻断外联 203.0.113.88 与域名 unknown-upload-example.com。\n4. 保全财务文件访问与外传日志，评估泄露范围。\n5. 复核账号禁用、主机隔离与外联阻断生效情况。",
       "appendix_index": "关键实体：zhangsan、PC-FIN-023、203.0.113.88"
     }
   },

@@ -114,9 +114,11 @@ Do **not** claim autonomous investigation quality from Mock plumbing alone. Live
 | Card | How it runs | What a green result means | What it does **not** mean |
 |------|-------------|---------------------------|---------------------------|
 | **Mock plumbing** | CI Checks `backend-closure-gates-mock` (job id `backend-closure-gates`, `LLM_MODE=mock` pinned). Local: same as CI — `pytest tests/adversarial/test_agent_adversarial_full_loop.py -m adversarial_audit -o addopts=` (needs Postgres + Redis). Helper pytest ≠ this card. | Pipeline wiring, golden-scripted agents, Mock disposition CLOSED | Live glm reasoning, novel-narrative capability, or containment coverage beyond scripted golden + ISSUE-328 gates |
-| **Live reasoning** | Manual / nightly `LLM_MODE=openai_compatible` + API key. **Not a PR gate.** | Closer-to-production LLM behavior on this scenario | Must not block daily Mock plumbing; golden `isolate_host` is not glm skill |
+| **Live reasoning** | Manual / nightly `LLM_MODE=openai_compatible` + API key, then `EVAL_REQUIRE_LLM_QUALITY=1 make eval-full-loop` (`scripts/dynamic_eval_full_loop.py --require-llm-quality`). **Not a PR gate.** Do **not** use GET `/health` 60min `success_rate` as the event conclusion. | Per-event `llm_call_log` core-prompt success (`triage_extract` / `plan_generate` / `risk_score` / `response_plan`). 9/9 timeout = FAIL. `generated_by=template` on data-exfil `confirmed_threat` = FAIL. | Must not block daily Mock plumbing; golden `isolate_host` is not glm skill; `--require-closed` green is not this card |
 
 The scorecard JSON field `scorecard_header` records `llm_mode`, `certification_card` (from `scorecard_contract_for_llm_mode()["kind"]`), and `summary` (the card interpretation). Golden `response_plan` for this pack includes EntitySet hosts (`WKS-DATA-031` and `SRV-DB-STG-02`) so Mock LLM and ISSUE-328 rules stay aligned — that is still a **scripted** pack, not Live reasoning.
+
+Do **not** open ISSUEs that only add scorecard `unscored` buckets, extra `degraded_flag`s, or new eval profiles unless they directly fix a real hole (scenario stamp, rule superset, timeout short-circuit, or this Live card). Do not change ISSUE-328 coverage to include domains, do not make `validate_closed_gate` consult GT, do not FAIL the scorecard on coverage GAP, and do not make `--require-closed` reject `degraded_template`.
 
 ### Provenance-aware quality audit (ISSUE-334)
 

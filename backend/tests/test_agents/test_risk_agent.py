@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.confidence_calibration import calibrate_confidence
+from app.agents.conflict_detector import RULE_IAM_ABSENT_BUT_EDR_ACTIVE
 from app.agents.prompts.risk_prompt import FACTOR_NAMES
 from app.agents.risk_agent import RiskAgent
 from app.agents.risk_llm_admissibility import classify_llm_risk_response
@@ -53,8 +54,9 @@ from app.models.enums import (
     FinalVerdict,
     Severity,
 )
-from app.models.evidence import Evidence
-from app.models.ids import new_evidence_id
+from app.models.evidence import Evidence, EvidenceConflict
+from app.models.ids import new_conflict_id, new_evidence_id
+from app.services.risk_verdict_projection import UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT
 
 _DEMO_SCENARIO_ID = "insider_data_exfiltration"
 
@@ -597,6 +599,42 @@ async def test_main_scenario_score_ge_70_confirmed_threat(
     assert event_service.risk_updates[-1]["risk_score"] == output.risk_score
     stored = await wm.read(event_id, "risk_assessment")
     assert stored["risk_score"] == output.risk_score
+
+
+@pytest.mark.asyncio
+async def test_iam_absent_conflict_stamps_reason_without_changing_confirmed_threat(
+    wm: _FakeWorkingMemory,
+    event_service: _FakeEventService,
+) -> None:
+    event_id = f"evt-risk-iam-{uuid4().hex[:8]}"
+    evidence = _main_evidence(event_id)
+    conflict = EvidenceConflict(
+        conflict_id=new_conflict_id(),
+        event_id=event_id,
+        description="IAM 无成功登录记录（账号 zhangsan），但 EDR 观察到该账号的进程活动",
+        evidence_ids=[evidence.evidence_list[0].evidence_id],
+        sources=[EvidenceSource.IDENTITY, EvidenceSource.ENDPOINT],
+        detail={"rule_name": RULE_IAM_ABSENT_BUT_EDR_ACTIVE, "severity": "high"},
+    )
+    evidence = evidence.model_copy(update={"conflicts": [conflict]})
+    agent = RiskAgent(
+        llm_client=MockLLMClient(audit_recorder=InMemoryLLMCallAuditRecorder()),
+        working_memory=wm,
+        event_service=event_service,
+        calibration_temperature=1.2,
+        scenario_id=_DEMO_SCENARIO_ID,
+    )
+    output = await agent.execute(
+        RiskAgentInput(
+            event_id=event_id,
+            triage_result=_main_triage(),
+            evidence_output=evidence,
+        )
+    )
+    assert agent.last_verdict is FinalVerdict.CONFIRMED_THREAT
+    assert UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT in output.verdict_reason_codes
+    synced = event_service.risk_updates[-1]["risk_assessment"]
+    assert UNRESOLVED_IDENTITY_ENDPOINT_CONFLICT in (synced.get("verdict_reason_codes") or [])
 
 
 @pytest.mark.asyncio

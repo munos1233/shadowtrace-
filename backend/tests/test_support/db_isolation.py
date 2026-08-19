@@ -29,9 +29,18 @@ async def truncate_business_tables(
     tables = business_tables()
     if not tables:
         return
-    quoted = ", ".join(f'"{table}"' for table in tables)
     async with session_factory() as session:
         async with session.begin():
+            existing_rows = await session.execute(
+                text(
+                    "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = current_schema()"
+                )
+            )
+            present = {str(row[0]) for row in existing_rows}
+            to_truncate = [table for table in tables if table in present]
+            if not to_truncate:
+                return
+            quoted = ", ".join(f'"{table}"' for table in to_truncate)
             await session.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
 
 

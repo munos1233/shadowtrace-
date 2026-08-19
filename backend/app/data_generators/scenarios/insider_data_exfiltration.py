@@ -51,18 +51,31 @@ def build_insider_data_exfiltration(
     *,
     seed: int = 42,
     variant: ScenarioVariant | str = ScenarioVariant.NORMAL,
+    instance: int = 0,
 ) -> MockXDRScenario:
     """Build the insider exfiltration scenario (deterministic under ``seed``)."""
     selected_variant = normalize_variant(variant)
     base = DEFAULT_BASE_TIME
     tenant = DEFAULT_TENANT
-    conn_log = log_only_connector()
-    conn_disp = disposition_connector()
-    conn_gap = capability_gap_connector()
+    id_suffix = f"-i{instance}" if instance else ""
+    connector_suffix = f"-{instance}" if instance else ""
+    incident_id = f"{INCIDENT_ID}{id_suffix}"
+    alert_dlp_id = f"{ALERT_DLP_ID}{id_suffix}"
+    alert_edr_id = f"{ALERT_EDR_ID}{id_suffix}"
+    alert_net_id = f"{ALERT_NET_ID}{id_suffix}"
+    asset_primary_id = f"{ASSET_PRIMARY_ID}{id_suffix}"
+    asset_no_agent_id = f"{ASSET_NO_AGENT_ID}{id_suffix}"
+    asset_offline_id = f"{ASSET_OFFLINE_ID}{id_suffix}"
+    log_dlp_id = f"{LOG_DLP_ID}{id_suffix}"
+    log_edr_id = f"{LOG_EDR_ID}{id_suffix}"
+    log_net_id = f"{LOG_NET_ID}{id_suffix}"
+    conn_log = log_only_connector(connector_id=f"conn-log-only{connector_suffix}")
+    conn_disp = disposition_connector(connector_id=f"conn-disposition{connector_suffix}")
+    conn_gap = capability_gap_connector(connector_id=f"conn-capability-gap{connector_suffix}")
 
     asset_primary_ref = make_ref(
         SourceObjectKind.ASSET,
-        ASSET_PRIMARY_ID,
+        asset_primary_id,
         connector_id=conn_disp.connector_id,
         status_raw="managed",
         updated_at=base,
@@ -70,14 +83,14 @@ def build_insider_data_exfiltration(
     )
     asset_no_agent_ref = make_ref(
         SourceObjectKind.ASSET,
-        ASSET_NO_AGENT_ID,
+        asset_no_agent_id,
         connector_id=conn_disp.connector_id,
         status_raw="unmanaged",
         updated_at=base,
     )
     asset_offline_ref = make_ref(
         SourceObjectKind.ASSET,
-        ASSET_OFFLINE_ID,
+        asset_offline_id,
         connector_id=conn_disp.connector_id,
         status_raw="offline",
         updated_at=base,
@@ -126,25 +139,25 @@ def build_insider_data_exfiltration(
 
     log_dlp_ref = make_ref(
         SourceObjectKind.LOG,
-        LOG_DLP_ID,
+        log_dlp_id,
         connector_id=conn_log.connector_id,
-        parent=ALERT_DLP_ID,
+        parent=alert_dlp_id,
         status_raw="indexed",
         updated_at=base,
     )
     log_edr_ref = make_ref(
         SourceObjectKind.LOG,
-        LOG_EDR_ID,
+        log_edr_id,
         connector_id=conn_disp.connector_id,
-        parent=ALERT_EDR_ID,
+        parent=alert_edr_id,
         status_raw="indexed",
         updated_at=base,
     )
     log_net_ref = make_ref(
         SourceObjectKind.LOG,
-        LOG_NET_ID,
+        log_net_id,
         connector_id=conn_log.connector_id,
-        parent=ALERT_NET_ID,
+        parent=alert_net_id,
         status_raw="indexed",
         updated_at=base,
     )
@@ -181,7 +194,7 @@ def build_insider_data_exfiltration(
 
     alert_dlp_ref = make_ref(
         SourceObjectKind.ALERT,
-        ALERT_DLP_ID,
+        alert_dlp_id,
         connector_id=conn_disp.connector_id,
         status_raw="open",
         updated_at=base,
@@ -189,7 +202,7 @@ def build_insider_data_exfiltration(
     )
     alert_edr_ref = make_ref(
         SourceObjectKind.ALERT,
-        ALERT_EDR_ID,
+        alert_edr_id,
         connector_id=conn_disp.connector_id,
         status_raw="open",
         updated_at=base,
@@ -197,7 +210,7 @@ def build_insider_data_exfiltration(
     )
     alert_net_ref = make_ref(
         SourceObjectKind.ALERT,
-        ALERT_NET_ID,
+        alert_net_id,
         connector_id=conn_disp.connector_id,
         status_raw="open",
         updated_at=base,
@@ -206,7 +219,7 @@ def build_insider_data_exfiltration(
 
     incident_ref = make_ref(
         SourceObjectKind.INCIDENT,
-        INCIDENT_ID,
+        incident_id,
         connector_id=conn_disp.connector_id,
         status_raw="investigating",
         updated_at=base,
@@ -271,11 +284,12 @@ def build_insider_data_exfiltration(
             "dst_ip": EXFIL_IP,
             "domain": EXFIL_DOMAIN,
             "risk_score": 92,
+            "scenario": SCENARIO_ID,
         },
     )
 
     timeline = telemetry_for_variant(
-        _build_timeline(base=base, seed=seed),
+        _build_timeline(base=base, seed=seed, instance=instance),
         variant=selected_variant,
     )
     ticks = [
@@ -283,7 +297,7 @@ def build_insider_data_exfiltration(
             offset_seconds=3600,
             operation=TickOperation.UPSERT,
             object_type="alert",
-            object_id=ALERT_DLP_ID,
+            object_id=alert_dlp_id,
             patch={"reference": {"source_status_raw": "in_progress"}},
         ),
         # Disposition connector starts ONLINE; degrade later to exercise the edge.
@@ -333,8 +347,9 @@ def build_insider_data_exfiltration(
     )
 
 
-def _build_timeline(*, base: datetime, seed: int) -> list[dict[str, Any]]:
+def _build_timeline(*, base: datetime, seed: int, instance: int = 0) -> list[dict[str, Any]]:
     """≥20 key events spanning identity/endpoint/dlp/network/dns/asset/ti."""
+    id_suffix = f"-i{instance}" if instance else ""
     rows: list[dict[str, Any]] = []
     # Background identity noise for other users — zhangsan has NO successful login.
     rows.append(
@@ -593,4 +608,9 @@ def _build_timeline(*, base: datetime, seed: int) -> list[dict[str, Any]]:
             is_key_event=True,
         )
     )
+    if id_suffix:
+        for row in rows:
+            record_id = row.get("record_id")
+            if isinstance(record_id, str) and not record_id.endswith(id_suffix):
+                row["record_id"] = f"{record_id}{id_suffix}"
     return rows

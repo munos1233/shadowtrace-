@@ -11,7 +11,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from app.core.config import Settings, TaskMode, is_mock_disposition_mode, is_mock_source_mode
+from app.core.config import (
+    Settings,
+    TaskMode,
+    is_mock_disposition_mode,
+    is_mock_source_mode,
+    live_reasoning_card_enabled,
+)
 from app.core.errors import ConfigurationError
 from tests.test_support.production_settings import production_settings_kwargs
 
@@ -131,6 +137,18 @@ def test_staging_env_is_not_subject_to_production_gate() -> None:
         SIMULATION_ENABLED=True,
     )
     assert settings.production_fail_closed_violations() == []
+
+
+def test_llm_thinking_type_defaults_empty_and_accepts_disabled() -> None:
+    settings = Settings(APP_ENV="development")
+    assert settings.llm_thinking_type == ""
+    disabled = Settings(APP_ENV="development", LLM_THINKING_TYPE="Disabled")
+    assert disabled.llm_thinking_type == "disabled"
+
+
+def test_llm_thinking_type_rejects_unknown_values() -> None:
+    with pytest.raises(PydanticValidationError):
+        Settings(APP_ENV="development", LLM_THINKING_TYPE="reasoner")
 
 
 def test_event_chat_can_be_disabled_independently() -> None:
@@ -365,3 +383,14 @@ def test_auto_response_rejects_not_mock_disposition_mode_at_construction() -> No
             TOOL_MODE="mock",
             DISPOSITION_MODE="not_mock",
         )
+
+
+def test_live_reasoning_card_enabled_by_llm_required_or_card_name() -> None:
+    assert live_reasoning_card_enabled(Settings(LLM_REQUIRED=False)) is False
+    assert live_reasoning_card_enabled(Settings(LLM_REQUIRED=True)) is True
+    assert (
+        live_reasoning_card_enabled(
+            Settings(LLM_REQUIRED=False, CERTIFICATION_CARD="live_reasoning")
+        )
+        is True
+    )

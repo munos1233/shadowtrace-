@@ -67,7 +67,7 @@ if [[ -z "${beat_id}" ]]; then
   echo "[smoke-demo] ERROR: scheduler-beat container not found" >&2
   exit 1
 fi
-if ! docker exec "${beat_id}" pgrep -f 'celery.*beat' >/dev/null; then
+if ! docker exec "${beat_id}" sh -c 'test -f /tmp/celerybeat.pid && kill -0 "$(cat /tmp/celerybeat.pid)"'; then
   echo "[smoke-demo] ERROR: scheduler-beat process not running" >&2
   exit 1
 fi

@@ -17,10 +17,12 @@ from uuid import uuid4
 import pytest
 
 from app.core.llm.base import (
+    InMemoryLLMCallAuditRecorder,
     LLMMessage,
     LLMProviderError,
     LLMResponse,
 )
+from app.core.llm.mock_client import MockLLMClient
 from app.models.agent_io import (
     StorylineGeneratedBy,
     StorylinePhaseName,
@@ -29,7 +31,6 @@ from app.models.ids import new_evidence_id
 from app.services.storyline_service import (
     StorylineService,
     _bucket_evidence,
-    _parse_ts,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -50,6 +51,7 @@ def _make_event_context(
     techniques: list[dict[str, Any]] | None = None,
     graph_paths: list[list[str]] | None = None,
     central_entities: list[str] | None = None,
+    scenario_id: str | None = None,
 ) -> dict[str, Any]:
     ctx: dict[str, Any] = {"event": {"event_id": event_id}}
     if evidence_list is not None:
@@ -61,6 +63,8 @@ def _make_event_context(
             "attack_path_candidates": graph_paths or [],
             "central_entities": central_entities or [],
         }
+    if scenario_id:
+        ctx["source_snapshot"] = {"normalized": {"scenario": scenario_id}}
     return ctx
 
 
@@ -113,7 +117,7 @@ def _main_scenario_evidence(event_id: str = "evt-sl-001") -> list[dict[str, Any]
         _make_evidence(
             source="dns",
             evidence_type="dns_query",
-            description="DNS 解析 cloud-storage.example.com 到 203.0.113.88",
+            description="DNS 解析 unknown-upload-example.com 到 203.0.113.88",
             timestamp=base + timedelta(minutes=4),
         ),
     ]
@@ -171,59 +175,15 @@ class _FailingStorylineWorkingMemory(_FakeWorkingMemory):
         await super().write(event_id, key, value)
 
 
-def _extract_evidence_from_messages(messages: list[LLMMessage]) -> list[dict[str, Any]]:
-    for msg in messages:
-        if msg.role != "user":
-            continue
-        marker = "Context:\n"
-        if marker not in msg.content:
-            continue
-        payload = json.loads(msg.content.split(marker, 1)[1])
-        evidence = payload.get("evidence")
-        if isinstance(evidence, list):
-            return [e for e in evidence if isinstance(e, dict)]
-    return []
+def _production_mock_llm() -> MockLLMClient:
+    return MockLLMClient(audit_recorder=InMemoryLLMCallAuditRecorder())
 
 
-def _inject_golden_evidence_ids(
-    content: dict[str, Any],
-    evidence_list: list[dict[str, Any]],
-) -> None:
-    """Assign input evidence_ids to golden entries by closest timestamp."""
-    if not evidence_list:
-        return
-    used: set[str] = set()
-    for phase in content.get("phases") or []:
-        if not isinstance(phase, dict):
-            continue
-        for entry in phase.get("entries") or []:
-            if not isinstance(entry, dict):
-                continue
-            entry_ts = _parse_ts(entry.get("timestamp"))
-            if entry_ts is None:
-                continue
-            best_id = ""
-            best_delta: float | None = None
-            for ev in evidence_list:
-                eid = str(ev.get("evidence_id", ""))
-                if not eid or eid in used:
-                    continue
-                ev_ts = _parse_ts(ev.get("timestamp"))
-                if ev_ts is None:
-                    continue
-                delta = abs((ev_ts - entry_ts).total_seconds())
-                if best_delta is None or delta < best_delta:
-                    best_delta = delta
-                    best_id = eid
-            if best_id:
-                entry["evidence_id"] = best_id
-                used.add(best_id)
-
-
-class _GoldenLLMClient:
-    """Returns the storyline_generate golden response."""
+class _UnboundGoldenLLMClient:
+    """Anti-cheat: emit the golden without production evidence_id binding."""
 
     async def chat(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        del messages
         prompt_key = kwargs.get("prompt_key", "")
         if prompt_key != "storyline_generate":
             raise LLMProviderError("unknown prompt_key")
@@ -233,9 +193,6 @@ class _GoldenLLMClient:
         ) as fh:
             data = json.loads(fh.read())
         content = data["content"]
-        if isinstance(content, dict):
-            evidence_list = _extract_evidence_from_messages(messages)
-            _inject_golden_evidence_ids(content, evidence_list)
         content_str = json.dumps(content) if isinstance(content, dict) else str(content)
         return LLMResponse(
             content=content_str,
@@ -434,17 +391,20 @@ async def test_storyline_id_format() -> None:
 
 
 async def test_llm_path_golden_response() -> None:
-    """LLM path produces storyline from golden response."""
+    """Production MockLLM binds catalog ids and adopts the insider golden."""
     evidence_list = _main_scenario_evidence()
     ctx = _make_event_context(
         evidence_list=evidence_list,
         techniques=_main_techniques(),
         graph_paths=[["node-a", "node-b", "node-c"]],
         central_entities=["zhangsan", "PC-FIN-023"],
+        scenario_id="insider_data_exfiltration",
     )
 
-    llm_client = _GoldenLLMClient()
-    svc = StorylineService(llm_client=llm_client, working_memory=_FakeWorkingMemory())
+    svc = StorylineService(
+        llm_client=_production_mock_llm(),
+        working_memory=_FakeWorkingMemory(),
+    )
     storyline = await svc.generate(ctx)
 
     assert storyline.generated_by == StorylineGeneratedBy.LLM
@@ -454,7 +414,7 @@ async def test_llm_path_golden_response() -> None:
 
 
 async def test_llm_path_evidence_backlinks() -> None:
-    """LLM path: every TimelineEntry.evidence_id references input evidence."""
+    """Production MockLLM path: every TimelineEntry.evidence_id is from input."""
     evidence_list = _main_scenario_evidence()
     valid_ids = {e["evidence_id"] for e in evidence_list}
     ctx = _make_event_context(
@@ -462,15 +422,38 @@ async def test_llm_path_evidence_backlinks() -> None:
         techniques=_main_techniques(),
         graph_paths=[["node-a", "node-b", "node-c"]],
         central_entities=["zhangsan", "PC-FIN-023"],
+        scenario_id="insider_data_exfiltration",
     )
 
-    svc = StorylineService(llm_client=_GoldenLLMClient(), working_memory=_FakeWorkingMemory())
+    svc = StorylineService(
+        llm_client=_production_mock_llm(),
+        working_memory=_FakeWorkingMemory(),
+    )
     storyline = await svc.generate(ctx)
 
     assert storyline.generated_by == StorylineGeneratedBy.LLM
     for phase in storyline.phases:
         for entry in phase.entries:
             assert entry.evidence_id in valid_ids, f"evidence_id {entry.evidence_id} not in input"
+
+
+async def test_unbound_golden_is_not_adopted_as_llm() -> None:
+    """Anti-cheat: goldens without bound evidence_id must not stamp generated_by=llm."""
+    evidence_list = _main_scenario_evidence()
+    ctx = _make_event_context(
+        evidence_list=evidence_list,
+        techniques=_main_techniques(),
+        scenario_id="insider_data_exfiltration",
+    )
+    wm = _FakeWorkingMemory()
+    svc = StorylineService(llm_client=_UnboundGoldenLLMClient(), working_memory=wm)
+    storyline = await svc.generate(ctx)
+
+    assert storyline.generated_by == StorylineGeneratedBy.RULE
+    assert svc.last_degraded_reason == "storyline_unbound_evidence"
+    degraded = await wm.read("evt-sl-001", "storyline_degraded")
+    assert degraded is not None
+    assert degraded["reason"] == "storyline_unbound_evidence"
 
 
 async def test_llm_path_falls_back_to_rule() -> None:
@@ -595,3 +578,28 @@ async def test_generate_attaches_claim_refs_v2() -> None:
     assert storyline.grounding_status is StorylineGroundingStatus.EVIDENCE_GROUNDED
     assert len(storyline.claim_refs) >= 1
     assert all(ref.evidence_ids for ref in storyline.claim_refs)
+
+
+class _CaptureMaxTokensLLM:
+    def __init__(self) -> None:
+        self.max_tokens: int | None = None
+
+    async def chat(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        del messages
+        self.max_tokens = kwargs.get("max_tokens")
+        raise LLMProviderError("stop after capturing max_tokens")
+
+
+async def test_storyline_llm_budget_is_injected_4096_not_hardcoded_2048() -> None:
+    from app.core.config import Settings
+
+    assert Settings().llm_storyline_max_tokens == 4096
+    capture = _CaptureMaxTokensLLM()
+    svc = StorylineService(
+        llm_client=capture,
+        working_memory=_FakeWorkingMemory(),
+        max_tokens=4096,
+    )
+    ctx = _make_event_context(evidence_list=_main_scenario_evidence())
+    await svc.generate(ctx)
+    assert capture.max_tokens == 4096

@@ -998,7 +998,13 @@ class StateMachineService:
         row: orm.SecurityEvent,
         fail: Any,
     ) -> None:
-        """Persist side-effect convergence summary and background flags (ISSUE-302)."""
+        """Rebuild side-effect flags from PostgreSQL; do not stuff EventContext.
+
+        GET /events already live-rebuilds counts via
+        ``_load_side_effect_convergence_fields``. ``EventContext`` has no
+        ``side_effect_convergence`` field (ISSUE-002); ``convergence_state``
+        belongs to ConvergenceGuard and must not be reused.
+        """
         try:
             async with self._session_factory() as session:
                 current_revision = await session.scalar(
@@ -1013,17 +1019,8 @@ class StateMachineService:
                     disposition_policy=DispositionPolicy(row.disposition_policy),
                 )
         except Exception as exc:  # noqa: BLE001
-            fail("side_effect_convergence", "returned_degraded", exc)
+            fail("side_effect_convergence", "raised", exc)
             return
-
-        try:
-            await self._store.set(
-                event_id,
-                "side_effect_convergence",
-                summary.model_dump(mode="json"),
-            )
-        except Exception as exc:  # noqa: BLE001
-            fail("side_effect_convergence", "returned_degraded", exc)
 
         if summary.background_side_effects_pending and self._degraded is not None:
             try:

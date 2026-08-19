@@ -65,6 +65,7 @@ def get_llm_client(
             budget_callback=budget_callback,
             budget_service=budget_service,
             message_budgeter=message_budgeter,
+            thinking_type=config.llm_thinking_type or None,
         )
     if mode == "custom":
         if custom_factory is None:

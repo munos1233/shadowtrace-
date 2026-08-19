@@ -102,7 +102,14 @@ def build_response_plan_messages(
         "update_source_event_disposition — the server appends deferred writeback "
         "actions when required. Prefer lower-risk actions first. "
         "When risk_severity is high or risk_score >= 65, plan containment for "
-        "EntitySet hosts/accounts even if triage severity is medium.\n"
+        "EntitySet hosts/accounts even if triage severity is medium. "
+        "Coverage contract (ISSUE-328, not domain): for each EntitySet account "
+        "propose disable_account; for each host propose isolate_host; for each "
+        "external destination IP propose block_ip. Do not omit a covered entity "
+        "and do not wait for the server to merge rule fallback. "
+        "Domain containment (not ISSUE-328): for each EntitySet domain used as "
+        "an exfil or C2 destination propose block_domain. The server does not "
+        "inject missing domain tools; omitting them is not LLM adoption.\n"
         "block_ip policy (ISSUE-361): use block_ip only for external exfiltration "
         "or C2 destination IPs (entities whose attributes.normalized_field is "
         "dst_ip). Do not block VPN egress or other source IPs (src_ip, source_ip) — "
@@ -113,7 +120,11 @@ def build_response_plan_messages(
         "external exfil/C2 destinations and malicious domains.\n"
         "For the same account, do not stack disable_account with force_logout, "
         "reset_password, or revoke_token — pick disable_account. The server "
-        "collapses redundant identity tools on the same account."
+        "collapses redundant identity tools on the same account. "
+        "When final_verdict is none or false_positive and risk_severity is "
+        "below high and risk_score < 65, do not propose isolate_host or "
+        "disable_account. Prefer block_domain, notify_security_team, "
+        "create_ticket, and scan_host_for_virus."
     )
     verdict: FinalVerdict | None = None
     if final_verdict is not None:

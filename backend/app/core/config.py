@@ -146,6 +146,26 @@ class Settings(BaseSettings):
     llm_primary_model: str = Field(default="mock-model", alias="LLM_PRIMARY_MODEL")
     llm_fallback_models: str = Field(default="", alias="LLM_FALLBACK_MODELS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
+    llm_storyline_max_tokens: int = Field(
+        default=4096,
+        ge=256,
+        le=8192,
+        alias="LLM_STORYLINE_MAX_TOKENS",
+        description=(
+            "Completion budget for storyline_generate. Insider storylines "
+            "routinely need more than 2048 tokens; 4096 is the live default "
+            "and stays at or below the structured-output cap of 8192."
+        ),
+    )
+    llm_thinking_type: str = Field(
+        default="",
+        alias="LLM_THINKING_TYPE",
+        description=(
+            "Optional OpenAI-compatible chat-completions extension. Empty omits "
+            "the field (OpenAI/Azure). ``disabled`` stops glm-class models from "
+            "spending max_tokens on reasoning_content and returning empty JSON."
+        ),
+    )
     structured_prompt_fast_fail: bool = Field(
         default=False,
         alias="STRUCTURED_PROMPT_FAST_FAIL",
@@ -160,6 +180,15 @@ class Settings(BaseSettings):
     llm_probe_ttl_seconds: int = Field(default=60, alias="LLM_PROBE_TTL_SECONDS")
     llm_probe_method: str = Field(default="chat", alias="LLM_PROBE_METHOD")
     llm_required: bool = Field(default=False, alias="LLM_REQUIRED")
+    certification_card: str = Field(
+        default="",
+        alias="CERTIFICATION_CARD",
+        description=(
+            "Optional certification profile. ``live_reasoning`` treats empty "
+            "LLM response_plan candidates as llm failed (same as timeout). "
+            "Production SOC keeps the default empty / fail-open degradation."
+        ),
+    )
     triage_llm_event_type_fallback: bool = Field(
         default=False,
         alias="TRIAGE_LLM_EVENT_TYPE_FALLBACK",
@@ -204,6 +233,14 @@ class Settings(BaseSettings):
         normalized = str(value or "chat").strip().lower()
         if normalized not in {"chat", "models"}:
             raise ValueError("LLM_PROBE_METHOD must be 'chat' or 'models'")
+        return normalized
+
+    @field_validator("llm_thinking_type", mode="before")
+    @classmethod
+    def validate_llm_thinking_type(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"", "disabled", "enabled", "auto"}:
+            raise ValueError("LLM_THINKING_TYPE must be empty, 'disabled', 'enabled', or 'auto'")
         return normalized
 
     @field_validator("decision_rationale_mode", mode="before")
@@ -770,3 +807,10 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return cached Settings singleton for FastAPI dependency injection."""
     return Settings()
+
+
+def live_reasoning_card_enabled(settings: Settings | None = None) -> bool:
+    """True when Live reasoning certification must treat empty LLM plans as failed."""
+    cfg = settings or get_settings()
+    card = (cfg.certification_card or "").strip().lower()
+    return bool(cfg.llm_required) or card == "live_reasoning"

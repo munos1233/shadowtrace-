@@ -589,7 +589,41 @@ async def test_response_agent_decision_record_summary_is_bounded_structured(
     assert row is not None
     assert "strategy must not" not in row.decision_summary
     assert "actions=1" in row.decision_summary
+    assert "strategy=" not in (row.decision_summary or "")
     assert row.rule_version is None
+
+
+@pytest.mark.asyncio
+async def test_response_agent_decision_record_surfaces_allowlisted_gate_tokens(
+    service: DecisionRecordService,
+) -> None:
+    event_id = _event_id()
+    prose = "This free-text strategy must not become decision_summary"
+    record_id = await service.persist_from_agent_trace(
+        event_id=event_id,
+        agent_name="response_agent",
+        trace_id="trc-resp-gates",
+        input_data={"event_id": event_id},
+        output_data={
+            "plan_id": "plan-resp-gates",
+            "generated_by": "llm",
+            "strategy_summary": f"{prose}; containment_quality_gate: entity_coverage_merge",
+            "actions": [
+                {
+                    "action_id": "act-resp-gates",
+                    "action_name": "isolate host",
+                    "tool_name": "isolate_host",
+                }
+            ],
+        },
+    )
+    assert record_id is not None
+    row = await service.get_by_trace_ref("trc-resp-gates")
+    assert row is not None
+    assert "gates=entity_coverage_merge" in (row.decision_summary or "")
+    assert "generated_by=llm" in (row.decision_summary or "")
+    assert prose not in (row.decision_summary or "")
+    assert "strategy=" not in (row.decision_summary or "")
 
 
 @pytest.mark.asyncio

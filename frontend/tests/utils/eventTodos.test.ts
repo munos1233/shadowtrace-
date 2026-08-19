@@ -153,6 +153,7 @@ describe("eventTodos", () => {
         status: "unknown",
         confirmation_evidence: null,
         evidence_tier: null,
+        simulated: false,
         provider_code: null,
         message_code: null,
         target_results: [],
