@@ -263,7 +263,7 @@ Matrix 在容器内通过 `docker compose exec backend` 访问 `http://127.0.0.1
 ### 两张认证卡（ISSUE-350）
 
 - **管道卡（Mock / `--require-closed`）**：CLOSED + 报告壳 + 条件写回。LLM 可降级。CI `backend-closure-gates-mock`。绿 ≠ Agent 会研判。
-- **研判卡（Live / `--require-llm-quality`）**：按 `event_id` 查 `llm_call_log` 核心 prompt；全 timeout = FAIL。`generated_by=template` 对外泄 `confirmed_threat` = FAIL。禁止用 `/health` 60 分钟 `success_rate` 冒充本事件结论。接到 nightly / 发布 checklist，**不是**每个 PR。
+- **研判卡（Live / `--require-llm-quality`）**：按 `event_id` 查 `llm_call_log` 核心 prompt；全 timeout = FAIL。`generated_by=template` 对外泄 `confirmed_threat` = FAIL。禁止用 `/health` 60 分钟 `success_rate` 冒充本事件结论。接到 nightly / 发布 checklist，**不是**每个 PR。`--analysis-only` 路径不跑 ResponseAgent，核心 prompt 不含 `response_plan`，仍要求 triage/plan/risk 成功以及 `report_generate` 非 `incomplete_placeholder` / `degraded_template`。金标外泄的 storyline 采纳 / report complete 闸门不变。`LLM_STORYLINE_MAX_TOKENS` 默认 4096（不要把 GET `/timeline` 404 涂成 200）。
 
 发布话术只允许在研判卡绿时说「Agent 会研判」。
 

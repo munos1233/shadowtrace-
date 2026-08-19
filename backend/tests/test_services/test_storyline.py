@@ -578,3 +578,28 @@ async def test_generate_attaches_claim_refs_v2() -> None:
     assert storyline.grounding_status is StorylineGroundingStatus.EVIDENCE_GROUNDED
     assert len(storyline.claim_refs) >= 1
     assert all(ref.evidence_ids for ref in storyline.claim_refs)
+
+
+class _CaptureMaxTokensLLM:
+    def __init__(self) -> None:
+        self.max_tokens: int | None = None
+
+    async def chat(self, messages: list[LLMMessage], **kwargs: Any) -> LLMResponse:
+        del messages
+        self.max_tokens = kwargs.get("max_tokens")
+        raise LLMProviderError("stop after capturing max_tokens")
+
+
+async def test_storyline_llm_budget_is_injected_4096_not_hardcoded_2048() -> None:
+    from app.core.config import Settings
+
+    assert Settings().llm_storyline_max_tokens == 4096
+    capture = _CaptureMaxTokensLLM()
+    svc = StorylineService(
+        llm_client=capture,
+        working_memory=_FakeWorkingMemory(),
+        max_tokens=4096,
+    )
+    ctx = _make_event_context(evidence_list=_main_scenario_evidence())
+    await svc.generate(ctx)
+    assert capture.max_tokens == 4096

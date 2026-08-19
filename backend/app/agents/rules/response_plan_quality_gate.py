@@ -616,6 +616,44 @@ def requires_threat_aligned_containment(
     return int(risk_assessment.risk_score) >= RISK_CONTAINMENT_THRESHOLD
 
 
+_UNCONFIRMED_HIGH_BLAST_TOOLS = frozenset({"isolate_host", "disable_account"})
+
+
+def demote_unconfirmed_high_blast_actions(
+    *,
+    candidates: list[_CandidateT],
+    generated_by: ResponsePlanGeneratedBy,
+    strategy: str,
+    final_verdict: FinalVerdict | str | None,
+) -> tuple[list[_CandidateT], ResponsePlanGeneratedBy, str]:
+    """Drop isolate/disable when the verdict is unconfirmed and containment is not required.
+
+    Default playbooks for ``suspicious_domain`` MEDIUM are ``block_domain`` + ticket.
+    The containment *injection* gate already skips ``none`` + MEDIUM + score<70;
+    this demotes LLM overreach without injecting rule tools and without flipping
+    ``generated_by`` to template.
+    """
+
+    verdict: FinalVerdict | None = None
+    if final_verdict is not None:
+        try:
+            verdict = (
+                final_verdict
+                if isinstance(final_verdict, FinalVerdict)
+                else FinalVerdict(str(final_verdict))
+            )
+        except ValueError:
+            verdict = None
+    if verdict not in {FinalVerdict.NONE, FinalVerdict.FALSE_POSITIVE}:
+        return candidates, generated_by, strategy
+    kept = [item for item in candidates if item.tool_name not in _UNCONFIRMED_HIGH_BLAST_TOOLS]
+    if len(kept) == len(candidates):
+        return candidates, generated_by, strategy
+    note = "unconfirmed_verdict_blast_radius_demote"
+    strategy = f"{strategy}; {note}" if strategy else note
+    return kept, generated_by, strategy
+
+
 def deduplicate_identity_containment(
     candidates: list[_CandidateT],
 ) -> tuple[list[_CandidateT], bool]:
@@ -770,7 +808,12 @@ def apply_containment_quality_gate(
         disposition_only=disposition_only,
         evidence_output=evidence_output,
     ):
-        return candidates, generated_by, strategy
+        return demote_unconfirmed_high_blast_actions(
+            candidates=candidates,
+            generated_by=generated_by,
+            strategy=strategy,
+            final_verdict=final_verdict,
+        )
 
     had_containment = bool(_containment_candidates(candidates))
     if not had_containment:
@@ -844,6 +887,7 @@ __all__ = [
     "apply_exfil_domain_containment_gate",
     "apply_identity_containment_dedup_gate",
     "deduplicate_identity_containment",
+    "demote_unconfirmed_high_blast_actions",
     "entity_containment_coverage_needs",
     "exfil_domain_containment_needs",
     "evidence_blocks_high_impact_actions",

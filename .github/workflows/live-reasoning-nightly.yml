@@ -68,6 +68,7 @@ jobs:
             echo "LLM_PRIMARY_MODEL=${LLM_PRIMARY_MODEL}"
             echo "CERTIFICATION_CARD=live_reasoning"
             echo "LLM_TIMEOUT_SECONDS=90"
+            echo "LLM_STORYLINE_MAX_TOKENS=4096"
             echo "LLM_THINKING_TYPE=disabled"
           } > .env.live
 

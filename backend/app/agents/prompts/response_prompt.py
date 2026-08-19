@@ -120,7 +120,11 @@ def build_response_plan_messages(
         "external exfil/C2 destinations and malicious domains.\n"
         "For the same account, do not stack disable_account with force_logout, "
         "reset_password, or revoke_token — pick disable_account. The server "
-        "collapses redundant identity tools on the same account."
+        "collapses redundant identity tools on the same account. "
+        "When final_verdict is none or false_positive and risk_severity is "
+        "below high and risk_score < 65, do not propose isolate_host or "
+        "disable_account. Prefer block_domain, notify_security_team, "
+        "create_ticket, and scan_host_for_virus."
     )
     verdict: FinalVerdict | None = None
     if final_verdict is not None:

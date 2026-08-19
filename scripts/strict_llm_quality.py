@@ -20,6 +20,19 @@ CORE_PROMPT_KEYS = (
     "risk_score",
     "response_plan",
 )
+ANALYSIS_ONLY_CORE_PROMPT_KEYS = (
+    "triage_extract",
+    "plan_generate",
+    "risk_score",
+)
+
+
+def core_prompt_keys_for(*, analysis_only: bool) -> tuple[str, ...]:
+    """Full-loop requires response_plan; analysis-only never runs ResponseAgent."""
+
+    if analysis_only:
+        return ANALYSIS_ONLY_CORE_PROMPT_KEYS
+    return CORE_PROMPT_KEYS
 
 _EXFIL_EVENT_TYPES = frozenset({"data_exfiltration", "insider_threat"})
 _EXFIL_SCENARIOS = frozenset(
@@ -197,9 +210,11 @@ def evaluate_llm_quality(
     storyline_phase_count: int = 0,
     report_quality: str | None = None,
     response_plan_strategy: str | None = None,
+    analysis_only: bool = False,
 ) -> dict[str, Any]:
     """Return a quality summary or raise RuntimeError when the Live card fails."""
-    by_prompt: dict[str, list[dict[str, Any]]] = {key: [] for key in CORE_PROMPT_KEYS}
+    core_keys = core_prompt_keys_for(analysis_only=analysis_only)
+    by_prompt: dict[str, list[dict[str, Any]]] = {key: [] for key in core_keys}
     for call in llm_calls:
         key = str(call.get("prompt_key") or "")
         if key in by_prompt:
@@ -225,12 +240,13 @@ def evaluate_llm_quality(
         for key, rows in by_prompt.items()
         if rows
     )
-    failed_keys = [key for key in CORE_PROMPT_KEYS if not successes[key]]
+    failed_keys = [key for key in core_keys if not successes[key]]
 
     summary = {
         "event_id": event_id,
         "certification_card": "live_reasoning",
-        "core_prompt_keys": list(CORE_PROMPT_KEYS),
+        "core_prompt_keys": list(core_keys),
+        "analysis_only": bool(analysis_only),
         "missing_core_prompts": missing,
         "failed_core_prompts": failed_keys,
         "all_core_timeout": all_timeout,
@@ -258,6 +274,26 @@ def evaluate_llm_quality(
             f"{event_id} missing={missing} failed={failed_keys} "
             f"all_timeout={all_timeout} (do not use GET /health success_rate)"
         )
+
+    if analysis_only:
+        report_successes = [
+            row
+            for row in llm_calls
+            if str(row.get("prompt_key") or "") == "report_generate"
+            and str(row.get("status") or "") == "success"
+        ]
+        quality = (report_quality or "").strip().lower()
+        if not report_successes:
+            raise RuntimeError(
+                "live reasoning card FAIL: report_generate did not succeed on "
+                f"analysis-only event {event_id}"
+            )
+        if quality in {"incomplete_placeholder", "degraded_template"}:
+            raise RuntimeError(
+                "live reasoning card FAIL: report_quality="
+                f"{report_quality!r} on analysis-only event {event_id}; "
+                "incomplete_placeholder/degraded_template is not Live reasoning success"
+            )
 
     exfil_like = (event_type or "") in _EXFIL_EVENT_TYPES or (scenario_id or "") in _EXFIL_SCENARIOS
     generated_by = (response_plan_generated_by or "").strip().lower()
@@ -386,15 +422,29 @@ def _load_report_quality(client: DynamicEvalClient, event_id: str) -> str | None
     return quality.strip() if isinstance(quality, str) and quality.strip() else None
 
 
+def _analysis_only_complete(payload: dict[str, Any], event: dict[str, Any]) -> bool:
+    """Read the EventDetail wrapper *and* the inner event (ISSUE-313)."""
+
+    if payload.get("analysis_only_complete") is True:
+        return True
+    if event.get("analysis_only_complete") is True:
+        return True
+    snapshot = event.get("event_context_snapshot")
+    return isinstance(snapshot, dict) and snapshot.get("analysis_only_complete") is True
+
+
 def assert_llm_quality_acceptance(
     client: DynamicEvalClient,
     event_id: str,
+    *,
+    analysis_only: bool = False,
 ) -> dict[str, Any]:
     """Live reasoning card: per-event llm_call_log + template/exfil FAIL."""
     payload = client.get_json(f"/api/v1/events/{event_id}")
     if not isinstance(payload, dict):
         raise DynamicEvalApiError(f"unexpected event detail payload: {payload!r}")
     event = unwrap_event_detail_payload(payload, expected_event_id=event_id)
+    analysis_only = bool(analysis_only or _analysis_only_complete(payload, event))
     trace_entries = _paginate_decision_trace(
         client,
         event_id,
@@ -416,4 +466,5 @@ def assert_llm_quality_acceptance(
         storyline_phase_count=storyline_phase_count,
         report_quality=report_quality,
         response_plan_strategy=strategy,
+        analysis_only=analysis_only,
     )

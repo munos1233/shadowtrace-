@@ -121,6 +121,7 @@ class StorylineService:
         llm_client: Any | None = None,
         working_memory: Any | None = None,
         event_service: Any | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self._llm_client = llm_client
         if working_memory is not None:
@@ -128,7 +129,18 @@ class StorylineService:
         else:
             self._bound_wm = None
         self._event_service = event_service
+        self._max_tokens = max_tokens
         self.last_degraded_reason: str | None = None
+
+    def _storyline_max_tokens(self) -> int:
+        if self._max_tokens is not None:
+            return max(256, int(self._max_tokens))
+        try:
+            from app.core.config import get_settings
+
+            return int(get_settings().llm_storyline_max_tokens)
+        except Exception:
+            return 4096
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -218,7 +230,7 @@ class StorylineService:
             json_mode=True,
             response_model=StorylineLLMResponse,
             timeout=resolve_structured_prompt_timeout("storyline_generate"),
-            max_tokens=2048,
+            max_tokens=self._storyline_max_tokens(),
         )
         import json as _json
 

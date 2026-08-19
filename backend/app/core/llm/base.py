@@ -129,10 +129,14 @@ class LLMInvalidJSONError(LLMError):
         validation_error: str,
         error_class: str = "invalid_json",
         finish_reason: str | None = None,
+        completion_tokens: int | None = None,
+        requested_max_tokens: int | None = None,
     ) -> None:
         self.invalid_content = invalid_content
         self.validation_error = validation_error
         self.finish_reason = finish_reason
+        self.completion_tokens = completion_tokens
+        self.requested_max_tokens = requested_max_tokens
         self.error_class = error_class if error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
         details: dict[str, Any] = {
             "validation_error": validation_error,
@@ -140,6 +144,10 @@ class LLMInvalidJSONError(LLMError):
         }
         if finish_reason:
             details["finish_reason"] = finish_reason
+        if completion_tokens is not None:
+            details["completion_tokens"] = completion_tokens
+        if requested_max_tokens is not None:
+            details["requested_max_tokens"] = requested_max_tokens
         super().__init__(message, details=details)
 
 
@@ -186,7 +194,18 @@ def classify_llm_call_failure(
         error_class = (
             error.error_class if error.error_class in LLM_CALL_ERROR_CLASSES else "invalid_json"
         )
-        detail = error.validation_error or error.message
+        bits: list[str] = []
+        if error.finish_reason:
+            bits.append(f"finish_reason={error.finish_reason}")
+        if error.requested_max_tokens is not None:
+            bits.append(f"max_tokens={error.requested_max_tokens}")
+        if error.completion_tokens is not None:
+            bits.append(f"completion_tokens={error.completion_tokens}")
+        if error.validation_error:
+            bits.append(error.validation_error)
+        elif error.message:
+            bits.append(error.message)
+        detail = "; ".join(bits) or error.message
     elif isinstance(error, LLMTimeoutError) or status == "llm_timeout":
         error_class = "timeout"
         detail = getattr(error, "message", None) or status
@@ -376,6 +395,29 @@ def bump_max_tokens(max_tokens: int, *, cap: int = _STRUCTURED_OUTPUT_MAX_TOKEN_
     safe = max(1, int(max_tokens))
     bumped = max(safe * 2, safe + 512)
     return min(bumped, cap)
+
+
+def looks_like_length_truncation(
+    exc: LLMInvalidJSONError,
+    *,
+    requested_max_tokens: int,
+) -> bool:
+    """Detect truncated JSON even when the provider omits finish_reason=length.
+
+    Ark/glm often returns finish_reason=stop (or omits it) while still filling
+    the completion budget. Repairing that truncated body at the same max_tokens
+    re-truncates. Empty content has its own retry path.
+    """
+
+    if exc.error_class == "empty_content":
+        return False
+    if (exc.finish_reason or "").strip().lower() == "length":
+        return True
+    if exc.error_class != "invalid_json":
+        return False
+    budget = max(1, int(requested_max_tokens))
+    completion = int(exc.completion_tokens or 0)
+    return completion >= budget
 
 
 def ensure_json_mode_messages(messages: Sequence[LLMMessage]) -> list[LLMMessage]:
@@ -629,7 +671,9 @@ class BaseLLMClient(ABC):
                     attempt_max_tokens = bump_max_tokens(attempt_max_tokens)
                     attempt_messages = self._fit_messages([*messages, _EMPTY_CONTENT_RETRY_HINT])
                     continue
-                if truncation_retries > 0 and (exc.finish_reason or "").lower() == "length":
+                if truncation_retries > 0 and looks_like_length_truncation(
+                    exc, requested_max_tokens=attempt_max_tokens
+                ):
                     truncation_retries -= 1
                     attempt_max_tokens = bump_max_tokens(attempt_max_tokens)
                     continue
@@ -737,6 +781,8 @@ class BaseLLMClient(ABC):
                             raw.content,
                             response_model,
                             finish_reason=raw.finish_reason,
+                            completion_tokens=raw.completion_tokens,
+                            requested_max_tokens=max_tokens,
                         )
                         if json_mode
                         else None
@@ -823,6 +869,8 @@ class BaseLLMClient(ABC):
         response_model: type[BaseModel] | None,
         *,
         finish_reason: str | None = None,
+        completion_tokens: int | None = None,
+        requested_max_tokens: int | None = None,
     ) -> BaseModel | None:
         if not content or not content.strip():
             raise LLMInvalidJSONError(
@@ -831,6 +879,8 @@ class BaseLLMClient(ABC):
                 validation_error="empty completion content",
                 error_class="empty_content",
                 finish_reason=finish_reason,
+                completion_tokens=completion_tokens,
+                requested_max_tokens=requested_max_tokens,
             )
         try:
             payload = json.loads(content)
@@ -860,6 +910,8 @@ class BaseLLMClient(ABC):
                 validation_error=validation_error,
                 error_class=error_class,
                 finish_reason=finish_reason,
+                completion_tokens=completion_tokens,
+                requested_max_tokens=requested_max_tokens,
             ) from exc
 
     async def _check_convergence(
@@ -979,6 +1031,7 @@ __all__ = [
     "ensure_json_mode_messages",
     "estimate_tokens",
     "event_llm_unavailable_reason",
+    "looks_like_length_truncation",
     "mark_event_llm_unavailable",
     "sanitize_llm_error_detail",
 ]

@@ -228,7 +228,8 @@ def seed_via_compose(
         if "dirty fixture" in combined:
             raise RuntimeError(
                 "dirty fixture, run down-v or --fresh-volumes "
-                f"(exit={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+                f"(or retry with --instance N+1; exit={proc.returncode}):\n"
+                f"{proc.stdout}\n{proc.stderr}"
             )
         raise RuntimeError(
             "seed_mock_xdr_and_ingest failed "
@@ -1145,7 +1146,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.require_llm_quality:
         quality: dict[str, Any] = {}
         for event_id in event_ids:
-            quality[event_id] = assert_llm_quality_acceptance(client, event_id)
+            quality[event_id] = assert_llm_quality_acceptance(
+                client, event_id, analysis_only=bool(args.analysis_only)
+            )
         result["llm_quality"] = quality
         result["notes"].append(
             "Live reasoning card (ISSUE-350): per-event llm_call_log, not /health window."

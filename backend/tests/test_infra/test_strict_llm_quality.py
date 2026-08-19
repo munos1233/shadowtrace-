@@ -245,6 +245,64 @@ def test_missing_generated_by_on_exfil_confirmed_threat_fails(quality_mod) -> No
         )
 
 
+def test_analysis_only_does_not_require_response_plan(quality_mod) -> None:
+    summary = quality_mod.evaluate_llm_quality(
+        event_id="evt-fp-analysis",
+        event_type="other",
+        final_verdict="false_positive",
+        scenario_id="account_anomaly_fp",
+        response_plan_generated_by=None,
+        llm_calls=[
+            {"prompt_key": "triage_extract", "status": "success", "model_name": "glm-5.2"},
+            {"prompt_key": "plan_generate", "status": "success", "model_name": "glm-5.2"},
+            {"prompt_key": "risk_score", "status": "success", "model_name": "glm-5.2"},
+            {"prompt_key": "report_generate", "status": "success", "model_name": "glm-5.2"},
+        ],
+        report_quality="complete",
+        analysis_only=True,
+    )
+    assert summary["ok"] is True
+    assert "response_plan" not in summary["core_prompt_keys"]
+    assert summary["analysis_only"] is True
+
+
+def test_analysis_only_still_requires_risk_score(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="failed=\\['risk_score'\\]"):
+        quality_mod.evaluate_llm_quality(
+            event_id="evt-fp-missing-risk",
+            event_type="other",
+            final_verdict="false_positive",
+            scenario_id="account_anomaly_fp",
+            response_plan_generated_by=None,
+            llm_calls=[
+                {"prompt_key": "triage_extract", "status": "success", "model_name": "glm-5.2"},
+                {"prompt_key": "plan_generate", "status": "success", "model_name": "glm-5.2"},
+                {"prompt_key": "report_generate", "status": "success", "model_name": "glm-5.2"},
+            ],
+            report_quality="complete",
+            analysis_only=True,
+        )
+
+
+def test_analysis_only_rejects_degraded_report(quality_mod) -> None:
+    with pytest.raises(RuntimeError, match="degraded_template"):
+        quality_mod.evaluate_llm_quality(
+            event_id="evt-fp-degraded-report",
+            event_type="other",
+            final_verdict="false_positive",
+            scenario_id="account_anomaly_fp",
+            response_plan_generated_by=None,
+            llm_calls=[
+                {"prompt_key": "triage_extract", "status": "success", "model_name": "glm-5.2"},
+                {"prompt_key": "plan_generate", "status": "success", "model_name": "glm-5.2"},
+                {"prompt_key": "risk_score", "status": "success", "model_name": "glm-5.2"},
+                {"prompt_key": "report_generate", "status": "success", "model_name": "glm-5.2"},
+            ],
+            report_quality="degraded_template",
+            analysis_only=True,
+        )
+
+
 def test_live_reasoning_nightly_workflow_is_independent_and_fail_closed() -> None:
     workflow = REPO_ROOT / ".github" / "workflows" / "live-reasoning-nightly.yml"
     ci = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -258,6 +316,7 @@ def test_live_reasoning_nightly_workflow_is_independent_and_fail_closed() -> Non
     assert "live-glm-eval" in text
     assert "CERTIFICATION_CARD=live_reasoning" in text
     assert "LLM_TIMEOUT_SECONDS=90" in text
+    assert "LLM_STORYLINE_MAX_TOKENS=4096" in text
     assert "LLM_THINKING_TYPE=disabled" in text
     assert "make up-demo" not in text
     assert "adversarial-closure-gates" not in text

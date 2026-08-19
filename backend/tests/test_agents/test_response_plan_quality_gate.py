@@ -12,6 +12,7 @@ from app.agents.rules.response_plan_quality_gate import (
     apply_exfil_domain_containment_gate,
     apply_identity_containment_dedup_gate,
     deduplicate_identity_containment,
+    demote_unconfirmed_high_blast_actions,
     entity_containment_coverage_needs,
     evidence_blocks_high_impact_actions,
     evidence_insufficiency_reason_code,
@@ -912,3 +913,77 @@ def test_identity_dedup_collapses_disable_and_reset_password() -> None:
 def test_identity_containment_tools_cover_issue_scope() -> None:
     for tool in ("disable_account", "force_logout", "reset_password", "revoke_token"):
         assert tool in IDENTITY_CONTAINMENT_TOOLS
+
+
+def test_unconfirmed_medium_demotes_isolate_and_disable_keeps_block_domain() -> None:
+    entities = EntitySet(
+        accounts=[AccountEntity(entity_id="acct-office", username="office-user")],
+        hosts=[HostEntity(entity_id="host-office", hostname="PC-OFFICE-001")],
+        domains=[DomainEntity(entity_id="dom-1", fqdn="new-cdn.example")],
+    )
+    merged, generated_by, strategy = apply_containment_quality_gate(
+        candidates=[
+            _Candidate("isolate_host", "PC-OFFICE-001"),
+            _Candidate("disable_account", "office-user"),
+            _Candidate("block_domain", "new-cdn.example"),
+            _Candidate("notify_security_team"),
+        ],
+        rule_fallback_candidates=[
+            _Candidate("block_domain", "new-cdn.example"),
+            _Candidate("create_ticket"),
+        ],
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        strategy="LLM proposed isolate and disable",
+        severity=Severity.MEDIUM,
+        risk_assessment=_risk(score=55, severity=Severity.MEDIUM),
+        final_verdict=FinalVerdict.NONE,
+        entities=entities,
+        disposition_only=False,
+    )
+    tools = [item.tool_name for item in merged]
+    assert "isolate_host" not in tools
+    assert "disable_account" not in tools
+    assert "block_domain" in tools
+    assert generated_by is ResponsePlanGeneratedBy.LLM
+    assert "unconfirmed_verdict_blast_radius_demote" in strategy
+
+
+def test_confirmed_threat_keeps_isolate_despite_demote_helper() -> None:
+    entities = EntitySet(
+        accounts=[AccountEntity(entity_id="acct-1", username="zhangsan")],
+        hosts=[HostEntity(entity_id="host-1", hostname="PC-FIN-023")],
+    )
+    merged, generated_by, strategy = apply_containment_quality_gate(
+        candidates=[
+            _Candidate("isolate_host", "PC-FIN-023"),
+            _Candidate("disable_account", "zhangsan"),
+        ],
+        rule_fallback_candidates=[
+            _Candidate("isolate_host", "PC-FIN-023"),
+            _Candidate("disable_account", "zhangsan"),
+        ],
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        strategy="LLM containment",
+        severity=Severity.HIGH,
+        risk_assessment=_risk(),
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+        entities=entities,
+        disposition_only=False,
+    )
+    tools = {item.tool_name for item in merged}
+    assert "isolate_host" in tools
+    assert "disable_account" in tools
+    assert generated_by is ResponsePlanGeneratedBy.LLM
+    assert "unconfirmed_verdict_blast_radius_demote" not in strategy
+
+
+def test_demote_helper_ignores_confirmed_threat() -> None:
+    kept, generated_by, strategy = demote_unconfirmed_high_blast_actions(
+        candidates=[_Candidate("isolate_host", "PC-FIN-023")],
+        generated_by=ResponsePlanGeneratedBy.LLM,
+        strategy="LLM",
+        final_verdict=FinalVerdict.CONFIRMED_THREAT,
+    )
+    assert [item.tool_name for item in kept] == ["isolate_host"]
+    assert generated_by is ResponsePlanGeneratedBy.LLM
+    assert strategy == "LLM"

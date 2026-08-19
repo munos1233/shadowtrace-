@@ -29,6 +29,7 @@ from app.core.llm.base import (
     clear_event_llm_unavailable,
     ensure_json_mode_messages,
     event_llm_unavailable_reason,
+    looks_like_length_truncation,
     mark_event_llm_unavailable,
     sanitize_llm_error_detail,
 )
@@ -461,6 +462,129 @@ async def test_length_truncated_invalid_json_bumps_tokens_before_repair() -> Non
         ("llm_invalid_json", "invalid_json"),
         ("success", None),
     ]
+
+
+def test_looks_like_length_truncation_uses_completion_budget() -> None:
+    truncated = LLMInvalidJSONError(
+        "bad json",
+        invalid_content='{"event_type":"',
+        validation_error="JSONDecodeError: Unterminated string (line 1 column 20)",
+        finish_reason="stop",
+        completion_tokens=128,
+        requested_max_tokens=128,
+    )
+    assert looks_like_length_truncation(truncated, requested_max_tokens=128) is True
+    short = LLMInvalidJSONError(
+        "bad json",
+        invalid_content="{",
+        validation_error="JSONDecodeError: Expecting property name (line 1 column 2)",
+        finish_reason="stop",
+        completion_tokens=4,
+        requested_max_tokens=128,
+    )
+    assert looks_like_length_truncation(short, requested_max_tokens=128) is False
+    empty = LLMInvalidJSONError(
+        "empty",
+        invalid_content="",
+        validation_error="empty completion content",
+        error_class="empty_content",
+        finish_reason="length",
+        completion_tokens=128,
+        requested_max_tokens=128,
+    )
+    assert looks_like_length_truncation(empty, requested_max_tokens=128) is False
+
+
+@pytest.mark.asyncio
+async def test_token_exhausted_invalid_json_bumps_without_finish_reason_length() -> None:
+    """glm/Ark often omit finish_reason=length while filling max_tokens."""
+
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json=_response(
+                    '{"event_type":"host_compromise","confidence":',
+                    model=payload["model"],
+                    completion_tokens=payload["max_tokens"],
+                    finish_reason="stop",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"event_type":"host_compromise","confidence":0.66}',
+                model=payload["model"],
+            ),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        response = await _client(http_client, audit=audit).chat(
+            MESSAGES,
+            event_id="evt-2026-trunc-stop",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+            max_tokens=128,
+            response_model=TriagePayload,
+        )
+
+    assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.66)
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 128
+    assert calls[1]["max_tokens"] == bump_max_tokens(128)
+    assert all("Return corrected JSON only" not in c["messages"][-1]["content"] for c in calls)
+    assert audit.entries[0].error_detail is not None
+    assert "finish_reason=stop" in (audit.entries[0].error_detail or "")
+    assert "max_tokens=128" in (audit.entries[0].error_detail or "")
+    assert "completion_tokens=128" in (audit.entries[0].error_detail or "")
+
+
+@pytest.mark.asyncio
+async def test_short_invalid_json_does_not_count_as_truncation() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json=_response(
+                    "{",
+                    model=payload["model"],
+                    completion_tokens=2,
+                    finish_reason="stop",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=_response(
+                '{"event_type":"host_compromise","confidence":0.66}',
+                model=payload["model"],
+            ),
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        response = await _client(http_client, audit=audit).chat(
+            MESSAGES,
+            event_id="evt-2026-repair-not-trunc",
+            agent_name="TriageAgent",
+            prompt_key="triage_extract",
+            max_tokens=128,
+            response_model=TriagePayload,
+        )
+
+    assert response.parsed == TriagePayload(event_type="host_compromise", confidence=0.66)
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 128
+    assert calls[1]["max_tokens"] == 128
+    assert "Return corrected JSON only" in calls[1]["messages"][-1]["content"]
 
 
 def test_ensure_json_mode_messages_injects_hint_when_missing() -> None:

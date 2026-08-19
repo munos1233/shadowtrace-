@@ -116,8 +116,11 @@ def build_storyline_messages(
         '"tactic":null,"narrative":"...","entries":[{"timestamp":"ISO-8601",'
         '"description":"...","evidence_id":"evd-...","technique_id":null,'
         '"severity_hint":"low|medium|high|critical"}]}]}\n'
-        "Use only evidence_id values present in the context. Omit entries you "
-        "cannot ground. Do not invent storyline_id or event_id. No chain-of-thought."
+        "Use only evidence_id values present in the context. At most one "
+        "entry per evidence_id; do not copy the same evidence_id across "
+        "phases. Keep narrative_summary under 400 characters and each "
+        "entry description to one sentence. Omit entries you cannot ground. "
+        "Do not invent storyline_id or event_id. No chain-of-thought."
     )
     compact_conflicts = [
         item

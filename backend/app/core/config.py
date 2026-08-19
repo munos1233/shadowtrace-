@@ -146,6 +146,17 @@ class Settings(BaseSettings):
     llm_primary_model: str = Field(default="mock-model", alias="LLM_PRIMARY_MODEL")
     llm_fallback_models: str = Field(default="", alias="LLM_FALLBACK_MODELS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
+    llm_storyline_max_tokens: int = Field(
+        default=4096,
+        ge=256,
+        le=8192,
+        alias="LLM_STORYLINE_MAX_TOKENS",
+        description=(
+            "Completion budget for storyline_generate. Insider storylines "
+            "routinely need more than 2048 tokens; 4096 is the live default "
+            "and stays at or below the structured-output cap of 8192."
+        ),
+    )
     llm_thinking_type: str = Field(
         default="",
         alias="LLM_THINKING_TYPE",
