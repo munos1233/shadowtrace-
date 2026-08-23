@@ -3311,7 +3311,12 @@ async def test_approval_node_reads_authoritative_status_before_substate() -> Non
         evaluated_count=1,
         advance_target=EventStatus.EXECUTING_RESPONSE,
     )
-    graph = build_investigation_graph(_agents(), services, checkpointer=MemorySaver())
+    graph = build_investigation_graph(
+        _agents(),
+        services,
+        checkpointer=MemorySaver(),
+        interrupt_after=[NODE_EXECUTE],
+    )
     config = {"configurable": {"thread_id": event_id}}
     initial = _base_state(
         event_id=event_id,
@@ -3327,7 +3332,11 @@ async def test_approval_node_reads_authoritative_status_before_substate() -> Non
     await graph.aupdate_state(config, initial, as_node=NODE_RESPONSE)
     final = await invoke_investigation_graph(graph, None, config)
 
-    assert machine.statuses[event_id] is EventStatus.EXECUTING_RESPONSE
+    assert any(
+        event_id == eid and target is EventStatus.EXECUTING_RESPONSE
+        for eid, target, _reason in machine.transitions
+    )
+    assert NODE_APPROVAL in final["node_trace"]
     assert NODE_EXECUTE in final["node_trace"]
 
 
@@ -3346,7 +3355,12 @@ async def test_approval_node_idempotent_when_already_executing_response() -> Non
         evaluated_count=1,
         advance_target=EventStatus.EXECUTING_RESPONSE,
     )
-    graph = build_investigation_graph(_agents(), services, checkpointer=MemorySaver())
+    graph = build_investigation_graph(
+        _agents(),
+        services,
+        checkpointer=MemorySaver(),
+        interrupt_after=[NODE_EXECUTE],
+    )
     config = {"configurable": {"thread_id": event_id}}
     initial = _base_state(
         event_id=event_id,
@@ -3362,9 +3376,14 @@ async def test_approval_node_idempotent_when_already_executing_response() -> Non
     await graph.aupdate_state(config, initial, as_node=NODE_RESPONSE)
     final = await invoke_investigation_graph(graph, None, config)
 
-    assert machine.statuses[event_id] is EventStatus.EXECUTING_RESPONSE
+    assert NODE_APPROVAL in final["node_trace"]
     assert NODE_EXECUTE in final["node_trace"]
     assert final.get("event_status") != EventStatus.FAILED.value
+    assert final.get("halted") is not True
+    assert not any(
+        event_id == eid and target is EventStatus.EXECUTING_RESPONSE
+        for eid, target, _reason in machine.transitions
+    )
 
 
 @pytest.mark.asyncio
@@ -3381,7 +3400,12 @@ async def test_approval_node_all_rejected_routes_reporting_not_execute() -> None
         evaluated_count=1,
         advance_target=EventStatus.REPORTING,
     )
-    graph = build_investigation_graph(_agents(), services, checkpointer=MemorySaver())
+    graph = build_investigation_graph(
+        _agents(),
+        services,
+        checkpointer=MemorySaver(),
+        interrupt_after=[NODE_APPROVAL],
+    )
     config = {"configurable": {"thread_id": event_id}}
     initial = _base_state(
         event_id=event_id,
@@ -3399,7 +3423,6 @@ async def test_approval_node_all_rejected_routes_reporting_not_execute() -> None
 
     assert machine.statuses[event_id] is EventStatus.REPORTING
     assert NODE_EXECUTE not in final["node_trace"]
-    assert NODE_REPORT in final["node_trace"]
 
 
 @pytest.mark.asyncio

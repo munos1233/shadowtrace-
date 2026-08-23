@@ -52,6 +52,7 @@ from app.services.approval_engine import (
     ApprovalEngine,
     evaluate_hard_gates,
     evaluate_level_rules,
+    resolve_plan_advance_target,
 )
 from app.services.context_service import EventContextStore, event_summary_from_security_event
 from app.services.degraded_flag_service import DegradedFlagService
@@ -216,6 +217,16 @@ def _risk(*, confidence: float = 0.9, severity: Severity = Severity.HIGH) -> Ris
         confidence=confidence,
         scoring_mode=ScoringMode.RULE_ONLY,
     )
+
+
+def test_resolve_plan_advance_target_auto_approve_executing() -> None:
+    action = _action_model(action_level=ActionLevel.L0, status=ActionStatus.APPROVED)
+    assert resolve_plan_advance_target([action]) is EventStatus.EXECUTING_RESPONSE
+
+
+def test_resolve_plan_advance_target_all_rejected_reporting() -> None:
+    action = _action_model(action_level=ActionLevel.L4, status=ActionStatus.REJECTED)
+    assert resolve_plan_advance_target([action]) is EventStatus.REPORTING
 
 
 def _action_model(**overrides: object) -> Action:

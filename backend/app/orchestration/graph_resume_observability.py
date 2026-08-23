@@ -17,6 +17,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.errors import InvalidStateTransitionError
 from app.orchestration.event_status_mismatch import is_event_status_mismatch_error
 from app.db import models as orm
 from app.orchestration.graph_invocation import is_in_investigation_graph
