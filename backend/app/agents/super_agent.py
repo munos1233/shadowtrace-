@@ -73,6 +73,7 @@ from app.models.ids import report_id_for_event
 from app.models.report import InvestigationReport
 from app.models.security_event import EventSummary
 from app.models.workflow import MAX_AGENT_RETRIES, TransitionContext
+from app.orchestration.event_status_mismatch import is_event_status_mismatch
 from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
 from app.orchestration.lease import EventLease, generate_owner_id
 from app.orchestration.workflow_graph import (
@@ -534,6 +535,16 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
                     )
             raise
         except Exception as exc:
+            if is_event_status_mismatch(exc):
+                # ISSUE-376: graph already skips FAILED on caller/DB mismatch;
+                # SuperAgent must not poison the event after that skip.
+                logger.warning(
+                    "SuperAgent: skip FAILED for EventStatus mismatch event=%s",
+                    event_id,
+                )
+                if lifecycle_started:
+                    await self._publish_agent_failed(lifecycle_input, str(exc))
+                raise
             if lifecycle_started:
                 await self._publish_agent_failed(lifecycle_input, str(exc))
             await self._transition(

@@ -60,6 +60,7 @@ from app.models.enums import (
 )
 from app.models.security_event import EventSummary
 from app.models.workflow import TransitionContext
+from app.orchestration.event_status_mismatch import is_event_status_mismatch
 from app.orchestration.event_status_transition_retry import transition_with_bounded_retry
 from app.orchestration.graph_invocation import bind_investigation_graph
 from app.orchestration.graph_state import InvestigationState
@@ -431,13 +432,6 @@ def _patch_state(*parts: Mapping[str, Any]) -> InvestigationState:
 _GRAPH_TERMINAL_STATUSES = frozenset({EventStatus.FAILED, EventStatus.CLOSED})
 
 
-_STATE_MISMATCH_MSG = "caller EventStatus does not match authoritative state"
-
-
-def _is_state_mismatch_validation(exc: BaseException) -> bool:
-    return isinstance(exc, ValidationError) and _STATE_MISMATCH_MSG in str(exc)
-
-
 async def _mark_graph_failed(
     services: dict[str, Any],
     state: InvestigationState,
@@ -454,7 +448,7 @@ async def _mark_graph_failed(
         )
         record_graph_failed_transition_noop(reason="soft_time_limit")
         return
-    if _is_state_mismatch_validation(error):
+    if is_event_status_mismatch(error):
         logger.warning(
             "skip graph FAILED transition for state mismatch event=%s",
             event_id,
@@ -1706,26 +1700,88 @@ def build_investigation_graph(
         return _patch_state(_trace(NODE_RESPONSE), status, response_update)
 
     async def approval_node(state: InvestigationState) -> InvestigationState:
+        async def _authoritative_status() -> EventStatus:
+            state_machine = cast(StateMachineService, services["state_machine"])
+            return await state_machine.get_current_status(state["event_id"])
+
         async def _enter_execution(plan_revision: int, *, reason: str) -> InvestigationState:
-            current = EventStatus(state.get("event_status", EventStatus.WAITING_APPROVAL.value))
-            await runtime.set_execution_substate(
-                state["event_id"],
-                ExecutionSubstate.NONE,
-                event_status=current,
-            )
+            # ISSUE-376: never trust LangGraph's cached EventStatus here.
+            # ApprovalEngine may have decided actions while this node still
+            # thinks the event is waiting_approval; the DB is authoritative.
+            event_id = state["event_id"]
+            authoritative = await _authoritative_status()
             update: dict[str, Any] = {
                 "execution_substate": ExecutionSubstate.NONE.value,
                 "needs_approval_wait": False,
                 "plan_revision": plan_revision,
             }
-            if current is not EventStatus.EXECUTING_RESPONSE:
+            if authoritative is EventStatus.EXECUTING_RESPONSE:
+                await runtime.set_execution_substate(
+                    event_id,
+                    ExecutionSubstate.NONE,
+                    event_status=EventStatus.EXECUTING_RESPONSE,
+                )
+                update["event_status"] = EventStatus.EXECUTING_RESPONSE.value
+                return _patch_state(_trace(NODE_APPROVAL), update)
+            if authoritative is EventStatus.REPORTING:
+                update["event_status"] = EventStatus.REPORTING.value
+                return _patch_state(_trace(NODE_APPROVAL), update)
+            if authoritative in {EventStatus.FAILED, EventStatus.CLOSED}:
+                update["event_status"] = authoritative.value
+                update["halted"] = True
+                return _patch_state(_trace(NODE_APPROVAL), update)
+            if authoritative not in {
+                EventStatus.WAITING_APPROVAL,
+                EventStatus.PLANNING_RESPONSE,
+            }:
+                flags = await _persist_degraded_flag(
+                    state,
+                    "approval_status_unexpected",
+                    event_id=event_id,
+                    degraded_flags=degraded_flags,
+                )
                 status = await _transition_status(
                     services,
                     state,
-                    EventStatus.EXECUTING_RESPONSE,
-                    reason=reason,
+                    EventStatus.FAILED,
+                    reason="investigation:approval_status_unexpected",
                 )
-                update.update(status)
+                return _patch_state(
+                    _trace(NODE_APPROVAL),
+                    status,
+                    {"halted": True, "degraded_flags": flags, **update},
+                )
+            status = await _transition_status(
+                services,
+                state,
+                EventStatus.EXECUTING_RESPONSE,
+                reason=reason,
+            )
+            await runtime.set_execution_substate(
+                event_id,
+                ExecutionSubstate.NONE,
+                event_status=EventStatus.EXECUTING_RESPONSE,
+            )
+            update.update(status)
+            return _patch_state(_trace(NODE_APPROVAL), update)
+
+        async def _enter_reporting(plan_revision: int, *, reason: str) -> InvestigationState:
+            authoritative = await _authoritative_status()
+            update: dict[str, Any] = {
+                "execution_substate": ExecutionSubstate.NONE.value,
+                "needs_approval_wait": False,
+                "plan_revision": plan_revision,
+            }
+            if authoritative is EventStatus.REPORTING:
+                update["event_status"] = EventStatus.REPORTING.value
+                return _patch_state(_trace(NODE_APPROVAL), update)
+            status = await _transition_status(
+                services,
+                state,
+                EventStatus.REPORTING,
+                reason=reason,
+            )
+            update.update(status)
             return _patch_state(_trace(NODE_APPROVAL), update)
 
         approval_engine = services.get("approval_engine")
@@ -1781,7 +1837,13 @@ def build_investigation_graph(
                         "plan_revision": plan_revision,
                     },
                 )
-            if result.evaluated_count > 0:
+            advance_target = getattr(result, "advance_target", None)
+            if advance_target is EventStatus.REPORTING:
+                return await _enter_reporting(
+                    plan_revision,
+                    reason="investigation:plan_fully_rejected",
+                )
+            if result.evaluated_count > 0 or advance_target is EventStatus.EXECUTING_RESPONSE:
                 return await _enter_execution(
                     plan_revision,
                     reason="investigation:approval_decided",
@@ -1821,21 +1883,9 @@ def build_investigation_graph(
                 _trace(NODE_APPROVAL),
                 {"execution_substate": ExecutionSubstate.WAITING_APPROVAL.value},
             )
-        await runtime.set_execution_substate(
-            state["event_id"],
-            ExecutionSubstate.NONE,
-            event_status=EventStatus.WAITING_APPROVAL,
-        )
-        status = await _transition_status(
-            services,
-            state,
-            EventStatus.EXECUTING_RESPONSE,
+        return await _enter_execution(
+            _plan_revision_from_state(state),
             reason="investigation:approval_cleared",
-        )
-        return _patch_state(
-            _trace(NODE_APPROVAL),
-            status,
-            {"execution_substate": ExecutionSubstate.NONE.value},
         )
 
     async def approval_wait_node(state: InvestigationState) -> InvestigationState:

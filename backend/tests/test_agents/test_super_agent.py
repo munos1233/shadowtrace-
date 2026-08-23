@@ -840,6 +840,30 @@ class TestLeaseAcquiredOwnerValidation:
         assert events[_EVENT_ID]["status"] is not EventStatus.REPORTING
 
 
+class _MismatchTriageAgent:
+    agent_name = "triage_agent"
+
+    async def execute(self, input: Any) -> Any:
+        del input
+        from app.orchestration.event_status_mismatch import EVENT_STATUS_MISMATCH_MSG
+
+        raise ValidationError(EVENT_STATUS_MISMATCH_MSG)
+
+
+class TestEventStatusMismatchDoesNotFail:
+    """ISSUE-376: SuperAgent must not poison EventStatus on caller/DB mismatch."""
+
+    async def test_status_mismatch_does_not_mark_failed(self) -> None:
+        events: dict[str, dict[str, object]] = {
+            _EVENT_ID: {"status": EventStatus.NEW},
+        }
+        agent = _build_super_agent(event_service=_MockEventService(events))
+        agent.triage_agent = _MismatchTriageAgent()  # type: ignore[assignment]
+        with pytest.raises(ValidationError, match="does not match authoritative state"):
+            await agent.investigate(_EVENT_ID)
+        assert events[_EVENT_ID]["status"] is not EventStatus.FAILED
+
+
 class TestRenewalFailure:
     """ISSUE-182: lease renewal failure must stop orchestration without poisoning."""
 

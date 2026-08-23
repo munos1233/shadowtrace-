@@ -30,6 +30,7 @@ from app.models.enums import (
     ExecutionSubstate,
     WritebackStatus,
 )
+from app.orchestration.event_status_mismatch import is_event_status_mismatch
 from app.orchestration.workflow_graph import (
     NODE_APPROVAL,
     NODE_EXECUTE,
@@ -280,7 +281,7 @@ async def _sync_execution_substate(
         )
         return event_status
     except ValidationError as exc:
-        if "caller EventStatus does not match authoritative state" not in str(exc):
+        if not is_event_status_mismatch(exc):
             raise
         authoritative = await _read_event_status_enum(session_factory, event_id)
         if authoritative is None:
