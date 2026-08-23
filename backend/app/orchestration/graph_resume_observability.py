@@ -17,8 +17,9 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.errors import InvalidStateTransitionError, ValidationError
+from app.core.errors import InvalidStateTransitionError
 from app.db import models as orm
+from app.orchestration.event_status_mismatch import is_event_status_mismatch
 from app.orchestration.graph_invocation import is_in_investigation_graph
 from app.orchestration.graph_resume import (
     GetSuperAgent,
@@ -64,8 +65,8 @@ class GraphResumeFailureContext:
 
 
 def is_state_mismatch_error(exc: BaseException) -> bool:
-    if isinstance(exc, ValidationError):
-        return "caller EventStatus does not match authoritative state" in str(exc)
+    if is_event_status_mismatch(exc):
+        return True
     if isinstance(exc, GraphResumeFailedError):
         return exc.error_type == "state_mismatch"
     return False

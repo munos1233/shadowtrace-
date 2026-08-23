@@ -85,6 +85,33 @@ class EvaluatePlanResult:
     plan_revision: int
     evaluated_count: int
     resume_deferred: bool = False
+    advance_target: EventStatus | None = None
+
+
+def resolve_plan_advance_target(actions: list[Action]) -> EventStatus | None:
+    """Compute the EventStatus a fully-decided plan should advance to.
+
+    Does not mutate EventStatus. Used by both the engine (out-of-graph apply)
+    and ``approval_node`` (in-graph apply) so the two cannot drift (ISSUE-376).
+    """
+    if not actions:
+        return None
+    approved = [item for item in actions if item.status is ActionStatus.APPROVED]
+    rejected = [item for item in actions if item.status is ActionStatus.REJECTED]
+    deferred = [item for item in actions if item.tool_name == TERMINAL_DISPOSITION_TOOL]
+    deferred_approved = any(item.status is ActionStatus.APPROVED for item in deferred)
+    deferred_rejected = any(item.status is ActionStatus.REJECTED for item in deferred)
+    required = any(item.writeback_required for item in actions)
+
+    if approved and (not required or deferred_approved):
+        return EventStatus.EXECUTING_RESPONSE
+    if rejected and not approved:
+        return EventStatus.REPORTING
+    if required and deferred_rejected:
+        return EventStatus.REPORTING
+    if approved:
+        return EventStatus.REPORTING
+    return None
 
 
 @dataclass(frozen=True)
@@ -366,7 +393,10 @@ class ApprovalEngine:
         refreshed = await self._load_plan_response_actions(event_id, plan_revision)
         needs_wait = any(action.status is ActionStatus.WAITING_APPROVAL for action in refreshed)
         resume_deferred = False
+        advance_target: EventStatus | None = None
         if not needs_wait:
+            if await self.is_plan_fully_decided(event_id, plan_revision):
+                advance_target = resolve_plan_advance_target(refreshed)
             resume_status = await self._maybe_advance_plan(event_id, plan_revision)
             resume_deferred = resume_status == "deferred"
         return EvaluatePlanResult(
@@ -374,6 +404,7 @@ class ApprovalEngine:
             plan_revision=plan_revision,
             evaluated_count=len(actions),
             resume_deferred=resume_deferred,
+            advance_target=advance_target,
         )
 
     async def evaluate(
@@ -893,22 +924,25 @@ class ApprovalEngine:
         if not await self.is_plan_fully_decided(event_id, plan_revision):
             return None
         actions = await self._load_plan_response_actions(event_id, plan_revision)
-        approved = [a for a in actions if a.status is ActionStatus.APPROVED]
-        rejected = [a for a in actions if a.status is ActionStatus.REJECTED]
-        deferred = [a for a in actions if a.tool_name == TERMINAL_DISPOSITION_TOOL]
-        deferred_approved = any(a.status is ActionStatus.APPROVED for a in deferred)
-        deferred_rejected = any(a.status is ActionStatus.REJECTED for a in deferred)
-        required = any(a.writeback_required for a in actions)
+        target = resolve_plan_advance_target(actions)
+        graph_bound = is_in_investigation_graph(event_id=event_id)
 
-        target: EventStatus | None = None
-        if approved and (not required or deferred_approved):
-            target = EventStatus.EXECUTING_RESPONSE
-        elif rejected and not approved:
-            target = EventStatus.REPORTING
-        elif required and deferred_rejected:
-            target = EventStatus.REPORTING
-        elif approved:
-            target = EventStatus.REPORTING
+        # ISSUE-376: while the investigation graph is on the stack, action
+        # decisions are authoritative here but EventStatus belongs to
+        # approval_node. Resume is already deferred; status must match.
+        if graph_bound:
+            if target is not None:
+                logger.debug(
+                    "defer EventStatus advance while graph active event=%s target=%s",
+                    event_id,
+                    target.value,
+                )
+            if self._resume is not None:
+                logger.debug(
+                    "defer resume_investigation while graph active event=%s",
+                    event_id,
+                )
+            return "deferred"
 
         if target is not None and self._state_machine is not None:
             status = await self._event_status(event_id)
@@ -929,12 +963,6 @@ class ApprovalEngine:
                     )
 
         if self._resume is not None:
-            if is_in_investigation_graph(event_id=event_id):
-                logger.debug(
-                    "defer resume_investigation while graph active event=%s",
-                    event_id,
-                )
-                return "deferred"
             try:
                 await self._resume(event_id)
             except Exception as exc:

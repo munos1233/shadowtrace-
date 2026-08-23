@@ -388,6 +388,33 @@ class FakeRuntime:
     ) -> None:
         self.substates.append(substate)
 
+
+class StatusCheckingRuntime(FakeRuntime):
+    """Fail-closes like WorkflowRuntime when caller EventStatus is stale."""
+
+    def __init__(self, machine: FakeStateMachine) -> None:
+        super().__init__()
+        self.machine = machine
+
+    async def set_execution_substate(
+        self,
+        event_id: str,
+        substate: ExecutionSubstate,
+        *,
+        event_status: EventStatus,
+    ) -> None:
+        authoritative = await self.machine.get_current_status(event_id)
+        if event_status is not authoritative:
+            raise ValidationError(
+                "caller EventStatus does not match authoritative state",
+                details={
+                    "event_id": event_id,
+                    "caller_status": event_status.value,
+                    "authoritative_status": authoritative.value,
+                },
+            )
+        await super().set_execution_substate(event_id, substate, event_status=event_status)
+
     async def assert_disposition_only_transition_allowed(
         self,
         event_id: str,
@@ -1508,6 +1535,7 @@ class FakeEvaluatePlanResult:
     needs_wait: bool
     plan_revision: int
     evaluated_count: int
+    advance_target: EventStatus | None = None
 
 
 class FakeApprovalEngine:
@@ -1516,9 +1544,11 @@ class FakeApprovalEngine:
         *,
         needs_wait: bool = False,
         evaluated_count: int = 0,
+        advance_target: EventStatus | None = None,
     ) -> None:
         self.needs_wait = needs_wait
         self.evaluated_count = evaluated_count
+        self.advance_target = advance_target
         self.calls: list[tuple[str, int]] = []
 
     async def evaluate_plan(
@@ -1534,7 +1564,38 @@ class FakeApprovalEngine:
             needs_wait=self.needs_wait,
             plan_revision=plan_revision,
             evaluated_count=self.evaluated_count,
+            advance_target=self.advance_target,
         )
+
+
+class StatusStealingApprovalEngine(FakeApprovalEngine):
+    """Reproduces the pre-ISSUE-376 engine: mutates EventStatus while the graph is live."""
+
+    def __init__(self, machine: FakeStateMachine, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.machine = machine
+
+    async def evaluate_plan(
+        self,
+        event_id: str,
+        plan_revision: int,
+        risk: RiskAssessment | None,
+        *,
+        disposition_confidence: float | None = None,
+    ) -> FakeEvaluatePlanResult:
+        result = await super().evaluate_plan(
+            event_id,
+            plan_revision,
+            risk,
+            disposition_confidence=disposition_confidence,
+        )
+        if not result.needs_wait and result.evaluated_count > 0:
+            await self.machine.transition(
+                event_id,
+                EventStatus.EXECUTING_RESPONSE,
+                reason="plan_fully_decided",
+            )
+        return result
 
 
 class FakeActionExecution:
@@ -1576,6 +1637,90 @@ async def test_approval_engine_wiring_without_actions_keeps_golden_path() -> Non
         {"configurable": {"thread_id": "evt-approval-stub"}},
     )
     assert tuple(final["node_trace"]) == P0_NODE_SEQUENCE
+    assert machine.status is EventStatus.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_auto_approved_plan_graph_owns_executing_status() -> None:
+    """ISSUE-376: L0/L1 auto-approve must not FAILED; graph advances EventStatus."""
+    event_id = "evt-auto-approve-own-status"
+    machine = FakeStateMachine(
+        status=EventStatus.TRIAGING,
+        statuses={event_id: EventStatus.TRIAGING},
+    )
+    runtime = StatusCheckingRuntime(machine)
+    services = _services(machine, runtime=runtime)
+    services["approval_engine"] = FakeApprovalEngine(
+        needs_wait=False,
+        evaluated_count=1,
+        advance_target=EventStatus.EXECUTING_RESPONSE,
+    )
+    final = await build_investigation_graph(_agents(), services).ainvoke(
+        _base_state(event_id=event_id),
+        {"configurable": {"thread_id": event_id}},
+    )
+    assert NODE_EXECUTE in final["node_trace"]
+    assert NODE_HALT not in final["node_trace"]
+    assert machine.status is EventStatus.CLOSED
+    assert EventStatus.FAILED not in {target for _eid, target, _reason in machine.transitions}
+    executing_reasons = [
+        reason
+        for _eid, target, reason in machine.transitions
+        if target is EventStatus.EXECUTING_RESPONSE
+    ]
+    assert "investigation:approval_decided" in executing_reasons
+    assert "plan_fully_decided" not in executing_reasons
+
+
+@pytest.mark.asyncio
+async def test_stale_waiting_status_still_executes_if_db_already_executing() -> None:
+    """ISSUE-376: if another writer already moved to executing_response, continue."""
+    event_id = "evt-status-steal-idempotent"
+    machine = FakeStateMachine(
+        status=EventStatus.TRIAGING,
+        statuses={event_id: EventStatus.TRIAGING},
+    )
+    runtime = StatusCheckingRuntime(machine)
+    services = _services(machine, runtime=runtime)
+    services["approval_engine"] = StatusStealingApprovalEngine(
+        machine,
+        needs_wait=False,
+        evaluated_count=1,
+        advance_target=EventStatus.EXECUTING_RESPONSE,
+    )
+    final = await build_investigation_graph(_agents(), services).ainvoke(
+        _base_state(event_id=event_id),
+        {"configurable": {"thread_id": event_id}},
+    )
+    assert NODE_EXECUTE in final["node_trace"]
+    assert machine.status is EventStatus.CLOSED
+    assert EventStatus.FAILED not in {target for _eid, target, _reason in machine.transitions}
+
+
+@pytest.mark.asyncio
+async def test_fully_rejected_plan_skips_execute_and_reports() -> None:
+    """ISSUE-376: advance_target=REPORTING must not call execute_plan."""
+    event_id = "evt-plan-fully-rejected"
+    machine = FakeStateMachine(
+        status=EventStatus.TRIAGING,
+        statuses={event_id: EventStatus.TRIAGING},
+    )
+    runtime = StatusCheckingRuntime(machine)
+    action_execution = FakeActionExecution()
+    services = _services(machine, runtime=runtime)
+    services["approval_engine"] = FakeApprovalEngine(
+        needs_wait=False,
+        evaluated_count=1,
+        advance_target=EventStatus.REPORTING,
+    )
+    services["action_execution"] = action_execution
+    final = await build_investigation_graph(_agents(), services).ainvoke(
+        _base_state(event_id=event_id),
+        {"configurable": {"thread_id": event_id}},
+    )
+    assert NODE_EXECUTE not in final["node_trace"]
+    assert NODE_REPORT in final["node_trace"]
+    assert action_execution.calls == []
     assert machine.status is EventStatus.CLOSED
 
 
