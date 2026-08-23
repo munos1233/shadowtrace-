@@ -41,6 +41,7 @@ from app.core.errors import (
     ValidationError,
     is_retryable,
 )
+from app.orchestration.event_status_mismatch import is_event_status_mismatch_error
 from app.models.agent_io import (
     PLAN_STEP_ASSIGNABLE_AGENTS,
     CollectionStatus,
@@ -536,9 +537,10 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         except Exception as exc:
             if lifecycle_started:
                 await self._publish_agent_failed(lifecycle_input, str(exc))
-            await self._transition(
-                event_id, EventStatus.FAILED, reason="exception", ec=event_context
-            )
+            if not is_event_status_mismatch_error(exc):
+                await self._transition(
+                    event_id, EventStatus.FAILED, reason="exception", ec=event_context
+                )
             raise
         finally:
             if renewal_task is not None:

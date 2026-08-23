@@ -431,11 +431,7 @@ def _patch_state(*parts: Mapping[str, Any]) -> InvestigationState:
 _GRAPH_TERMINAL_STATUSES = frozenset({EventStatus.FAILED, EventStatus.CLOSED})
 
 
-_STATE_MISMATCH_MSG = "caller EventStatus does not match authoritative state"
-
-
-def _is_state_mismatch_validation(exc: BaseException) -> bool:
-    return isinstance(exc, ValidationError) and _STATE_MISMATCH_MSG in str(exc)
+from app.orchestration.event_status_mismatch import is_event_status_mismatch_error
 
 
 async def _mark_graph_failed(
@@ -454,7 +450,7 @@ async def _mark_graph_failed(
         )
         record_graph_failed_transition_noop(reason="soft_time_limit")
         return
-    if _is_state_mismatch_validation(error):
+    if is_event_status_mismatch_error(error):
         logger.warning(
             "skip graph FAILED transition for state mismatch event=%s",
             event_id,
@@ -1706,19 +1702,48 @@ def build_investigation_graph(
         return _patch_state(_trace(NODE_RESPONSE), status, response_update)
 
     async def approval_node(state: InvestigationState) -> InvestigationState:
-        async def _enter_execution(plan_revision: int, *, reason: str) -> InvestigationState:
-            current = EventStatus(state.get("event_status", EventStatus.WAITING_APPROVAL.value))
-            await runtime.set_execution_substate(
-                state["event_id"],
-                ExecutionSubstate.NONE,
-                event_status=current,
-            )
+        state_machine = cast(StateMachineService, services["state_machine"])
+
+        async def _enter_reporting(plan_revision: int, *, reason: str) -> InvestigationState:
+            event_id = state["event_id"]
+            authoritative = await state_machine.get_current_status(event_id)
             update: dict[str, Any] = {
                 "execution_substate": ExecutionSubstate.NONE.value,
                 "needs_approval_wait": False,
                 "plan_revision": plan_revision,
             }
-            if current is not EventStatus.EXECUTING_RESPONSE:
+            if authoritative is not EventStatus.REPORTING:
+                status = await _transition_status(
+                    services,
+                    state,
+                    EventStatus.REPORTING,
+                    reason=reason,
+                )
+                update.update(status)
+                authoritative = EventStatus.REPORTING
+            await runtime.set_execution_substate(
+                event_id,
+                ExecutionSubstate.NONE,
+                event_status=authoritative,
+            )
+            return _patch_state(_trace(NODE_APPROVAL), update)
+
+        async def _enter_execution(plan_revision: int, *, reason: str) -> InvestigationState:
+            event_id = state["event_id"]
+            authoritative = await state_machine.get_current_status(event_id)
+            update: dict[str, Any] = {
+                "execution_substate": ExecutionSubstate.NONE.value,
+                "needs_approval_wait": False,
+                "plan_revision": plan_revision,
+            }
+            if authoritative is EventStatus.EXECUTING_RESPONSE:
+                await runtime.set_execution_substate(
+                    event_id,
+                    ExecutionSubstate.NONE,
+                    event_status=authoritative,
+                )
+                return _patch_state(_trace(NODE_APPROVAL), update)
+            if authoritative in {EventStatus.WAITING_APPROVAL, EventStatus.PLANNING_RESPONSE}:
                 status = await _transition_status(
                     services,
                     state,
@@ -1726,6 +1751,12 @@ def build_investigation_graph(
                     reason=reason,
                 )
                 update.update(status)
+                authoritative = EventStatus.EXECUTING_RESPONSE
+            await runtime.set_execution_substate(
+                event_id,
+                ExecutionSubstate.NONE,
+                event_status=authoritative,
+            )
             return _patch_state(_trace(NODE_APPROVAL), update)
 
         approval_engine = services.get("approval_engine")
@@ -1781,7 +1812,12 @@ def build_investigation_graph(
                         "plan_revision": plan_revision,
                     },
                 )
-            if result.evaluated_count > 0:
+            if result.advance_target is EventStatus.REPORTING:
+                return await _enter_reporting(
+                    plan_revision,
+                    reason="investigation:approval_rejected",
+                )
+            if result.advance_target is EventStatus.EXECUTING_RESPONSE or result.evaluated_count > 0:
                 return await _enter_execution(
                     plan_revision,
                     reason="investigation:approval_decided",

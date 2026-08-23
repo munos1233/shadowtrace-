@@ -52,6 +52,7 @@ from app.services.approval_engine import (
     ApprovalEngine,
     evaluate_hard_gates,
     evaluate_level_rules,
+    resolve_plan_advance_target,
 )
 from app.services.context_service import EventContextStore, event_summary_from_security_event
 from app.services.degraded_flag_service import DegradedFlagService
@@ -216,6 +217,16 @@ def _risk(*, confidence: float = 0.9, severity: Severity = Severity.HIGH) -> Ris
         confidence=confidence,
         scoring_mode=ScoringMode.RULE_ONLY,
     )
+
+
+def test_resolve_plan_advance_target_auto_approve_executing() -> None:
+    action = _action_model(action_level=ActionLevel.L0, status=ActionStatus.APPROVED)
+    assert resolve_plan_advance_target([action]) is EventStatus.EXECUTING_RESPONSE
+
+
+def test_resolve_plan_advance_target_all_rejected_reporting() -> None:
+    action = _action_model(action_level=ActionLevel.L4, status=ActionStatus.REJECTED)
+    assert resolve_plan_advance_target([action]) is EventStatus.REPORTING
 
 
 def _action_model(**overrides: object) -> Action:
@@ -1209,7 +1220,12 @@ async def test_evaluate_plan_defers_resume_while_graph_active(
         result = await engine.evaluate_plan(event_id, 1, _risk())
     assert result.needs_wait is False
     assert result.resume_deferred is True
+    assert result.advance_target is EventStatus.EXECUTING_RESPONSE
     resume.assert_not_awaited()
+    async with session_factory() as session:
+        event = await session.get(orm.SecurityEvent, event_id)
+        assert event is not None
+        assert event.status == EventStatus.PLANNING_RESPONSE.value
 
 
 @pytest.mark.asyncio
@@ -1619,3 +1635,43 @@ async def test_approve_rejects_stale_playbook_binding(
     principal = Principal(subject="approver-1", roles=["approver"])
     with pytest.raises(ShadowValidationError, match="fingerprint changed"):
         await engine.approve(action.action_id, principal, "ok", "dec-playbook-stale")
+
+
+@pytest.mark.asyncio
+async def test_evaluate_plan_graph_bound_all_rejected_advance_target_reporting(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    state_machine: StateMachineService,
+    fake_bus: FakeEventBus,
+    cleanup: None,
+) -> None:
+    """ISSUE-376: graph-bound full reject exposes REPORTING without engine transition."""
+    from app.orchestration.graph_invocation import bind_investigation_graph
+
+    engine = ApprovalEngine(
+        session_factory,
+        event_bus=fake_bus,  # type: ignore[arg-type]
+        state_machine=state_machine,
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    event_id = await _create_event(session_factory, store)
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            event_id=event_id,
+            action_level=ActionLevel.L0,
+            tool_name="unsupported_tool",
+        ),
+    )
+    await engine.evaluate(action, _risk(), approval_cycle=0, advance_plan=False)
+
+    async with bind_investigation_graph(event_id):
+        result = await engine.evaluate_plan(event_id, 1, _risk())
+
+    assert result.needs_wait is False
+    assert result.advance_target is EventStatus.REPORTING
+    async with session_factory() as session:
+        event = await session.get(orm.SecurityEvent, event_id)
+        assert event is not None
+        assert event.status == EventStatus.PLANNING_RESPONSE.value

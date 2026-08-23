@@ -1016,6 +1016,38 @@ class TestSoftTimeLimit:
                 await agent._run_quality_evaluation_step(ec)  # type: ignore[arg-type]
 
 
+class TestStateMismatchHandling:
+    """ISSUE-376: caller/DB EventStatus mismatch must not poison FAILED."""
+
+    async def test_investigate_state_mismatch_does_not_mark_failed(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        events: dict[str, dict[str, object]] = {
+            _EVENT_ID: {"status": EventStatus.PLANNING_RESPONSE},
+        }
+        agent = _build_super_agent(event_service=_MockEventService(events))
+        agent._investigation_graph = MagicMock()
+        mismatch = ValidationError(
+            "caller EventStatus does not match authoritative state",
+            details={
+                "caller_status": EventStatus.WAITING_APPROVAL.value,
+                "authoritative_status": EventStatus.EXECUTING_RESPONSE.value,
+            },
+        )
+        with patch(
+            "app.orchestration.workflow_graph.build_initial_investigation_state",
+            new=AsyncMock(return_value={"event_id": _EVENT_ID}),
+        ):
+            with patch(
+                "app.orchestration.workflow_graph.invoke_investigation_graph",
+                side_effect=mismatch,
+            ):
+                with pytest.raises(ValidationError):
+                    await agent.investigate(_EVENT_ID)
+
+        assert events[_EVENT_ID]["status"] is not EventStatus.FAILED
+
+
 class TestReactEnabled:
     """Scenario 4: REACT_ENABLED toggle behaviour."""
 
