@@ -85,6 +85,7 @@ class EvaluatePlanResult:
     plan_revision: int
     evaluated_count: int
     resume_deferred: bool = False
+    advance_target: EventStatus | None = None
 
 
 @dataclass(frozen=True)
@@ -310,6 +311,28 @@ def resolve_evaluate_confidence(
     return conf, Severity.LOW
 
 
+def resolve_plan_advance_target(actions: list[Action]) -> EventStatus | None:
+    """Return the EventStatus the plan should advance to once fully decided."""
+    if not actions:
+        return None
+    approved = [a for a in actions if a.status is ActionStatus.APPROVED]
+    rejected = [a for a in actions if a.status is ActionStatus.REJECTED]
+    deferred = [a for a in actions if a.tool_name == TERMINAL_DISPOSITION_TOOL]
+    deferred_approved = any(a.status is ActionStatus.APPROVED for a in deferred)
+    deferred_rejected = any(a.status is ActionStatus.REJECTED for a in deferred)
+    required = any(a.writeback_required for a in actions)
+
+    if approved and (not required or deferred_approved):
+        return EventStatus.EXECUTING_RESPONSE
+    if rejected and not approved:
+        return EventStatus.REPORTING
+    if required and deferred_rejected:
+        return EventStatus.REPORTING
+    if approved:
+        return EventStatus.REPORTING
+    return None
+
+
 class ApprovalEngine:
     """Evaluate, persist, and decide tiered approvals for response actions."""
 
@@ -366,14 +389,21 @@ class ApprovalEngine:
         refreshed = await self._load_plan_response_actions(event_id, plan_revision)
         needs_wait = any(action.status is ActionStatus.WAITING_APPROVAL for action in refreshed)
         resume_deferred = False
+        advance_target: EventStatus | None = None
         if not needs_wait:
-            resume_status = await self._maybe_advance_plan(event_id, plan_revision)
+            advance_target = resolve_plan_advance_target(refreshed)
+            resume_status = await self._maybe_advance_plan(
+                event_id,
+                plan_revision,
+                actions=refreshed,
+            )
             resume_deferred = resume_status == "deferred"
         return EvaluatePlanResult(
             needs_wait=needs_wait,
             plan_revision=plan_revision,
             evaluated_count=len(actions),
             resume_deferred=resume_deferred,
+            advance_target=advance_target,
         )
 
     async def evaluate(
@@ -889,28 +919,17 @@ class ApprovalEngine:
         self,
         event_id: str,
         plan_revision: int,
+        *,
+        actions: list[Action] | None = None,
     ) -> Literal["ok", "failed", "skipped", "deferred"] | None:
         if not await self.is_plan_fully_decided(event_id, plan_revision):
             return None
-        actions = await self._load_plan_response_actions(event_id, plan_revision)
-        approved = [a for a in actions if a.status is ActionStatus.APPROVED]
-        rejected = [a for a in actions if a.status is ActionStatus.REJECTED]
-        deferred = [a for a in actions if a.tool_name == TERMINAL_DISPOSITION_TOOL]
-        deferred_approved = any(a.status is ActionStatus.APPROVED for a in deferred)
-        deferred_rejected = any(a.status is ActionStatus.REJECTED for a in deferred)
-        required = any(a.writeback_required for a in actions)
+        if actions is None:
+            actions = await self._load_plan_response_actions(event_id, plan_revision)
+        target = resolve_plan_advance_target(actions)
 
-        target: EventStatus | None = None
-        if approved and (not required or deferred_approved):
-            target = EventStatus.EXECUTING_RESPONSE
-        elif rejected and not approved:
-            target = EventStatus.REPORTING
-        elif required and deferred_rejected:
-            target = EventStatus.REPORTING
-        elif approved:
-            target = EventStatus.REPORTING
-
-        if target is not None and self._state_machine is not None:
+        graph_active = is_in_investigation_graph(event_id=event_id)
+        if target is not None and self._state_machine is not None and not graph_active:
             status = await self._event_status(event_id)
             if status in {EventStatus.WAITING_APPROVAL, EventStatus.PLANNING_RESPONSE}:
                 try:
@@ -929,9 +948,9 @@ class ApprovalEngine:
                     )
 
         if self._resume is not None:
-            if is_in_investigation_graph(event_id=event_id):
+            if graph_active:
                 logger.debug(
-                    "defer resume_investigation while graph active event=%s",
+                    "defer plan advance and resume_investigation while graph active event=%s",
                     event_id,
                 )
                 return "deferred"

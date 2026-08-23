@@ -360,11 +360,14 @@ class FakeRuntime:
     def __init__(
         self,
         readiness: WritebackReadiness = WritebackReadiness.NOT_REQUIRED,
+        *,
+        state_machine: FakeStateMachine | None = None,
     ) -> None:
         self.intent = False
         self.readiness = readiness
         self.begun: list[str] = []
         self.substates: list[ExecutionSubstate] = []
+        self._state_machine = state_machine
 
     async def get_event_status_update_readiness(
         self,
@@ -386,6 +389,17 @@ class FakeRuntime:
         *,
         event_status: EventStatus,
     ) -> None:
+        if self._state_machine is not None:
+            authoritative = await self._state_machine.get_current_status(event_id)
+            if event_status is not authoritative:
+                raise ValidationError(
+                    "caller EventStatus does not match authoritative state",
+                    details={
+                        "event_id": event_id,
+                        "caller_status": event_status.value,
+                        "authoritative_status": authoritative.value,
+                    },
+                )
         self.substates.append(substate)
 
     async def assert_disposition_only_transition_allowed(
@@ -1508,6 +1522,7 @@ class FakeEvaluatePlanResult:
     needs_wait: bool
     plan_revision: int
     evaluated_count: int
+    advance_target: EventStatus | None = None
 
 
 class FakeApprovalEngine:
@@ -1516,9 +1531,11 @@ class FakeApprovalEngine:
         *,
         needs_wait: bool = False,
         evaluated_count: int = 0,
+        advance_target: EventStatus | None = None,
     ) -> None:
         self.needs_wait = needs_wait
         self.evaluated_count = evaluated_count
+        self.advance_target = advance_target
         self.calls: list[tuple[str, int]] = []
 
     async def evaluate_plan(
@@ -1530,10 +1547,14 @@ class FakeApprovalEngine:
         disposition_confidence: float | None = None,
     ) -> FakeEvaluatePlanResult:
         self.calls.append((event_id, plan_revision))
+        target = self.advance_target
+        if target is None and not self.needs_wait and self.evaluated_count > 0:
+            target = EventStatus.EXECUTING_RESPONSE
         return FakeEvaluatePlanResult(
             needs_wait=self.needs_wait,
             plan_revision=plan_revision,
             evaluated_count=self.evaluated_count,
+            advance_target=target,
         )
 
 
@@ -3273,6 +3294,112 @@ async def test_mark_graph_failed_skips_on_state_mismatch_validation_error(
 
     assert machine.transitions == []
     assert noop_calls == ["state_mismatch"]
+
+
+@pytest.mark.asyncio
+async def test_approval_node_reads_authoritative_status_before_substate() -> None:
+    """ISSUE-376: approval_node transitions DB before set_execution_substate."""
+    event_id = "evt-approval-authoritative"
+    machine = FakeStateMachine(
+        status=EventStatus.WAITING_APPROVAL,
+        statuses={event_id: EventStatus.WAITING_APPROVAL},
+    )
+    runtime = FakeRuntime(state_machine=machine)
+    services = _services(machine, runtime=runtime)
+    services["approval_engine"] = FakeApprovalEngine(
+        needs_wait=False,
+        evaluated_count=1,
+        advance_target=EventStatus.EXECUTING_RESPONSE,
+    )
+    graph = build_investigation_graph(_agents(), services, checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": event_id}}
+    initial = _base_state(
+        event_id=event_id,
+        event_status=EventStatus.WAITING_APPROVAL.value,
+        risk_assessment=RiskAssessment(
+            risk_score=80,
+            severity=Severity.HIGH,
+            confidence=0.9,
+            scoring_mode=ScoringMode.RULE_ONLY,
+        ).model_dump(mode="json"),
+        plan_revision=1,
+    )
+    await graph.aupdate_state(config, initial, as_node=NODE_RESPONSE)
+    final = await invoke_investigation_graph(graph, None, config)
+
+    assert machine.statuses[event_id] is EventStatus.EXECUTING_RESPONSE
+    assert NODE_EXECUTE in final["node_trace"]
+
+
+@pytest.mark.asyncio
+async def test_approval_node_idempotent_when_already_executing_response() -> None:
+    """ISSUE-376: stale graph memory must not mismatch EXECUTING_RESPONSE DB."""
+    event_id = "evt-approval-idempotent"
+    machine = FakeStateMachine(
+        status=EventStatus.EXECUTING_RESPONSE,
+        statuses={event_id: EventStatus.EXECUTING_RESPONSE},
+    )
+    runtime = FakeRuntime(state_machine=machine)
+    services = _services(machine, runtime=runtime)
+    services["approval_engine"] = FakeApprovalEngine(
+        needs_wait=False,
+        evaluated_count=1,
+        advance_target=EventStatus.EXECUTING_RESPONSE,
+    )
+    graph = build_investigation_graph(_agents(), services, checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": event_id}}
+    initial = _base_state(
+        event_id=event_id,
+        event_status=EventStatus.WAITING_APPROVAL.value,
+        risk_assessment=RiskAssessment(
+            risk_score=80,
+            severity=Severity.HIGH,
+            confidence=0.9,
+            scoring_mode=ScoringMode.RULE_ONLY,
+        ).model_dump(mode="json"),
+        plan_revision=1,
+    )
+    await graph.aupdate_state(config, initial, as_node=NODE_RESPONSE)
+    final = await invoke_investigation_graph(graph, None, config)
+
+    assert machine.statuses[event_id] is EventStatus.EXECUTING_RESPONSE
+    assert NODE_EXECUTE in final["node_trace"]
+    assert final.get("event_status") != EventStatus.FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_approval_node_all_rejected_routes_reporting_not_execute() -> None:
+    event_id = "evt-approval-reporting"
+    machine = FakeStateMachine(
+        status=EventStatus.WAITING_APPROVAL,
+        statuses={event_id: EventStatus.WAITING_APPROVAL},
+    )
+    runtime = FakeRuntime(state_machine=machine)
+    services = _services(machine, runtime=runtime)
+    services["approval_engine"] = FakeApprovalEngine(
+        needs_wait=False,
+        evaluated_count=1,
+        advance_target=EventStatus.REPORTING,
+    )
+    graph = build_investigation_graph(_agents(), services, checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": event_id}}
+    initial = _base_state(
+        event_id=event_id,
+        event_status=EventStatus.WAITING_APPROVAL.value,
+        risk_assessment=RiskAssessment(
+            risk_score=80,
+            severity=Severity.HIGH,
+            confidence=0.9,
+            scoring_mode=ScoringMode.RULE_ONLY,
+        ).model_dump(mode="json"),
+        plan_revision=1,
+    )
+    await graph.aupdate_state(config, initial, as_node=NODE_RESPONSE)
+    final = await invoke_investigation_graph(graph, None, config)
+
+    assert machine.statuses[event_id] is EventStatus.REPORTING
+    assert NODE_EXECUTE not in final["node_trace"]
+    assert NODE_REPORT in final["node_trace"]
 
 
 @pytest.mark.asyncio

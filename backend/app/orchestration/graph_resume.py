@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import ValidationError
 from app.db import models as orm
+from app.orchestration.event_status_mismatch import is_event_status_mismatch_error
 from app.models.agent_io import EvidenceOutput, RiskAssessment
 from app.models.enums import (
     DispositionIntentKind,
@@ -280,7 +281,7 @@ async def _sync_execution_substate(
         )
         return event_status
     except ValidationError as exc:
-        if "caller EventStatus does not match authoritative state" not in str(exc):
+        if not is_event_status_mismatch_error(exc):
             raise
         authoritative = await _read_event_status_enum(session_factory, event_id)
         if authoritative is None:
