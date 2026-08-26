@@ -124,6 +124,23 @@ class TestUpsertChunks:
         await store.upsert_chunks("attack_kb", [])
         assert await store.count("attack_kb") == 0
 
+    @pytest.mark.asyncio
+    async def test_upsert_chunks_batches_above_embed_limit(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        clean_knowledge: None,
+    ) -> None:
+        """LOAD_KB / load_attack_kb must not require raising EMBEDDING_MAX_BATCH_SIZE."""
+        embed = EmbeddingService(Settings(embedding_mode="mock", embedding_max_batch_size=2))
+        store = KnowledgeStore(session_factory, embed)
+        chunks = [
+            _chunk("chk-batch-0001", "attack_kb", "Spear phishing campaign"),
+            _chunk("chk-batch-0002", "attack_kb", "Ransomware deployment via CVE-2024"),
+            _chunk("chk-batch-0003", "attack_kb", "Credential dumping with Mimikatz"),
+        ]
+        await store.upsert_chunks("attack_kb", chunks)
+        assert await store.count("attack_kb") == 3
+
 
 class TestVectorSearch:
     @pytest.mark.asyncio

@@ -31,6 +31,11 @@ class EmbeddingService:
         return self._release
 
     @property
+    def max_batch_size(self) -> int:
+        """Configured embed batch cap (``EMBEDDING_MAX_BATCH_SIZE``)."""
+        return max(1, int(self._settings.embedding_max_batch_size))
+
+    @property
     def embedding_mode(self) -> str:
         return self._mode.value
 

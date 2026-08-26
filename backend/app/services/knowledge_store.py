@@ -187,7 +187,13 @@ class KnowledgeStore:
             if c.kb_name != kb_name:
                 raise ValueError(f"chunk {c.chunk_id} kb_name={c.kb_name} != {kb_name}")
             contents.append(c.content)
-        vectors = await self._embed.embed_texts(contents)
+        # Official attack_techniques.json has 78 rows; default
+        # EMBEDDING_MAX_BATCH_SIZE=64. Loaders must chunk, not fail closed on
+        # a legal corpus (LOAD_KB=true / scripts.load_attack_kb).
+        vectors: list[list[float]] = []
+        limit = self._embed.max_batch_size
+        for offset in range(0, len(contents), limit):
+            vectors.extend(await self._embed.embed_texts(contents[offset : offset + limit]))
         if session is not None:
             await self._execute_upserts(session, kb_name, chunks, vectors)
             return

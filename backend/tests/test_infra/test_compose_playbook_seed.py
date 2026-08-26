@@ -86,6 +86,17 @@ def test_bootstrap_always_loads_playbook_release() -> None:
     assert "load_playbook_kb" not in text
 
 
+def test_scheduler_beat_healthcheck_does_not_require_pgrep() -> None:
+    """python:slim has no procps; ``pgrep`` marks a running beat unhealthy."""
+    data = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    beat = (data.get("services") or {}).get("scheduler-beat") or {}
+    check = (beat.get("healthcheck") or {}).get("test") or []
+    joined = " ".join(str(part) for part in check)
+    assert "pgrep" not in joined
+    assert "beat" in joined
+    assert "/proc/1/cmdline" in joined
+
+
 def test_smoke_bootstrap_checks_playbook_ready() -> None:
     text = SMOKE_PATH.read_text(encoding="utf-8")
     assert "playbook_resources" in text

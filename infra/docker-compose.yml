@@ -312,7 +312,14 @@ services:
         "--loglevel", "info",
       ]
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' >/dev/null || exit 1"]
+      # python:slim has no procps; PID 1 is `python -m celery ... beat`.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import pathlib,sys; c=pathlib.Path('/proc/1/cmdline').read_bytes(); sys.exit(0 if b'beat' in c else 1)",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
