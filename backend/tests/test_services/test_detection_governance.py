@@ -500,6 +500,9 @@ async def test_get_decision_hides_cross_tenant(
 
 
 def test_policy_loader_reads_manifest_limits() -> None:
+    from app.services.detection_governance_policy import DEFAULT_POLICY_PATH
+
+    assert DEFAULT_POLICY_PATH.is_file()
     policy = load_detection_governance_policy()
     assert policy.policy_version == "issue125_v1"
     assert policy.max_runtime_errors >= 0

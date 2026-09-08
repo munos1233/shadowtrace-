@@ -370,7 +370,10 @@ def test_project_snapshot_exposes_bounded_rag_citations_without_payload() -> Non
                         "citation_id": "cit-t1078",
                     },
                     {"technique_id": "T1110", "technique_name": "Brute Force"},
-                    {"technique_id": "T1059", "technique_name": "Command and Scripting Interpreter"},
+                    {
+                        "technique_id": "T1059",
+                        "technique_name": "Command and Scripting Interpreter",
+                    },
                 ],
                 "citations": [
                     {

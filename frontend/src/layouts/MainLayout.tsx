@@ -11,6 +11,7 @@ import {
   BellOutlined,
   DashboardOutlined,
   BookOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { useApprovalStore } from "../stores/approvalStore";
 import GlobalSearchBox from "../components/search/GlobalSearchBox";
@@ -22,6 +23,7 @@ const menuItems: MenuProps["items"] = [
   { key: "/approvals", icon: <CheckCircleOutlined />, label: "审批中心" },
   { key: "/tools-audit", icon: <ToolOutlined />, label: "工具审计" },
   { key: "/knowledge/reviews", icon: <BookOutlined />, label: "知识审核" },
+  { key: "/detection/governance", icon: <SafetyCertificateOutlined />, label: "影子治理" },
   { key: "/dashboard", icon: <DashboardOutlined />, label: "SOC 大屏" },
 ];
 
@@ -54,9 +56,11 @@ export default function MainLayout() {
         ? "/tools-audit"
         : location.pathname.startsWith("/knowledge/reviews")
           ? "/knowledge/reviews"
-          : location.pathname.startsWith("/dashboard")
-            ? "/dashboard"
-            : "/events";
+          : location.pathname.startsWith("/detection/governance")
+            ? "/detection/governance"
+            : location.pathname.startsWith("/dashboard")
+              ? "/dashboard"
+              : "/events";
 
   return (
     <Layout style={{ minHeight: "100vh" }}>

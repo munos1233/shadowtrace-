@@ -2150,6 +2150,430 @@
         }
       }
     },
+    "/api/v1/detection/evaluation/artifacts": {
+      "get": {
+        "tags": [
+          "detection-governance"
+        ],
+        "summary": "List Detection Evaluation Artifacts",
+        "operationId": "list_detection_evaluation_artifacts_api_v1_detection_evaluation_artifacts_get",
+        "parameters": [
+          {
+            "name": "root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "default": "detection_shadow_v1",
+              "title": "Root"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionEvaluationArtifactListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/evaluation/artifacts/by-path": {
+      "get": {
+        "tags": [
+          "detection-governance"
+        ],
+        "summary": "Get Detection Evaluation Artifact By Path",
+        "operationId": "get_detection_evaluation_artifact_by_path_api_v1_detection_evaluation_artifacts_by_path_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionEvaluationArtifactResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/candidates": {
+      "get": {
+        "tags": [
+          "detection-governance"
+        ],
+        "summary": "List Detection Candidates",
+        "operationId": "list_detection_candidates_api_v1_detection_candidates_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "package_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Package Id"
+            }
+          },
+          {
+            "name": "detection_scope_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Detection Scope Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionCandidateListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/governance/decisions/from-path": {
+      "post": {
+        "tags": [
+          "detection-governance"
+        ],
+        "summary": "Record Detection Governance Decision From Path",
+        "operationId": "record_detection_governance_decision_from_path_api_v1_detection_governance_decisions_from_path_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectionGovernanceDecisionFromPathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionGovernanceDecisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/promotions": {
+      "post": {
+        "tags": [
+          "detection-promotion"
+        ],
+        "summary": "Create Detection Promotion",
+        "operationId": "create_detection_promotion_api_v1_detection_promotions_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectionPromotionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionPromotionResultResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "detection-promotion"
+        ],
+        "summary": "List Detection Promotions",
+        "operationId": "list_detection_promotions_api_v1_detection_promotions_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "candidate_detection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Detection Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionPromotionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/promotions/{promotion_id}": {
+      "get": {
+        "tags": [
+          "detection-promotion"
+        ],
+        "summary": "Get Detection Promotion",
+        "operationId": "get_detection_promotion_api_v1_detection_promotions__promotion_id__get",
+        "parameters": [
+          {
+            "name": "promotion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Promotion Id"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionPromotionRecordResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connectors": {
       "get": {
         "tags": [
@@ -4727,6 +5151,37 @@
         "title": "DecisionTraceSummary",
         "description": "Aggregated counts computed from the full (unfiltered) trace."
       },
+      "DetectionCandidateListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "DetectionCandidateListResponse"
+      },
       "DetectionContextProjectionErrorSummary": {
         "properties": {
           "promotion_id": {
@@ -4819,6 +5274,108 @@
         "title": "DetectionContextSnapshotSummary",
         "description": "Read-only detection context provenance for event detail UI (#633)."
       },
+      "DetectionEvaluationArtifactListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DetectionEvaluationArtifactSummary"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "DetectionEvaluationArtifactListResponse"
+      },
+      "DetectionEvaluationArtifactResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "artifact": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Artifact"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "artifact"
+        ],
+        "title": "DetectionEvaluationArtifactResponse"
+      },
+      "DetectionEvaluationArtifactSummary": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "evaluation_id": {
+            "type": "string",
+            "title": "Evaluation Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "dataset_id": {
+            "type": "string",
+            "title": "Dataset Id"
+          },
+          "dataset_version": {
+            "type": "string",
+            "title": "Dataset Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "artifact_hash": {
+            "type": "string",
+            "title": "Artifact Hash",
+            "default": ""
+          },
+          "gate_verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Verdict"
+          },
+          "case_count": {
+            "type": "integer",
+            "title": "Case Count",
+            "default": 0
+          },
+          "pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "evaluation_id",
+          "tenant_id",
+          "dataset_id",
+          "dataset_version",
+          "status"
+        ],
+        "title": "DetectionEvaluationArtifactSummary"
+      },
       "DetectionGovernanceDecisionCreateRequest": {
         "properties": {
           "artifact": {
@@ -4871,6 +5428,60 @@
           "decision"
         ],
         "title": "DetectionGovernanceDecisionCreateRequest"
+      },
+      "DetectionGovernanceDecisionFromPathRequest": {
+        "properties": {
+          "artifact_path": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Artifact Path"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "title": "Decision"
+          },
+          "reason_note": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Reason Note",
+            "default": ""
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "threshold_manifest_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Manifest Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "artifact_path",
+          "decision"
+        ],
+        "title": "DetectionGovernanceDecisionFromPathRequest"
       },
       "DetectionGovernanceDecisionListResponse": {
         "properties": {
@@ -5154,6 +5765,311 @@
         ],
         "title": "DetectionGovernanceRevokeRequest",
         "description": "Input to revoke a prior approval."
+      },
+      "DetectionPromotionCreateRequest": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Tenant Id"
+          },
+          "candidate_detection_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Candidate Detection Id"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "artifact": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact"
+          },
+          "artifact_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "candidate_detection_id"
+        ],
+        "title": "DetectionPromotionCreateRequest"
+      },
+      "DetectionPromotionListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DetectionPromotionRecordResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "DetectionPromotionListResponse"
+      },
+      "DetectionPromotionRecordResponse": {
+        "properties": {
+          "promotion_id": {
+            "type": "string",
+            "title": "Promotion Id"
+          },
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "promotion_key": {
+            "type": "string",
+            "title": "Promotion Key"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "decision_id": {
+            "type": "string",
+            "title": "Decision Id"
+          },
+          "candidate_detection_id": {
+            "type": "string",
+            "title": "Candidate Detection Id"
+          },
+          "candidate_content_hash": {
+            "type": "string",
+            "title": "Candidate Content Hash"
+          },
+          "package_id": {
+            "type": "string",
+            "title": "Package Id"
+          },
+          "package_version": {
+            "type": "integer",
+            "title": "Package Version"
+          },
+          "package_content_hash": {
+            "type": "string",
+            "title": "Package Content Hash"
+          },
+          "detection_scope_id": {
+            "type": "string",
+            "title": "Detection Scope Id"
+          },
+          "scope_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Revision Id"
+          },
+          "derived_connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Derived Connector Id"
+          },
+          "source_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Record Id"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "link_revision": {
+            "type": "integer",
+            "title": "Link Revision",
+            "default": 1
+          },
+          "ingest_result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingest Result"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "reason_message": {
+            "type": "string",
+            "title": "Reason Message",
+            "default": ""
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "promotion_id",
+          "tenant_id",
+          "promotion_key",
+          "status",
+          "decision_id",
+          "candidate_detection_id",
+          "candidate_content_hash",
+          "package_id",
+          "package_version",
+          "package_content_hash",
+          "detection_scope_id"
+        ],
+        "title": "DetectionPromotionRecordResponse"
+      },
+      "DetectionPromotionResultResponse": {
+        "properties": {
+          "promotion_id": {
+            "type": "string",
+            "title": "Promotion Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "record": {
+            "$ref": "#/components/schemas/DetectionPromotionRecordResponse"
+          },
+          "ingest_result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingest Result"
+          },
+          "resumed": {
+            "type": "boolean",
+            "title": "Resumed",
+            "default": false
+          },
+          "context_projection_error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Projection Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "promotion_id",
+          "status",
+          "record"
+        ],
+        "title": "DetectionPromotionResultResponse"
       },
       "DispositionCommand": {
         "properties": {

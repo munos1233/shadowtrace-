@@ -14,7 +14,6 @@ import ReportToc from "./ReportToc";
 import ReportExportButtons from "./ReportExportButtons";
 import ReportSectionContent from "./ReportSectionContent";
 import {
-  isSchemaPlaceholder,
   prepareReportForDisplay,
   type ReportDisplayContext,
 } from "../../utils/reportDisplay";

@@ -100,7 +100,7 @@ export default function EventChatPanel({ eventId }: { eventId: string }) {
           references: response.data.references,
         },
       ]);
-    } catch (error) {
+    } catch {
       setUnavailable(true);
     } finally {
       setLoading(false);

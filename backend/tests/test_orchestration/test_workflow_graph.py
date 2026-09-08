@@ -399,6 +399,32 @@ class FakeRuntime:
         assert self.intent is True
 
 
+class FakeRollback:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def compensate(
+        self,
+        event_id: str,
+        failed_action_id: str,
+        operator: str = "SagaCompensation",
+        reason: str = "",
+    ) -> list[Any]:
+        self.calls.append((event_id, failed_action_id))
+        return [
+            SimpleNamespace(
+                action_id="act-prior",
+                rolled_back=True,
+                warning=None,
+                model_dump=lambda mode="json": {
+                    "action_id": "act-prior",
+                    "rolled_back": True,
+                    "warning": None,
+                },
+            )
+        ]
+
+
 class FakeDegradedFlags:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, Any, str]] = []
@@ -926,6 +952,59 @@ async def test_graph_replan_one_cycle_then_success() -> None:
     assert NODE_CLOSE in trace
     assert len(verify_agent.calls) == 2
     assert machine.status is EventStatus.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_graph_replan_invokes_saga_compensate() -> None:
+    verify_agent = ReplanOnceVerifyAgent()
+    machine = FakeStateMachine()
+    rollback = FakeRollback()
+    services = _services(machine)
+    services["rollback"] = rollback
+    final = await build_investigation_graph(
+        _agents_with_verify(verify_agent),
+        services,
+    ).ainvoke(
+        _base_state(),
+        {"configurable": {"thread_id": "evt-saga-compensate"}},
+    )
+    assert rollback.calls == [("evt-graph-001", "act-failed-001")]
+    assert NODE_REPLAN in final["node_trace"]
+    assert final["rollback_results"]
+
+
+@pytest.mark.asyncio
+async def test_graph_replan_skips_compensate_without_failed_actions() -> None:
+    class _ReplanNoFailedId:
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+        async def execute(self, input: Any) -> VerificationResult:
+            self.calls.append(input)
+            if len(self.calls) == 1:
+                return VerificationResult(
+                    overall_status=VerificationOverallStatus.FAILED,
+                    verification_phase=VerificationPhase.EFFECT,
+                    need_action_replan=True,
+                    failed_actions=[],
+                )
+            return VerificationResult(
+                overall_status=VerificationOverallStatus.SUCCESS,
+                verification_phase=VerificationPhase.EFFECT,
+            )
+
+    machine = FakeStateMachine()
+    rollback = FakeRollback()
+    services = _services(machine)
+    services["rollback"] = rollback
+    await build_investigation_graph(
+        _agents_with_verify(_ReplanNoFailedId()),
+        services,
+    ).ainvoke(
+        _base_state(),
+        {"configurable": {"thread_id": "evt-saga-skip"}},
+    )
+    assert rollback.calls == []
 
 
 @pytest.mark.asyncio

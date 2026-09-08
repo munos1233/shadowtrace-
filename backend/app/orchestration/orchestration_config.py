@@ -8,13 +8,26 @@ from app.services.analysis_only_pipeline import assert_analysis_only_mode
 
 
 def assert_graph_orchestration_config(settings: Settings | None = None) -> None:
-    """Validate SuperAgent / graph-mode configuration at startup."""
+    """Validate SuperAgent / graph-mode configuration at startup.
+
+    ReAct executor presence is checked separately via
+    ``assert_react_executor_wired`` once the investigation stack is assembled.
+    """
+    settings or get_settings()
+
+
+def assert_react_executor_wired(
+    settings: Settings | None = None,
+    *,
+    executor_wired: bool,
+) -> None:
+    """REACT_ENABLED=true requires a ReadOnlyReActExecutor (or factory)."""
     cfg = settings or get_settings()
-    if cfg.react_enabled:
+    if cfg.react_enabled and not executor_wired:
         raise ConfigurationError(
             "REACT_ENABLED=true requires ReadOnlyReActExecutor wiring (ISSUE-053)",
             error_code="configuration_error",
-            details={"react_enabled": True},
+            details={"react_enabled": True, "executor_wired": False},
         )
 
 
@@ -80,6 +93,7 @@ def assert_orchestration_mode(settings: Settings | None = None) -> None:
 __all__ = [
     "assert_graph_orchestration_config",
     "assert_orchestration_mode",
+    "assert_react_executor_wired",
     "assert_shadow_pivot_config",
     "assert_shadow_pivot_retrieval_ready",
 ]

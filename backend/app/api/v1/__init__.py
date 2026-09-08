@@ -8,6 +8,7 @@ from app.api.v1 import (
     chat,
     connectors,
     detection_governance,
+    detection_promotion,
     dispositions,
     events,
     execution_jobs,
@@ -36,6 +37,7 @@ def create_api_router(*, include_chat: bool = True) -> APIRouter:
     router.include_router(source_records.router)
     router.include_router(behavior_observations.router)
     router.include_router(detection_governance.router)
+    router.include_router(detection_promotion.router)
     router.include_router(connectors.router)
     router.include_router(dispositions.router)
     router.include_router(execution_jobs.router)

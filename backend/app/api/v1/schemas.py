@@ -771,6 +771,106 @@ class DetectionGovernanceDecisionResponse(BaseModel):
     supersedes_decision_id: str | None = None
 
 
+class DetectionGovernanceDecisionFromPathRequest(_StrictRequest):
+    artifact_path: str = Field(..., min_length=1, max_length=512)
+    decision: Literal["approve", "reject"]
+    reason_note: str = Field(default="", max_length=1024)
+    expires_at: datetime | None = None
+    threshold_manifest_path: str | None = None
+
+    @model_validator(mode="after")
+    def approve_requires_threshold_manifest(self) -> DetectionGovernanceDecisionFromPathRequest:
+        if self.decision == "approve":
+            path = (self.threshold_manifest_path or "").strip()
+            if not path:
+                raise ValueError("threshold_manifest_path is required when decision is approve")
+        return self
+
+
+class DetectionEvaluationArtifactSummary(BaseModel):
+    path: str
+    evaluation_id: str
+    tenant_id: str
+    dataset_id: str
+    dataset_version: str
+    status: str
+    artifact_hash: str = ""
+    gate_verdict: str | None = None
+    case_count: int = 0
+    pass_rate: float | None = None
+
+
+class DetectionEvaluationArtifactListResponse(BaseModel):
+    items: list[DetectionEvaluationArtifactSummary] = Field(default_factory=list)
+
+
+class DetectionEvaluationArtifactResponse(BaseModel):
+    path: str
+    artifact: dict[str, Any]
+
+
+class DetectionCandidateListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DetectionPromotionCreateRequest(_StrictRequest):
+    tenant_id: str = Field(..., min_length=1, max_length=128)
+    candidate_detection_id: str = Field(..., min_length=1, max_length=128)
+    decision_id: str | None = Field(default=None, max_length=128)
+    artifact: dict[str, Any] | None = None
+    artifact_path: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def artifact_or_path_required(self) -> DetectionPromotionCreateRequest:
+        if self.artifact is None and not (self.artifact_path or "").strip():
+            raise ValueError("artifact or artifact_path is required")
+        return self
+
+
+class DetectionPromotionRecordResponse(BaseModel):
+    promotion_id: str
+    schema_version: str = "1.0"
+    tenant_id: str
+    promotion_key: str
+    status: str
+    decision_id: str
+    candidate_detection_id: str
+    candidate_content_hash: str
+    package_id: str
+    package_version: int
+    package_content_hash: str
+    detection_scope_id: str
+    scope_revision_id: str | None = None
+    derived_connector_id: str | None = None
+    source_record_id: str | None = None
+    event_id: str | None = None
+    link_revision: int = 1
+    ingest_result: dict[str, Any] | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    reason_message: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class DetectionPromotionListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[DetectionPromotionRecordResponse] = Field(default_factory=list)
+
+
+class DetectionPromotionResultResponse(BaseModel):
+    promotion_id: str
+    status: str
+    record: DetectionPromotionRecordResponse
+    ingest_result: dict[str, Any] | None = None
+    resumed: bool = False
+    context_projection_error: dict[str, Any] | None = None
+
+
 class DetectionGovernanceDecisionListResponse(BaseModel):
     total: int
     page: int

@@ -64,7 +64,9 @@ class _FakeGovernance:
         )
         return finalize_decision(decision)
 
-    async def get_decision(self, decision_id: str, *, tenant_id: str | None = None) -> Any:
+    async def get_decision(
+        self, decision_id: str, *, tenant_id: str | None = None, principal: Any = None
+    ) -> Any:
         raise AssertionError("not used in this test")
 
     async def list_decisions(self, **kwargs: Any) -> tuple[list[Any], int]:
@@ -81,7 +83,7 @@ class _FakeGovernance:
         raise AssertionError("not used in this test")
 
     async def evaluate_promotion_gate(
-        self, artifact: Any, *, binding_hash: str | None = None
+        self, artifact: Any, *, binding_hash: str | None = None, principal: Any = None
     ) -> Any:
         from app.models.detection_governance import DetectionGovernancePromotionGateResult
 
@@ -201,3 +203,102 @@ def test_record_approve_requires_threshold_manifest_path(
         json={"artifact": _minimal_artifact_payload(), "decision": "approve"},
     )
     assert response.status_code == 422
+
+
+def test_list_evaluation_artifacts(governance_client: tuple[TestClient, _FakeGovernance]) -> None:
+    client, _ = governance_client
+    response = client.get("/api/v1/detection/evaluation/artifacts")
+    assert response.status_code == 200
+    paths = {item["path"] for item in response.json()["items"]}
+    assert "detection_shadow_v1/baseline_artifact.json" in paths
+    assert "detection_shadow_v1/threshold_manifest.json" not in paths
+    assert "detection_shadow_v1/manifest.json" not in paths
+
+
+def test_get_evaluation_artifact_by_path(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
+    client, _ = governance_client
+    response = client.get(
+        "/api/v1/detection/evaluation/artifacts/by-path",
+        params={"path": "detection_shadow_v1/baseline_artifact.json"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["path"] == "detection_shadow_v1/baseline_artifact.json"
+    assert body["artifact"]["evaluation_id"]
+    assert body["artifact"]["tenant_id"] == "tenant-detection-eval"
+
+
+def test_evaluation_artifact_path_escape_rejected(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
+    client, _ = governance_client
+    escaped = client.get(
+        "/api/v1/detection/evaluation/artifacts/by-path",
+        params={"path": "../../../etc/passwd"},
+    )
+    assert escaped.status_code == 422
+    listed = client.get("/api/v1/detection/evaluation/artifacts", params={"root": ".."})
+    assert listed.status_code == 422
+
+
+def test_record_decision_from_path(governance_client: tuple[TestClient, _FakeGovernance]) -> None:
+    client, fake = governance_client
+    response = client.post(
+        "/api/v1/detection/governance/decisions/from-path",
+        json={
+            "artifact_path": "detection_shadow_v1/baseline_artifact.json",
+            "decision": "reject",
+            "reason_note": "shadow only",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["decision_id"] == "dgov-test"
+    assert fake.calls[0][0] == "record"
+
+
+def test_record_decision_from_path_escape_rejected(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
+    client, fake = governance_client
+    response = client.post(
+        "/api/v1/detection/governance/decisions/from-path",
+        json={
+            "artifact_path": "../../../etc/passwd",
+            "decision": "reject",
+        },
+    )
+    assert response.status_code == 422
+    assert fake.calls == []
+
+
+def test_list_candidates_wraps_runtime(
+    governance_client: tuple[TestClient, _FakeGovernance],
+) -> None:
+    from app.api.v1 import deps
+    from app.models.detection_rule import CandidateDetectionListResult
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.queries: list[Any] = []
+
+        async def query_candidates(self, query: Any) -> CandidateDetectionListResult:
+            self.queries.append(query)
+            return CandidateDetectionListResult(
+                total=0, page=query.page, page_size=query.page_size, items=[]
+            )
+
+    runtime = _FakeRuntime()
+    app.dependency_overrides[deps.get_detection_rule_runtime_service] = lambda: runtime
+    client, _ = governance_client
+    response = client.get(
+        "/api/v1/detection/candidates",
+        params={"tenant_id": "tenant-a", "package_id": "drpkg-test"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+    assert runtime.queries[0].source_tenant_id == "tenant-a"
+    assert runtime.queries[0].package_id == "drpkg-test"

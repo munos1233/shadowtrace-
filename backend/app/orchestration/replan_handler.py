@@ -35,6 +35,10 @@ from app.models.workflow import MAX_REPLAN_COUNT, TransitionContext
 from app.orchestration.graph_state import InvestigationState
 from app.orchestration.ports import StateMachinePort
 
+SAGA_COMPENSATION_INCOMPLETE_FLAG = "saga_compensation_incomplete"
+_SAGA_OPERATOR = "SagaCompensation"
+_SAGA_REASON = "verify need_action_replan — compensating prior SUCCESS actions"
+
 logger = logging.getLogger(__name__)
 
 _REPLAN_OPERATOR = "ReplanHandler"
@@ -294,11 +298,117 @@ class ReplanHandler:
 # --------------------------------------------------------------------------- #
 
 
+def _rollback_result_dump(item: Any) -> dict[str, Any]:
+    dump = getattr(item, "model_dump", None)
+    if callable(dump):
+        payload = dump(mode="json")
+        if isinstance(payload, dict):
+            return payload
+    if isinstance(item, dict):
+        return item
+    return {"repr": repr(item)}
+
+
+def _compensation_incomplete(results: list[Any]) -> bool:
+    if not results:
+        return False
+    for item in results:
+        rolled_back = bool(getattr(item, "rolled_back", None))
+        warning = getattr(item, "warning", None)
+        if isinstance(item, dict):
+            rolled_back = bool(item.get("rolled_back"))
+            warning = item.get("warning")
+        if not rolled_back:
+            return True
+        if warning:
+            return True
+    return False
+
+
+async def _persist_rollback_results(
+    event_id: str,
+    results: list[Any],
+    working_memory: Any | None,
+) -> list[dict[str, Any]]:
+    dumps = [_rollback_result_dump(item) for item in results]
+    if working_memory is None or not dumps:
+        return dumps
+    writer = working_memory
+    for_writer = getattr(working_memory, "for_writer", None)
+    if callable(for_writer):
+        try:
+            writer = for_writer("RollbackService")
+        except Exception:
+            logger.warning(
+                "replan_graph_node: failed to bind RollbackService writer event=%s",
+                event_id,
+                exc_info=True,
+            )
+            return dumps
+    try:
+        existing = await writer.read(event_id, "rollback_results")
+    except Exception:
+        existing = None
+    merged = list(existing) if isinstance(existing, list) else []
+    merged.extend(dumps)
+    try:
+        await writer.write(event_id, "rollback_results", merged)
+    except Exception:
+        logger.warning(
+            "replan_graph_node: failed to persist rollback_results event=%s",
+            event_id,
+            exc_info=True,
+        )
+    return dumps
+
+
+async def _compensate_before_replan(
+    event_id: str,
+    failed_actions: list[str],
+    *,
+    rollback: Any | None,
+    working_memory: Any | None,
+    existing_degraded: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Best-effort saga compensate; never blocks the subsequent replan."""
+    if rollback is None or not failed_actions:
+        return [], existing_degraded
+    failed_action_id = failed_actions[0].strip()
+    if not failed_action_id:
+        return [], existing_degraded
+    compensate = getattr(rollback, "compensate", None)
+    if not callable(compensate):
+        return [], existing_degraded
+    try:
+        results = await compensate(
+            event_id,
+            failed_action_id,
+            operator=_SAGA_OPERATOR,
+            reason=_SAGA_REASON,
+        )
+    except Exception:
+        logger.exception(
+            "saga compensate failed event=%s failed_action=%s — replan continues",
+            event_id,
+            failed_action_id,
+        )
+        if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
+            existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
+        return [], existing_degraded
+    serialized = await _persist_rollback_results(event_id, list(results or []), working_memory)
+    if _compensation_incomplete(list(results or [])):
+        if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
+            existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
+    return serialized, existing_degraded
+
+
 async def replan_graph_node(
     state: InvestigationState,
     *,
     handler: ReplanHandler,
     convergence_guard: _ConvergenceGuardPort | None = None,
+    rollback: Any | None = None,
+    working_memory: Any | None = None,
 ) -> InvestigationState:
     """Graph node entry point for ``NODE_REPLAN``.
 
@@ -344,6 +454,13 @@ async def replan_graph_node(
 
     # Carry forward existing degraded_flags so callers can append.
     existing_degraded = list(state.get("degraded_flags") or [])
+    rollback_dumps, existing_degraded = await _compensate_before_replan(
+        event_id,
+        failed_actions,
+        rollback=rollback,
+        working_memory=working_memory,
+        existing_degraded=existing_degraded,
+    )
 
     def _build_escalate_patches(target_status: EventStatus, *, halted: bool) -> dict[str, Any]:
         """Build state patches for an escalated replan result."""
@@ -381,6 +498,8 @@ async def replan_graph_node(
                     escalate_patches = _build_escalate_patches(exc.target_status, halted=True)
                     if existing_degraded:
                         escalate_patches["degraded_flags"] = existing_degraded
+                    if rollback_dumps:
+                        escalate_patches["rollback_results"] = rollback_dumps
                     return cast(InvestigationState, escalate_patches)
         except DependencyUnavailableError:
             logger.warning(
@@ -429,6 +548,8 @@ async def replan_graph_node(
             escalate_patches = _build_escalate_patches(exc.target_status, halted=False)
             if existing_degraded:
                 escalate_patches["degraded_flags"] = existing_degraded
+            if rollback_dumps:
+                escalate_patches["rollback_results"] = rollback_dumps
             return cast(InvestigationState, escalate_patches)
 
     # Continue: the graph edge NODE_REPLAN → NODE_PLANNER takes over.
@@ -440,6 +561,8 @@ async def replan_graph_node(
     }
     if existing_degraded:
         patches["degraded_flags"] = existing_degraded
+    if rollback_dumps:
+        patches["rollback_results"] = rollback_dumps
     return cast(InvestigationState, patches)
 
 
@@ -448,5 +571,6 @@ __all__ = [
     "ReplanDecision",
     "ReplanHandler",
     "ReplanResult",
+    "SAGA_COMPENSATION_INCOMPLETE_FLAG",
     "replan_graph_node",
 ]

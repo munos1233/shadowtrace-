@@ -436,6 +436,7 @@ class BaseLLMClient(ABC):
         self.budget_service = budget_service
         self.message_budgeter = message_budgeter
         self.max_input_tokens = max_input_tokens
+        self._active_request_timeout: float | None = None
 
     async def chat(
         self,
@@ -713,7 +714,7 @@ class BaseLLMClient(ABC):
                     status = "llm_provider_error"
                     error = LLMProviderError("LLM post-processing failed")
                     error.__cause__ = exc
-                await _persist_attempt_audit()
+            await _persist_attempt_audit()
             if error is not None:
                 raise error
             assert raw is not None

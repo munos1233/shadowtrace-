@@ -19,10 +19,10 @@ Key invariants
 
 Scope boundaries (not in this service)
 ------------------------------------
-* **Orchestration wiring**: ``get_rollback_service()`` in deps exposes the
-  service for production injection; LangGraph / SuperAgent / false-positive
-  CLOSED paths do not call ``rollback_event`` yet — that remains a follow-up
-  orchestration Issue.
+* **Orchestration wiring**: ``replan_graph_node`` calls ``compensate`` when
+  Verify sets ``need_action_replan`` (failed_action_id from
+  ``verify_failed_actions``). Late false-positive CLOSED still does not call
+  ``rollback_event``.
 * **P1 late false-positive CLOSED gate**: requiring all COMPENSATION_RECORD
   writebacks to reach CONFIRMED before activating deferred EVENT_STATUS_UPDATE
   is enforced in EventDispositionService / workflow orchestration, not here.

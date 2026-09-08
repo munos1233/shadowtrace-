@@ -346,6 +346,14 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
         self._output_quality_evaluator = output_quality_evaluator
         self._memory_tasks: set[asyncio.Task[None]] = set()
         self._degraded_flags = degraded_flags
+        if react_enabled and react_executor is None and react_executor_factory is None:
+            from app.core.errors import ConfigurationError
+
+            raise ConfigurationError(
+                "REACT_ENABLED=true requires ReadOnlyReActExecutor wiring (ISSUE-053)",
+                error_code="configuration_error",
+                details={"react_enabled": True, "executor_wired": False},
+            )
 
     # ------------------------------------------------------------------ #
     # Public entry point
@@ -1325,41 +1333,11 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
 
     async def _run_react_step(self, ec: EventContext, step: PlanStep) -> None:
         """Optional ReAct iteration step (ISSUE-053 / ISSUE-134 grant wiring)."""
-
-        if not self.react_enabled:
-            return
-        if self.react_executor_factory is None and self.react_executor is None:
-            return
-        if self.react_llm_client is None:
-            logger.warning("SuperAgent: ReAct skipped — react_llm_client not wired")
-            return
-
-        from app.core.errors import ToolCallGrantUnavailableError
-        from app.orchestration.react_engine import ReActEngine
-        from app.services.tenant_resolution import resolve_tenant_id
+        from app.orchestration.react_fill import run_readonly_react_fill
 
         event_id = _event_id_from_context(ec)
         goal = (step.step_goal or "补全调查证据缺口").strip()
         logger.info("SuperAgent: ReAct step for event=%s goal=%r", event_id, goal)
-
-        react_exec = self.react_executor
-        if self.react_executor_factory is not None:
-            try:
-                react_exec = await self.react_executor_factory.for_event(
-                    event_id,
-                    tenant_id=resolve_tenant_id(ec.source_snapshot),
-                    source_snapshot=ec.source_snapshot,
-                    plan_step=step,
-                )
-            except ToolCallGrantUnavailableError:
-                logger.warning(
-                    "SuperAgent: ReAct skipped — tool call grant unavailable event=%s",
-                    event_id,
-                )
-                return
-        elif react_exec is None:
-            return
-
         context: dict[str, Any] = {
             "event_id": event_id,
             "gaps": goal,
@@ -1368,33 +1346,19 @@ class SuperAgent(BaseAgent[SuperAgentInput, AgentOutput]):
             context["evidence_summary"] = str(ec.evidence_output)[:2000]
         if ec.triage_result:
             context["observation"] = str(ec.triage_result.get("reasoning", ""))[:2000]
-
-        engine = ReActEngine(
-            self.react_llm_client,
+        await run_readonly_react_fill(
+            event_id,
+            context,
+            llm_client=self.react_llm_client,
+            executor=self.react_executor,
+            executor_factory=self.react_executor_factory,
+            plan_step=step,
+            working_memory=self.working_memory,
             convergence_guard=self.convergence_guard,
             trace_sink=self.trace_service,
+            source_snapshot=ec.source_snapshot if isinstance(ec.source_snapshot, dict) else None,
+            react_enabled=self.react_enabled,
         )
-        try:
-            result = await engine.run(goal, context, react_exec)
-        except SoftTimeLimitExceeded:
-            raise
-        except Exception:
-            logger.exception("SuperAgent: ReAct run failed for event=%s", event_id)
-            return
-
-        if self.working_memory is not None:
-            try:
-                await self.working_memory.write(
-                    event_id,
-                    "react_output",
-                    result.model_dump(mode="json"),
-                )
-            except Exception:
-                logger.warning(
-                    "SuperAgent: failed to persist react_output for event=%s",
-                    event_id,
-                    exc_info=True,
-                )
 
     # ------------------------------------------------------------------ #
     # ConvergenceGuard helpers (ISSUE-052)

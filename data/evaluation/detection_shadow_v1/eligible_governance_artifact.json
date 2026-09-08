@@ -1,0 +1,137 @@
+{
+  "evaluation_id": "deval-test-001",
+  "schema_version": "1.0",
+  "tenant_id": "tenant-detection-eval",
+  "dataset_id": "detection_shadow_v1",
+  "dataset_version": "2026.08.02",
+  "dataset_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "code_sha": "abc1234",
+  "config": {
+    "seed": 42,
+    "cutoff_at": "2026-08-01T15:30:00Z",
+    "effective_cutoff_at": null,
+    "replay_mode": "detection_shadow",
+    "replay_fidelity": "shadow_runtime_v1",
+    "candidate_refs": {
+      "package_id": "drpkg-test-v1",
+      "package_version": 1,
+      "package_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rule_ids": [
+        "rule-test"
+      ],
+      "feature_contract_version": "1.0",
+      "detection_scope_id": "dscope-test",
+      "scope_revision_id": "dscope-rev-test",
+      "model_release_id": null,
+      "model_release_hash": null
+    },
+    "candidate_refs_entries": [
+      {
+        "package_id": "drpkg-test-v1",
+        "package_version": 1,
+        "package_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rule_ids": [
+          "rule-test"
+        ],
+        "feature_contract_version": "1.0",
+        "detection_scope_id": "dscope-test",
+        "scope_revision_id": "dscope-rev-test",
+        "model_release_id": null,
+        "model_release_hash": null
+      }
+    ],
+    "candidate_set_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "scorer_ids": [
+      "threat_detection",
+      "benign_detection"
+    ],
+    "extra": {}
+  },
+  "started_at": "2026-08-01T15:00:00Z",
+  "completed_at": "2026-08-01T15:05:00Z",
+  "status": "completed",
+  "case_results": [],
+  "aggregates": {
+    "case_count": 2,
+    "pass_count": 2,
+    "fail_count": 0,
+    "unevaluable_count": 0,
+    "error_count": 0,
+    "pass_rate": 1.0,
+    "required_scorer_error_count": 0
+  },
+  "gate": {
+    "verdict": "pass",
+    "manifest_version": "2026.08.02",
+    "manifest_path": "/Users/mxxu/Desktop/shadowtrace-repo/data/evaluation/detection_shadow_v1/threshold_manifest.json",
+    "diffs": [],
+    "quarantine_active": false
+  },
+  "quality_report": {
+    "schema_version": "1.0",
+    "dataset_id": "detection_shadow_v1",
+    "dataset_version": "2026.08.02",
+    "dataset_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "code_sha": "abc1234",
+    "release_refs": {
+      "model_release_id": null,
+      "prompt_release_id": null,
+      "rule_release_id": null,
+      "kb_release_id": null,
+      "config_profile": "mock_p0"
+    },
+    "sample_counts": {
+      "threat": 1,
+      "benign": 1,
+      "unevaluable": 0,
+      "total": 2
+    },
+    "metrics": [
+      {
+        "metric_id": "threat_recall",
+        "value": 1.0,
+        "status": "computed",
+        "denominator": {
+          "numerator": 1,
+          "denominator": 1,
+          "missing_truth_count": 0,
+          "error_count": 0
+        },
+        "confidence_interval": null,
+        "reason": ""
+      },
+      {
+        "metric_id": "benign_specificity",
+        "value": 1.0,
+        "status": "computed",
+        "denominator": {
+          "numerator": 1,
+          "denominator": 1,
+          "missing_truth_count": 0,
+          "error_count": 0
+        },
+        "confidence_interval": null,
+        "reason": ""
+      }
+    ],
+    "grouping_scorer_summaries": []
+  },
+  "resource_summary": {
+    "total_rules_evaluated": 0,
+    "total_observations_scanned": 0,
+    "total_runtime_errors": 0,
+    "total_candidates": 0,
+    "max_observations_scanned_per_case": 0,
+    "total_replay_duration_ms": 0,
+    "max_replay_duration_ms_per_case": 0
+  },
+  "tenant_safety": {
+    "probe_count": 1,
+    "pass_count": 1,
+    "fail_count": 0,
+    "probes": []
+  },
+  "errors": [],
+  "artifact_hash": "9963440fe1a9cec9f5ccc7dce77a8b82eed003c622dac08fa03fff4869bf2cc2",
+  "approval_note": "Not a governance approval; consume via #630 only."
+}

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.evaluation.detection.artifact import compute_detection_artifact_hash
 from app.evaluation.detection.metrics import quality_report_has_blocking_metrics
+from app.evaluation.paths import REPO_ROOT
 from app.evaluation.threshold import load_threshold_manifest, validate_threshold_manifest_for_run
 from app.models.detection_evaluation import DetectionEvaluationArtifact
 from app.models.detection_governance import (
@@ -23,12 +24,7 @@ logger = logging.getLogger(__name__)
 
 DETECTION_GOVERNANCE_POLICY_VERSION = "issue125_v1"
 DETECTION_GOVERNANCE_POLICY_SOURCE = "detection_governance_policy_v1"
-DEFAULT_POLICY_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "data"
-    / "governance"
-    / "detection_governance_policy_v1.json"
-)
+DEFAULT_POLICY_PATH = REPO_ROOT / "data" / "governance" / "detection_governance_policy_v1.json"
 REQUIRED_GOVERNANCE_METRIC_IDS = frozenset({"threat_recall", "benign_specificity"})
 
 

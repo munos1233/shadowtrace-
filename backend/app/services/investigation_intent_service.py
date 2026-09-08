@@ -1129,6 +1129,7 @@ class InvestigationIntentService:
                         status=status,
                         now=now,
                         started_stale_s=started_stale_s,
+                        lease_seconds=lease_seconds,
                     ):
                         continue
                     event = await session.get(orm.SecurityEvent, row.event_id)
@@ -1168,13 +1169,16 @@ class InvestigationIntentService:
         status: InvestigationIntentStatus,
         now: datetime,
         started_stale_s: int,
+        lease_seconds: int,
     ) -> bool:
         if row.claim_expires_at is not None and row.claim_expires_at < now:
             return True
-        if status in (
-            InvestigationIntentStatus.ENQUEUED,
-            InvestigationIntentStatus.STARTED,
-        ):
+        if status is InvestigationIntentStatus.ENQUEUED:
+            # Broker enqueue can stall well before the STARTED crash window.
+            # Use the claim lease (floored at 30s), not the 11-minute STARTED floor.
+            enqueued_stale_s = max(lease_seconds * 4, 30)
+            return (now - row.updated_at) > timedelta(seconds=enqueued_stale_s)
+        if status is InvestigationIntentStatus.STARTED:
             return (now - row.updated_at) > timedelta(seconds=started_stale_s)
         return False
 

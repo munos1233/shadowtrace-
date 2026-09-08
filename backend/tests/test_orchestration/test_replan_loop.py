@@ -308,6 +308,50 @@ class TestReplanGraphNode:
         result = await replan_graph_node(state, handler=handler)
         assert result["escalated"] is True
 
+    async def test_compensate_called_with_first_failed_action(self):
+        sm = FakeStateMachine()
+        handler = ReplanHandler(state_machine=sm, runtime=FakeRuntime())
+        rollback = MagicMock()
+        rollback.compensate = AsyncMock(
+            return_value=[SimpleNamespace(rolled_back=True, warning=None)]
+        )
+        state = _base_state(
+            replan_count=0,
+            verify_failed_actions=["act-fail", "act-other"],
+        )
+        result = await replan_graph_node(state, handler=handler, rollback=rollback)
+        rollback.compensate.assert_awaited_once_with(
+            "evt-test-replan-001",
+            "act-fail",
+            operator="SagaCompensation",
+            reason="verify need_action_replan — compensating prior SUCCESS actions",
+        )
+        assert result["event_status"] == EventStatus.REPLANNING.value
+        assert result["rollback_results"]
+
+    async def test_compensate_skipped_without_failed_actions(self):
+        sm = FakeStateMachine()
+        handler = ReplanHandler(state_machine=sm, runtime=FakeRuntime())
+        rollback = MagicMock()
+        rollback.compensate = AsyncMock()
+        state = _base_state(replan_count=0, verify_failed_actions=[])
+        result = await replan_graph_node(state, handler=handler, rollback=rollback)
+        rollback.compensate.assert_not_called()
+        assert "rollback_results" not in result
+
+    async def test_compensate_failure_does_not_block_replan(self):
+        sm = FakeStateMachine()
+        handler = ReplanHandler(state_machine=sm, runtime=FakeRuntime())
+        rollback = MagicMock()
+        rollback.compensate = AsyncMock(side_effect=RuntimeError("adapter down"))
+        state = _base_state(
+            replan_count=0,
+            verify_failed_actions=["act-fail"],
+        )
+        result = await replan_graph_node(state, handler=handler, rollback=rollback)
+        assert result["event_status"] == EventStatus.REPLANNING.value
+        assert "saga_compensation_incomplete" in (result.get("degraded_flags") or [])
+
 
 # ── Tests: route_after_replan ───────────────────────────────────────────────
 

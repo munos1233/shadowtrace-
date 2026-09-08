@@ -341,6 +341,59 @@ async def test_llm_failure_falls_back_to_default_plans(tmp_path: Path) -> None:
     assert plan.degraded is True
     assert len(plan.steps) >= 4  # DATA_EXFILTRATION default has 7 steps
     assert plan.revision == 0
+    assert sum(1 for step in plan.steps if step.assigned_agent == "react") == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_react_fill_then_revise(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from app.models.react import ReActResult, ReActStopReason
+
+    class _BoomLLM:
+        async def chat(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("llm down")
+
+    fill_calls: list[str] = []
+
+    async def _fill(event_id: str, _context: dict[str, object]) -> ReActResult:
+        fill_calls.append(event_id)
+        return ReActResult(stop_reason=ReActStopReason.FINISHED, final_confidence=0.8)
+
+    monkeypatch.setattr(
+        "app.agents.planner_agent.get_settings",
+        lambda: SimpleNamespace(react_enabled=True),
+    )
+    agent = PlannerAgent(llm_client=_BoomLLM(), react_fill=_fill)
+    plan = await agent._plan_impl("evt-react-fill", _make_triage())
+    assert fill_calls == ["evt-react-fill"]
+    assert plan.revision == 1
+    assert plan.revise_reason is not None
+    assert "llm_plan_failed" in plan.revise_reason
+    assert "react_stop=" in plan.revise_reason
+
+
+@pytest.mark.asyncio
+async def test_react_fill_error_falls_back_to_default_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    class _BoomLLM:
+        async def chat(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("llm down")
+
+    async def _fill(_event_id: str, _context: dict[str, object]) -> None:
+        raise RuntimeError("fill exploded")
+
+    monkeypatch.setattr(
+        "app.agents.planner_agent.get_settings",
+        lambda: SimpleNamespace(react_enabled=True),
+    )
+    agent = PlannerAgent(llm_client=_BoomLLM(), react_fill=_fill)
+    plan = await agent._plan_impl("evt-react-fill-err", _make_triage())
+    assert plan.revision == 0
+    assert plan.degraded is True
 
 
 @pytest.mark.asyncio
@@ -446,6 +499,7 @@ def test_all_event_types_have_default_plans() -> None:
                 "response_agent",
                 "graph_agent",
                 "rag_agent",
+                "react",
             }
             assert step.step_order >= 1
 
@@ -820,6 +874,18 @@ def test_default_plan_includes_rag_when_enabled() -> None:
         rag_enabled=True,
     )
     assert any(s.assigned_agent == "rag_agent" for s in plan.steps)
+
+
+def test_default_plans_include_single_react_step_after_evidence() -> None:
+    from app.agents.rules.default_plans import DEFAULT_PLANS, get_default_plan
+
+    for event_type in DEFAULT_PLANS:
+        plan = get_default_plan("evt-react-step", event_type, "pln-react")
+        agents = [step.assigned_agent for step in plan.steps]
+        assert agents.count("react") == 1
+        react_idx = agents.index("react")
+        assert all(agent == "evidence_agent" for agent in agents[:react_idx])
+        assert "response_agent" in agents[react_idx + 1 :]
 
 
 @pytest.mark.asyncio

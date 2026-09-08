@@ -79,3 +79,11 @@ export function canPromoteKnowledgeReviews(): boolean {
   }
   return currentAuthRoles().includes(APPROVER_ROLE);
 }
+
+/** Same approver gate as knowledge review; unknown production roles stay enabled. */
+export function canDecideDetectionGovernance(): boolean {
+  if (!hasKnownAuthRoles()) {
+    return true;
+  }
+  return currentAuthRoles().includes(APPROVER_ROLE);
+}

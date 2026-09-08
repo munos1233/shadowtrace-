@@ -1033,12 +1033,17 @@ class TestReactEnabled:
         """REACT_ENABLED=true without executor must fail closed at startup."""
         from app.core.config import Settings
         from app.core.errors import ConfigurationError
-        from app.orchestration.orchestration_config import assert_graph_orchestration_config
+        from app.orchestration.orchestration_config import assert_react_executor_wired
 
         settings = Settings(REACT_ENABLED=True)
         with pytest.raises(ConfigurationError) as exc:
-            assert_graph_orchestration_config(settings)
+            assert_react_executor_wired(settings, executor_wired=False)
         assert exc.value.error_code == "configuration_error"
+
+        assert_react_executor_wired(settings, executor_wired=True)
+        from app.orchestration.orchestration_config import assert_graph_orchestration_config
+
+        assert_graph_orchestration_config(settings)
 
     async def test_react_skips_when_grant_unavailable(self) -> None:
         """Grant mint failure must not break the plan step (ISSUE-134)."""

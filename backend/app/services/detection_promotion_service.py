@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -811,7 +811,54 @@ class DetectionPromotionService:
                 existing = await session.get(DetectionPromotionORM, promotion_id)
                 if existing is None:
                     return promotion_id
-        raise RuntimeError("failed to allocate detection promotion_id")
+        raise RuntimeError("failed to allocate detection_promotion_id")
+
+    async def get_promotion(
+        self,
+        promotion_id: str,
+        *,
+        tenant_id: str,
+    ) -> DetectionPromotionRecord:
+        async with self._session_factory() as session:
+            row = await session.get(DetectionPromotionORM, promotion_id)
+        if row is None or row.tenant_id != tenant_id:
+            raise ResourceNotFoundError(
+                "detection promotion not found",
+                details={"promotion_id": promotion_id, "tenant_id": tenant_id},
+            )
+        return _row_to_record(row)
+
+    async def list_promotions(
+        self,
+        *,
+        tenant_id: str,
+        candidate_detection_id: str | None = None,
+        status: DetectionPromotionStatus | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[DetectionPromotionRecord], int]:
+        filters = [DetectionPromotionORM.tenant_id == tenant_id]
+        if candidate_detection_id:
+            filters.append(DetectionPromotionORM.candidate_detection_id == candidate_detection_id)
+        if status is not None:
+            filters.append(DetectionPromotionORM.status == status.value)
+        async with self._session_factory() as session:
+            total = int(
+                await session.scalar(
+                    select(func.count()).select_from(DetectionPromotionORM).where(*filters)
+                )
+                or 0
+            )
+            rows = list(
+                await session.scalars(
+                    select(DetectionPromotionORM)
+                    .where(*filters)
+                    .order_by(DetectionPromotionORM.updated_at.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+        return [_row_to_record(row) for row in rows], total
 
 
 def _row_to_record(row: DetectionPromotionORM) -> DetectionPromotionRecord:

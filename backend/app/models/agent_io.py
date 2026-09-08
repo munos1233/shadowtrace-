@@ -140,6 +140,18 @@ AgentName = Literal[
     "tool_agent",
 ]
 
+# Agents allowed on ExecutionPlan.steps (ISSUE-053 react + ISSUE-305 assignable set).
+PlanStepAssignedAgent = Literal[
+    "evidence_agent",
+    "graph_agent",
+    "rag_agent",
+    "risk_agent",
+    "response_agent",
+    "report_agent",
+    "storyline_service",
+    "react",
+]
+
 
 # --------------------------------------------------------------------------- #
 # Triage
@@ -674,7 +686,7 @@ class PlanStep(BaseModel):
 
     step_order: int
     step_goal: str
-    assigned_agent: AgentName
+    assigned_agent: AgentName | Literal["storyline_service", "react"]
     required_tools: list[str] = Field(default_factory=list)
     success_criteria: str = ""
 
