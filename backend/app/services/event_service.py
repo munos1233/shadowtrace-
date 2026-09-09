@@ -498,6 +498,16 @@ class EventService:
         self._state_machine = state_machine
         self._investigation_intent = investigation_intent
 
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        """Expose the service's DB boundary to co-located read projections.
+
+        API dependency overrides may provide an EventService backed by an
+        isolated database. Read-model helpers must use that same boundary
+        instead of reaching into the process-global session provider.
+        """
+        return self._session_factory
+
     async def _attach_auto_investigate_intent(
         self,
         session: AsyncSession,

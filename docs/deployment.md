@@ -464,6 +464,25 @@ LangGraph checkpoint 在 Redis 读写失败后会 **fail-soft 降级到进程内
 
 ---
 
+## 评委现场：真实 LLM + Canonical Mock 闭环
+
+尚无生产 XDR 时，不要使用 Live XDR 配置。只将 LLM 切到真实端点：
+
+```bash
+cp infra/.env.llm.audit.example .env.llm.audit
+# 填写 LLM_API_BASE_URL、LLM_API_KEY、LLM_PRIMARY_MODEL
+make up-judge
+make bootstrap-judge
+make judge-full-loop
+```
+
+`docker-compose.llm-audit.yml` 会同时固定 API 与 worker 为
+`SOURCE_MODE=mock_xdr`、`DISPOSITION_MODE=mock_xdr`、
+`DISPOSITION_ADAPTER_KIND=mock`、`TOOL_MODE=mock`、
+`SIMULATION_ENABLED=true`，仅从 `.env.llm.audit` 读取 `LLM_*`。因此评委测试
+隔离、账号、进程处置、Saga 回滚、ReAct 重规划和两阶段回读时，走的是完整、
+可重复的 Mock 闭环；界面与审计记录必须如实显示模拟回执，不能宣称已联动生产设备。
+
 ## 切换到 Live 模式
 
 Live 模式**不是** compose profile；通过可选 env 叠加文件启用。复制 `infra/.env.live.example` 为项目根目录 `.env.live` 并填入凭证，
@@ -472,7 +491,7 @@ Live 模式**不是** compose profile；通过可选 env 叠加文件启用。�
 ```bash
 cp infra/.env.live.example .env.live
 # 编辑 .env.live，填入 LLM_API_KEY 与 provider 凭证
-make down && make up
+make down && make up WORKER=1 SCHEDULER=1
 ```
 
 也可手动修改根目录 `.env` / `.env.example` 中的关键开关：
@@ -483,10 +502,15 @@ LLM_MODE=openai_compatible
 LLM_API_BASE_URL=https://your-provider.example/v1
 LLM_API_KEY=sk-your-key-here
 LLM_PRIMARY_MODEL=your-model-id
-SOURCE_MODE=live_crowdstrike    # 替换为实际 provider
+SOURCE_MODE=sangfor_xdr
+DISPOSITION_MODE=live_xdr
+DISPOSITION_ADAPTER_KIND=sangfor_xdr
 TOOL_MODE=live
 ALLOW_LIVE_SIDE_EFFECTS=true    # 注册 live ToolProvider，不放行 execute_plan
 BLOCK_LIVE_ACTION_EXECUTION=false  # true 会冻结 ActionExecution / 写回投递
+ALLOW_XDR_WRITEBACK=true
+SANGFOR_XDR_BASE_URL=https://your-xdr.example
+# 填写 SANGFOR_AUTH_CODE，或 SANGFOR_ACCESS_KEY + SANGFOR_SECRET_KEY
 ```
 
 `LLM_API_BASE_URL` 是 **chat/completions 路径前缀**（不含 `/chat/completions` 后缀）。火山 Ark 示例：`https://ark.cn-beijing.volces.com/api/v3`。

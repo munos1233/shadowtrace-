@@ -50,6 +50,7 @@ def test_xdr_writeback_fence_blocks_live_mode_without_flag() -> None:
     settings = Settings.model_validate(
         {
             "DISPOSITION_MODE": "live_xdr",
+            "DISPOSITION_ADAPTER_KIND": "sangfor_xdr",
             "ALLOW_XDR_WRITEBACK": False,
         }
     )
@@ -98,6 +99,7 @@ def test_xdr_writeback_fence_skips_direct_tool() -> None:
     settings = Settings.model_validate(
         {
             "DISPOSITION_MODE": "live_xdr",
+            "DISPOSITION_ADAPTER_KIND": "sangfor_xdr",
             "ALLOW_XDR_WRITEBACK": False,
         }
     )
@@ -112,6 +114,7 @@ def test_combined_fence_blocks_live_xdr_without_writeback_flag() -> None:
     settings = Settings.model_validate(
         {
             "DISPOSITION_MODE": "live_xdr",
+            "DISPOSITION_ADAPTER_KIND": "sangfor_xdr",
             "ALLOW_XDR_WRITEBACK": False,
         }
     )
@@ -143,6 +146,7 @@ def test_combined_fence_skips_xdr_gate_when_execution_owner_none() -> None:
     settings = Settings.model_validate(
         {
             "DISPOSITION_MODE": "live_xdr",
+            "DISPOSITION_ADAPTER_KIND": "sangfor_xdr",
             "ALLOW_XDR_WRITEBACK": False,
         }
     )

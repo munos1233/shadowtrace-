@@ -148,7 +148,13 @@ async def test_run_once_does_not_skip_sangfor_source_mode(
     scheduler = _scheduler(
         session_factory=session_factory,
         event_service=ingestion_event_service,
-        settings=_scheduler_settings(source_mode="sangfor_xdr", simulation_enabled=False),
+        settings=_scheduler_settings(
+            source_mode="sangfor_xdr",
+            tool_mode="live",
+            disposition_mode="live_xdr",
+            disposition_adapter_kind="sangfor_xdr",
+            simulation_enabled=False,
+        ),
     )
     with patch.object(scheduler, "_build_source_adapter", return_value=adapter):
         result = await scheduler.run_once()

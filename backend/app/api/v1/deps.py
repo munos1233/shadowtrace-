@@ -892,6 +892,13 @@ async def _build_investigation_agents() -> dict[str, Any]:
     from app.tools.executor import NullAuditService, get_tool_executor
 
     settings = get_settings()
+    # FastAPI and Celery run in separate processes.  Register supported live
+    # query Providers here as well as in the API lifespan so worker-driven
+    # investigations receive the same ToolRegistry wiring.
+    from app.adapters.factory import ensure_sangfor_live_query_adapters_registered
+    from app.tools.registry import tool_registry
+
+    await ensure_sangfor_live_query_adapters_registered(settings, tool_registry)
     event_service = await get_event_service()
     state_machine = await get_state_machine()
     wm = await _get_wm()

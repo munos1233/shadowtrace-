@@ -53,17 +53,10 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     assert_orchestration_mode(settings)
 
     try:
-        from app.adapters.factory import build_sangfor_live_query_adapters
+        from app.adapters.factory import ensure_sangfor_live_query_adapters_registered
         from app.tools.registry import tool_registry
 
-        query_adapters = build_sangfor_live_query_adapters(settings)
-        if query_adapters:
-            await tool_registry.auto_discover_for_mode(
-                tool_mode=settings.tool_mode,
-                adapters=query_adapters,
-                simulation_enabled=settings.simulation_enabled,
-                allow_live_side_effects=settings.allow_live_side_effects,
-            )
+        await ensure_sangfor_live_query_adapters_registered(settings, tool_registry)
     except Exception:
         logger.exception("Sangfor live query provider registration failed")
         raise

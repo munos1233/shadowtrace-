@@ -50,7 +50,7 @@ from app.models.rollback_result import RollbackEffectStatus, RollbackResult
 from app.orchestration.graph_resume import _saga_manual_hold_resolved
 from app.services.approval_engine import ApprovalEngine
 from app.services.event_audit_log_service import EventAuditLogService
-from app.services.rollback_service import RollbackService
+from app.services.rollback_service import RollbackService, _readback_confirms_rollback
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 DATABASE_URL = os.environ.get(
@@ -511,6 +511,10 @@ async def test_rollback_action_success_verification_rolls_back_original(
         operator="test-op",
         reason="test rollback",
     )
+
+    # The periodic crash-window repair query must remain valid even when this
+    # rollback did not require a source-system compensation writeback.
+    assert await svc.repair_completed_rollbacks() == 0
 
     # Check result
     assert result.action_id == original.action_id
@@ -1878,7 +1882,7 @@ async def test_rollback_compensation_confirmed_via_mock_xdr(
             outbound_guard=OutboundDispositionGuard(),
         )
 
-        connector_id = "conn-disposition"
+        connector_id = f"conn-disposition-{_sfx()}"
         source_record_id = f"src-{_sfx()}"
         object_id = SCENARIO_INCIDENT_ID
         concurrency_token = await fetch_mock_concurrency_token(
@@ -1961,6 +1965,21 @@ async def test_rollback_compensation_confirmed_via_mock_xdr(
         )
         assert result.rolled_back is True
         assert len(result.compensation_writebacks) == 1
+
+        # Simulate a worker dying after rollback CAS but before the compensation
+        # outbox became durable. The periodic reconciler must reconstruct the
+        # missing tail exactly once without re-executing the rollback tool.
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(orm.DispositionOutbox).where(
+                        orm.DispositionOutbox.action_id == result.rollback_action_id,
+                        orm.DispositionOutbox.intent_kind
+                        == DispositionIntentKind.COMPENSATION_RECORD.value,
+                    )
+                )
+        assert await svc.repair_completed_rollbacks() == 1
+        assert await svc.repair_completed_rollbacks() == 0
 
         delivered = await disposition_sync.process_ready_outboxes(limit=5)
         assert delivered >= 1
@@ -2050,6 +2069,16 @@ def test_rollback_result_compatibility_field() -> None:
         ],
     )
     assert r2.compensation_writeback_id is None
+
+
+def test_missing_observation_never_confirms_rollback() -> None:
+    """An absent independent observation is not evidence of effect reversal."""
+    assert not _readback_confirms_rollback(
+        {
+            "status": "success",
+            "data": {"is_verified": False, "detail": "observation_missing"},
+        }
+    )
 
 
 @pytest.mark.parametrize("reverse", [False, True])

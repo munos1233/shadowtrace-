@@ -74,7 +74,10 @@ def _disposition_mode(mode: str) -> Iterator[None]:
     from app.core.config import get_settings
 
     previous = os.environ.get("DISPOSITION_MODE")
+    previous_kind = os.environ.get("DISPOSITION_ADAPTER_KIND")
     os.environ["DISPOSITION_MODE"] = mode
+    if mode == "live_xdr":
+        os.environ["DISPOSITION_ADAPTER_KIND"] = "sangfor_xdr"
     get_settings.cache_clear()
     try:
         yield
@@ -83,6 +86,10 @@ def _disposition_mode(mode: str) -> Iterator[None]:
             os.environ.pop("DISPOSITION_MODE", None)
         else:
             os.environ["DISPOSITION_MODE"] = previous
+        if previous_kind is None:
+            os.environ.pop("DISPOSITION_ADAPTER_KIND", None)
+        else:
+            os.environ["DISPOSITION_ADAPTER_KIND"] = previous_kind
         get_settings.cache_clear()
 
 

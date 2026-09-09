@@ -206,7 +206,7 @@ async def test_empty_knowledge_base_completes_with_empty_rag_sections(
     session_factory: async_sessionmaker[AsyncSession],
     run_analysis_pipeline: object,
 ) -> None:
-    """Empty KB hits are not RAG degradation — pipeline succeeds with empty sections."""
+    """Empty KB hits complete, but remain visibly degraded instead of fabricating context."""
     event_id = await ingest_scenario_event(
         scenario_id="insider_data_exfiltration",
         source_adapter=source_adapter,
@@ -225,14 +225,14 @@ async def test_empty_knowledge_base_completes_with_empty_rag_sections(
     event = await event_service.get_event(event_id)
     assert event is not None
     assert event.status is EventStatus.REPORTING
-    assert result.rag_degraded is False
+    assert result.rag_degraded is True
     assert rag_ctx is not None
     assert isinstance(rag_ctx, dict)
     assert rag_ctx.get("attack_techniques") == []
     assert rag_ctx.get("similar_cases") == []
     assert rag_ctx.get("playbook_refs") == []
     assert rag_ctx.get("citations") == []
-    assert rag_ctx.get("degraded") is False
+    assert rag_ctx.get("degraded") is True
 
 
 @pytest.mark.usefixtures("clean_state")

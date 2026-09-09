@@ -175,6 +175,22 @@ class Settings(BaseSettings):
     writeback_lookup_poll_interval_s: float = Field(
         default=1.0, alias="WRITEBACK_LOOKUP_POLL_INTERVAL_S"
     )
+    outbox_delivery_reconcile_enabled: bool = Field(
+        default=True,
+        alias="OUTBOX_DELIVERY_RECONCILE_ENABLED",
+        description="Periodically deliver READY/retryable disposition outboxes in Celery mode.",
+    )
+    outbox_delivery_reconcile_interval_s: float = Field(
+        default=5.0,
+        ge=1.0,
+        alias="OUTBOX_DELIVERY_RECONCILE_INTERVAL_S",
+    )
+    outbox_delivery_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=1000,
+        alias="OUTBOX_DELIVERY_BATCH_SIZE",
+    )
     simulation_enabled: bool = Field(default=True, alias="SIMULATION_ENABLED")
 
     llm_mode: str = Field(default="mock", alias="LLM_MODE")

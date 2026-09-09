@@ -114,23 +114,14 @@ services:
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
 
-      # --- Mock mode defaults (ISSUE-088 §实现步骤 point 2) ---
-      SOURCE_MODE: mock_xdr
-      DISPOSITION_MODE: mock_xdr
-      TOOL_MODE: mock
-      SIMULATION_ENABLED: "true"
+      # Runtime/provider modes come from .env.example and the optional later
+      # .env.live file. Do not repeat them here: service ``environment`` has
+      # higher precedence than ``env_file`` and would make live overrides inert.
       # Fallback is background. Pin celery via infra/docker-compose.worker.yml
       # (`make up WORKER=1`) or infra/docker-compose.llm-audit.yml — do not
       # recreate backend without one of those overlays.
       TASK_MODE: ${TASK_MODE:-background}
       CELERY_BROKER_URL: redis://redis:6379/0
-
-      # --- Mock XDR connection ---
-      DISPOSITION_BASE_URL: http://mock-xdr:8100
-
-      # --- Safety gates (live mode only) ---
-      ALLOW_LIVE_SIDE_EFFECTS: "false"
-      ALLOW_XDR_WRITEBACK: "false"
 
       # --- Dev auth (ISSUE-088 bootstrap + ISSUE-077 e2e compatibility) ---
       # bootstrap-token: all roles incl. admin — bootstrap/force-close escape hatch only.
@@ -222,13 +213,8 @@ services:
       SKIP_DB_MIGRATE: "true"
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
-      SOURCE_MODE: mock_xdr
-      DISPOSITION_MODE: mock_xdr
-      TOOL_MODE: mock
-      SIMULATION_ENABLED: "true"
-      ALLOW_LIVE_SIDE_EFFECTS: "false"
-      ALLOW_XDR_WRITEBACK: "false"
-      DISPOSITION_BASE_URL: http://mock-xdr:8100
+      # Provider modes and endpoints are inherited from env_file so an optional
+      # .env.live consistently affects API and worker processes.
       TASK_MODE: celery
       CELERY_BROKER_URL: redis://redis:6379/0
       CHANGE_WINDOW_BASELINE_PATH: /app/data/organization/change_windows.json
@@ -292,11 +278,8 @@ services:
       SKIP_DB_MIGRATE: "true"
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
-      SOURCE_MODE: mock_xdr
-      DISPOSITION_MODE: mock_xdr
-      DISPOSITION_BASE_URL: http://mock-xdr:8100
+      # Provider modes and endpoints are inherited from env_file.
       CHANGE_WINDOW_BASELINE_PATH: /app/data/organization/change_windows.json
-      SIMULATION_ENABLED: "true"
       INGESTION_SCHEDULER_ENABLED: "true"
       INGESTION_POLL_INTERVAL_S: ${INGESTION_POLL_INTERVAL_S:-60}
       BEHAVIOR_OBSERVATION_RETRY_ENABLED: "true"
@@ -346,13 +329,7 @@ services:
       SKIP_DB_MIGRATE: "true"
       DATABASE_URL: postgresql+asyncpg://shadowtrace:shadowtrace@postgres:5432/shadowtrace
       REDIS_URL: redis://redis:6379/0
-      SOURCE_MODE: mock_xdr
-      DISPOSITION_MODE: mock_xdr
-      TOOL_MODE: mock
-      SIMULATION_ENABLED: "true"
-      ALLOW_LIVE_SIDE_EFFECTS: "false"
-      ALLOW_XDR_WRITEBACK: "false"
-      DISPOSITION_BASE_URL: http://mock-xdr:8100
+      # Provider modes and endpoints are inherited from env_file.
       CHANGE_WINDOW_BASELINE_PATH: /app/data/organization/change_windows.json
       INGESTION_SCHEDULER_ENABLED: "true"
       INGESTION_POLL_INTERVAL_S: ${INGESTION_POLL_INTERVAL_S:-60}

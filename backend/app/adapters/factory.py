@@ -148,6 +148,62 @@ def build_sangfor_live_query_adapters(
     return build_sangfor_query_adapters(xdr_client, config)
 
 
+async def ensure_sangfor_live_query_adapters_registered(
+    settings: Settings,
+    registry: Any,
+) -> list[str]:
+    """Idempotently register live Sangfor query adapters in this process.
+
+    FastAPI and Celery are separate processes. Registration therefore belongs
+    in shared runtime composition, not only in the FastAPI lifespan hook.
+    Existing bindings are retained so calling this from both entry points is
+    safe and does not recreate provider implementations.
+    """
+    if disposition_kind(settings) != KIND_SANGFOR or _normalize(settings.tool_mode) != "live":
+        return []
+
+    # Avoid constructing a second HTTP client when API lifespan and lazy
+    # worker composition both reach this idempotent assembly point.
+    from app.adapters.sangfor.query_provider import QUERY_TOOL_NAMES
+
+    registered_names = {view.tool_meta.tool_name for view in registry.list_registered_tools()}
+    already_complete = all(
+        tool_name in registered_names
+        and any(
+            binding.provider_name == f"sangfor_xdr_query:{tool_name}"
+            for binding in registry.list_bindings(tool_name)
+        )
+        for tool_name in QUERY_TOOL_NAMES
+    )
+    if already_complete:
+        return []
+
+    adapters = build_sangfor_live_query_adapters(settings)
+    if not adapters:
+        return []
+
+    pending: list[Any] = []
+    for adapter in adapters:
+        bindings = (
+            registry.list_bindings(adapter.tool_meta.tool_name)
+            if adapter.tool_meta.tool_name in registered_names
+            else []
+        )
+        if any(binding.provider_name == adapter.name for binding in bindings):
+            continue
+        pending.append(adapter)
+    if not pending:
+        return []
+
+    registered = await registry.auto_discover_for_mode(
+        tool_mode=settings.tool_mode,
+        adapters=pending,
+        simulation_enabled=settings.simulation_enabled,
+        allow_live_side_effects=settings.allow_live_side_effects,
+    )
+    return [str(tool_name) for tool_name in registered]
+
+
 def _build_mock_disposition(settings: Settings) -> MockXDRDispositionAdapter:
     base_url = (settings.disposition_base_url or "http://mock-xdr").strip()
     return MockXDRDispositionAdapter(
@@ -495,10 +551,12 @@ __all__ = [
     "SUPPORTED_DISPOSITION_KINDS",
     "build_disposition_adapter_registry",
     "build_sangfor_client",
+    "build_sangfor_live_query_adapters",
     "build_source_adapter",
     "disposition_adapter_component",
     "disposition_kind",
     "disposition_provider_name",
+    "ensure_sangfor_live_query_adapters_registered",
     "live_auth_failed",
     "observe_disposition_verification",
     "probe_sangfor_auth",

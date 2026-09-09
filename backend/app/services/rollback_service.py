@@ -39,6 +39,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from app.agents.rules.rollback_mapping import (
     get_rollback_tool,
@@ -398,11 +399,14 @@ class RollbackService:
                 raise ValueError("rollback source action no longer exists")
             original = _action_from_row(source_row)
 
-        if (
-            rollback_action.status is ActionStatus.SUCCESS
-            and original.status is ActionStatus.ROLLED_BACK
-        ):
-            result_ok = True
+        if rollback_action.status is ActionStatus.SUCCESS:
+            recovered = await self._existing_rollback_result(
+                original,
+                rollback_action,
+                operator=operator,
+                audit_log_id=None,
+            )
+            result_ok = recovered.rolled_back
         elif rollback_action.status in {ActionStatus.APPROVED, ActionStatus.EXECUTING}:
             result = await self._complete_rollback(
                 original,
@@ -473,15 +477,48 @@ class RollbackService:
                 audit_log_id=audit_log_id,
             )
 
-        # --- Verify rollback effect ----------------------------------------------
+        return await self._finalize_rollback_effect(
+            original,
+            executed,
+            rollback_tool=rollback_tool,
+            operator=operator,
+            comp_required=comp_required,
+            readiness=readiness,
+            audit_log_id=audit_log_id,
+        )
+
+    async def _finalize_rollback_effect(
+        self,
+        original: ActionModel,
+        executed: ActionModel,
+        *,
+        rollback_tool: str,
+        operator: str,
+        comp_required: bool,
+        readiness: WritebackReadiness,
+        audit_log_id: str | None,
+    ) -> RollbackResult:
+        """Finish the durable tail after effect execution.
+
+        This method is deliberately replayable. A worker may die after the
+        provider completed the rollback but before readback, source CAS, or
+        compensation enqueue; a later Saga attempt must continue those phases
+        without executing the external side effect a second time.
+        """
         effect_status = await self._verify_rollback_effect(original, executed)
 
         if effect_status not in ("verified", "skipped") and executed.status is ActionStatus.SUCCESS:
-            await self._update_action_status(rollback_action_id, ActionStatus.FAILED)
+            await self._update_action_status(executed.action_id, ActionStatus.FAILED)
 
         # --- CAS original Action → ROLLED_BACK ----------------------------------
         if effect_status in ("verified", "skipped"):
-            rolled_back = await self._cas_rollback_status(original.action_id, original)
+            rolled_back = (
+                original.status is ActionStatus.ROLLED_BACK
+                or await self._cas_rollback_status(
+                    original.action_id,
+                    original,
+                )
+            )
         else:
             rolled_back = False
 
@@ -505,7 +542,7 @@ class RollbackService:
 
         result = RollbackResult(
             action_id=original.action_id,
-            rollback_action_id=rollback_action_id,
+            rollback_action_id=executed.action_id,
             rollback_tool=rollback_tool,
             rollback_effect_status=effect_status,
             compensation_writeback_required=comp_required,
@@ -520,7 +557,7 @@ class RollbackService:
         # --- Publish event -------------------------------------------------------
         await self._publish_rollback_event(
             event_id=original.event_id,
-            action_id=rollback_action_id,
+            action_id=executed.action_id,
             source_action_id=original.action_id,
             operator=operator,
             rolled_back=rolled_back,
@@ -613,14 +650,13 @@ class RollbackService:
                 audit_log_id=audit_log_id,
             )
         if rollback_action.status is ActionStatus.SUCCESS:
-            return RollbackResult(
-                action_id=original.action_id,
-                rollback_action_id=rollback_action.action_id,
+            return await self._finalize_rollback_effect(
+                original,
+                rollback_action,
                 rollback_tool=rollback_action.tool_name,
-                rollback_effect_status="verified",
-                compensation_writeback_required=comp_required,
-                compensation_writeback_readiness=readiness,
-                rolled_back=original.status is ActionStatus.ROLLED_BACK,
+                operator=operator,
+                comp_required=comp_required,
+                readiness=readiness,
                 audit_log_id=audit_log_id,
             )
         warning = (
@@ -862,6 +898,75 @@ class RollbackService:
 
         return results
 
+    async def repair_completed_rollbacks(self, *, limit: int = 50) -> int:
+        """Recreate compensation outboxes lost in a post-CAS crash window.
+
+        The rollback effect and source ``ROLLED_BACK`` transition may commit
+        before compensation enqueue. This bounded reconciliation is called by
+        the durable outbox worker and never re-executes the rollback effect.
+        """
+        parent_outbox = aliased(orm.DispositionOutbox)
+        compensation_outbox = aliased(orm.DispositionOutbox)
+        matching_compensation_exists = (
+            select(compensation_outbox.outbox_id)
+            .where(
+                compensation_outbox.action_id == orm.Action.action_id,
+                compensation_outbox.intent_kind == DispositionIntentKind.COMPENSATION_RECORD.value,
+                compensation_outbox.superseded_by_disposition_id.is_(None),
+                compensation_outbox.command_payload["parent_disposition_id"].as_string()
+                == parent_outbox.disposition_id,
+            )
+            .exists()
+        )
+        missing_compensation_exists = (
+            select(parent_outbox.outbox_id)
+            .where(
+                parent_outbox.action_id == orm.Action.source_action_id,
+                parent_outbox.intent_kind.in_(
+                    [
+                        DispositionIntentKind.ENTITY_ACTION_SUBMIT.value,
+                        DispositionIntentKind.EXECUTION_RESULT_RECORD.value,
+                    ]
+                ),
+                parent_outbox.superseded_by_disposition_id.is_(None),
+                ~matching_compensation_exists,
+            )
+            .exists()
+        )
+        async with self._session_factory() as session:
+            rows = list(
+                await session.scalars(
+                    select(orm.Action)
+                    .where(
+                        orm.Action.action_category == ActionCategory.ROLLBACK.value,
+                        orm.Action.status == ActionStatus.SUCCESS.value,
+                        orm.Action.source_action_id.is_not(None),
+                        orm.Action.writeback_required.is_(True),
+                        orm.Action.writeback_applicable.is_(True),
+                        missing_compensation_exists,
+                    )
+                    .order_by(orm.Action.updated_at.asc(), orm.Action.action_id.asc())
+                    .limit(max(1, limit))
+                )
+            )
+
+        repaired = 0
+        for rollback_row in rows:
+            async with self._session_factory() as session:
+                source_row = await session.get(orm.Action, rollback_row.source_action_id)
+            if source_row is None:
+                continue
+            if source_row.status != ActionStatus.ROLLED_BACK.value:
+                continue
+            result = await self._create_compensation_writebacks(
+                original_action=_action_from_row(source_row),
+                rollback_action=_action_from_row(rollback_row),
+                operator="RollbackReconciler",
+            )
+            if result.writebacks:
+                repaired += 1
+        return repaired
+
     # -----------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------
@@ -997,6 +1102,25 @@ class RollbackService:
 
                 source_record_id = outbox_rows[0].source_record_id
 
+                # Replay-safe recovery: a worker may have committed some or all
+                # compensation rows before dying. Reuse rows by their immutable
+                # parent disposition instead of emitting duplicate side effects.
+                existing_comp_rows = list(
+                    await session.scalars(
+                        select(orm.DispositionOutbox).where(
+                            orm.DispositionOutbox.action_id == rollback_action.action_id,
+                            orm.DispositionOutbox.intent_kind
+                            == DispositionIntentKind.COMPENSATION_RECORD.value,
+                            orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                        )
+                    )
+                )
+                existing_by_parent = {
+                    str((row.command_payload or {}).get("parent_disposition_id")): row
+                    for row in existing_comp_rows
+                    if (row.command_payload or {}).get("parent_disposition_id")
+                }
+
                 writebacks: list[CompensationWritebackItem] = []
                 comp_owner = _compensation_execution_owner(
                     original_action,
@@ -1006,6 +1130,24 @@ class RollbackService:
                     update={"execution_owner": comp_owner},
                 )
                 for outbox in outbox_rows:
+                    existing_comp = existing_by_parent.get(str(outbox.disposition_id))
+                    if existing_comp is not None:
+                        try:
+                            existing_status = WritebackStatus(
+                                existing_comp.latest_writeback_status
+                                or WritebackStatus.PENDING.value
+                            )
+                        except ValueError:
+                            existing_status = WritebackStatus.PENDING
+                        writebacks.append(
+                            CompensationWritebackItem(
+                                writeback_id=existing_comp.writeback_id,
+                                disposition_id=existing_comp.disposition_id,
+                                status=existing_status,
+                                intent_kind=DispositionIntentKind.COMPENSATION_RECORD.value,
+                            )
+                        )
+                        continue
                     disposition_id = new_disposition_id()
 
                     cmd = self._factory.build_compensation_record(
@@ -1238,6 +1380,7 @@ _READBACK_FAILURE_DETAILS = frozenset(
     {
         "forced_failure_override",
         "execution_job_not_found",
+        "observation_missing",
         "observation_not_visible",
         "observation_job_mismatch",
     }
