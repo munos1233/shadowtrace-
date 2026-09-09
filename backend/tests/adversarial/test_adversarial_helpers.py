@@ -1215,9 +1215,9 @@ def test_resolve_disposition_is_mock_344_allowlist(monkeypatch) -> None:
         assert resolve_disposition_is_mock() is False
         _set(mode="mockish")
         assert resolve_disposition_is_mock() is False
-        _set(mode="live", adapter="mock")
-        assert resolve_disposition_is_mock() is False
-        _set(mode="live", adapter="http")
+        # ``live`` is intentionally rejected during Settings construction;
+        # exercise the registered non-Mock mode instead of bypassing that gate.
+        _set(mode="live_xdr", adapter="sangfor_xdr")
         assert resolve_disposition_is_mock() is False
     finally:
         get_settings.cache_clear()

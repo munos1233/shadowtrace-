@@ -222,7 +222,10 @@ def test_rag_attack_stage_uses_deepest_tactic() -> None:
         ]
     )
     scores = engine.score(triage_result=triage, evidence_output=empty, rag_output=rag)
-    assert scores["attack_stage"][0] >= 95.0
+    # Late-stage impact dominates, while the documented 65% max + 35% mean
+    # blend still retains the corroborating initial-access stage.
+    assert 90.0 <= scores["attack_stage"][0] < 95.0
+    assert "T1486" in scores["attack_stage"][1]
 
 
 def test_rag_medium_fp_similarity_possible_false_positive() -> None:

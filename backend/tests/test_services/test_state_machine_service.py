@@ -484,7 +484,10 @@ async def _seed_terminal_writeback_fixture(
                     auto_execute=False,
                     reason="terminal disposition",
                     execution_owner=ExecutionOwner.XDR_MANAGED.value,
-                    writeback_required=False,
+                    writeback_required=True,
+                    writeback_applicable=True,
+                    writeback_readiness=WritebackReadiness.READY.value,
+                    writeback_status=WritebackStatus.CONFIRMED.value,
                 )
             )
             await session.flush()
@@ -533,6 +536,7 @@ def _live_disposition_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     from app.core.config import get_settings
 
     monkeypatch.setenv("DISPOSITION_MODE", "live_xdr")
+    monkeypatch.setenv("DISPOSITION_ADAPTER_KIND", "sangfor_xdr")
     get_settings.cache_clear()
     try:
         yield

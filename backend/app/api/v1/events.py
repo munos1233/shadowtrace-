@@ -604,6 +604,8 @@ async def create_event(
 
 async def _list_writeback_envelopes(
     events: list[Any],
+    *,
+    session_factory: Any | None = None,
 ) -> dict[str, Any]:
     """Project writeback envelopes for one list page (one query set, not N+1)."""
     from app.services.writeback_event_projection import (
@@ -616,7 +618,8 @@ async def _list_writeback_envelopes(
         return {}
     policy_by_id = {event.event_id: event.disposition_policy for event in required_events}
     try:
-        async with _get_session_factory()() as session:
+        effective_session_factory = session_factory or _get_session_factory()
+        async with effective_session_factory() as session:
             rows_by_event = await load_writeback_rows_for_events(session, list(policy_by_id))
             envelopes = {
                 event_id: project_writeback_envelope(
@@ -665,7 +668,10 @@ async def list_events(
     )
     from app.services.risk_verdict_projection import risk_observability_from_snapshot
 
-    envelopes = await _list_writeback_envelopes(result.items)
+    envelopes = await _list_writeback_envelopes(
+        result.items,
+        session_factory=event_service.session_factory,
+    )
     items: list[s.EventListItem] = []
     for event in result.items:
         wb_required = _writeback_required(event.disposition_policy)

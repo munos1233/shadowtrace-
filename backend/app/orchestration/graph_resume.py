@@ -534,7 +534,6 @@ async def prepare_graph_resume_state(
             or values.get("execution_substate") == ExecutionSubstate.WAITING_APPROVAL.value
         )
         if needs_patch:
-            as_node = NODE_REPORT
             await graph.aupdate_state(
                 config,
                 {
@@ -543,7 +542,11 @@ async def prepare_graph_resume_state(
                     "execution_substate": ExecutionSubstate.NONE.value,
                     "event_status": EventStatus.REPORTING.value,
                 },
-                as_node=as_node,
+                # The approval route owns the REPORTING -> report edge. Marking
+                # this update as NODE_REPORT would make LangGraph continue at
+                # close_node and silently skip report generation after a full
+                # approval rejection.
+                as_node=NODE_APPROVAL,
             )
         return True
 

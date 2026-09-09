@@ -32,6 +32,24 @@ make up-demo && make bootstrap-demo && make smoke-demo
 
 详见 [docs/deployment.md](docs/deployment.md)。
 
+### 评委现场模式（真实 LLM + 完整 Mock 闭环）
+
+没有生产 XDR 时，推荐只替换模型，数据源、查询工具、处置、回读验证仍使用
+Canonical Mock。该模式会显式固定 Celery worker 和 Mock 安全边界，不受遗留
+`.env.live` 影响：
+
+```bash
+cp infra/.env.llm.audit.example .env.llm.audit
+# 只填写 LLM_API_BASE_URL / LLM_API_KEY / LLM_PRIMARY_MODEL
+make up-judge
+make bootstrap-judge
+make judge-full-loop
+```
+
+检查 `GET /api/v1/health`：`llm.mode=openai_compatible`，source/disposition/tool
+仍为 Mock，`celery.task_mode=celery`。密钥只放在已 gitignore 的
+`.env.llm.audit`，不要写入 Compose、文档或提交记录。
+
 ### 最小 core 栈（短路径分析演示）
 
 ```bash

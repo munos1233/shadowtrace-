@@ -290,7 +290,7 @@ class ToolExecutor:
                 "call_nature": call_nature.value,
             },
         )
-        if not registered.submission_ready:
+        if not registered.submission_ready and call_nature is not CallNature.QUERY:
             result = self._failure_result(
                 call_id=call_id,
                 tool_name=tool_name,
@@ -307,6 +307,13 @@ class ToolExecutor:
                 audit_started=audit_started,
             )
             return result
+
+        # Query adapters may intentionally advertise an unsupported capability
+        # while still implementing a side-effect-free, structured
+        # ``query_unavailable`` result with coverage reasons. Dispatching those
+        # adapters preserves evidence/degradation semantics; their wrapper
+        # performs a fresh health check and remains fail-closed. Side-effect
+        # tools never receive this exception.
 
         attempt = 0
         retry_count = 0

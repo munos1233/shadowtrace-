@@ -3155,6 +3155,7 @@ async def test_deliver_outbox_blocked_when_writeback_fence_closed_after_enqueue(
         {
             **get_settings().model_dump(),
             "DISPOSITION_MODE": "live_xdr",
+            "DISPOSITION_ADAPTER_KIND": "sangfor_xdr",
             "ALLOW_XDR_WRITEBACK": False,
         }
     )
@@ -3420,6 +3421,7 @@ async def test_deliver_outbox_fence_blocks_from_waiting_retry(
         {
             **get_settings().model_dump(),
             "DISPOSITION_MODE": "live_xdr",
+            "DISPOSITION_ADAPTER_KIND": "sangfor_xdr",
             "ALLOW_XDR_WRITEBACK": False,
         }
     )

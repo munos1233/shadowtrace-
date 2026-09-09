@@ -101,6 +101,12 @@ def _build_beat_schedule(*, task_mode: TaskMode | None = None) -> dict[str, dict
             "schedule": float(settings.graph_resume_intent_reconcile_interval_s),
             "options": {"queue": "investigation"},
         }
+        if settings.outbox_delivery_reconcile_enabled:
+            schedule["shadowtrace-process-disposition-outboxes"] = {
+                "task": "shadowtrace.process_disposition_outboxes",
+                "schedule": float(settings.outbox_delivery_reconcile_interval_s),
+                "options": {"queue": "investigation"},
+            }
     if settings.behavior_observation_retry_enabled:
         schedule["shadowtrace-behavior-observation-retry-pending"] = {
             "task": "shadowtrace.behavior_observation.retry_pending",
@@ -140,6 +146,7 @@ celery_app.conf.update(
         "shadowtrace.reconcile_investigation_intents": {"queue": "investigation"},
         "shadowtrace.dispatch_graph_resume_intents": {"queue": "investigation"},
         "shadowtrace.reconcile_graph_resume_intents": {"queue": "investigation"},
+        "shadowtrace.process_disposition_outboxes": {"queue": "investigation"},
         "shadowtrace.behavior_observation.retry_pending": {"queue": "ingestion"},
         "shadowtrace.detection_governance.expire_active_approvals": {"queue": "investigation"},
         "shadowtrace.reconcile_stale_executions": {"queue": "investigation"},
@@ -163,6 +170,7 @@ celery_app.conf.update(
         "app.tasks.behavior_observation_tasks",
         "app.tasks.detection_governance_tasks",
         "app.tasks.action_execution_tasks",
+        "app.tasks.outbox_tasks",
         "app.tasks.state_projection_tasks",
         "app.tasks.storyline_tasks",
     ),

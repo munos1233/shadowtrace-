@@ -132,8 +132,8 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
         risk_min=70,
         risk_max=95,
         # ISSUE-099: source-enriched entities lift rule-only scores above the old 15-25 band.
-        rule_fallback_risk_min=45,
-        rule_fallback_risk_max=60,
+        rule_fallback_risk_min=65,
+        rule_fallback_risk_max=80,
         rule_fallback=True,
         allowed_actions=(
             "isolate_host",
@@ -153,8 +153,8 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
         acceptable_verdicts=(FinalVerdict.CONFIRMED_THREAT, FinalVerdict.NONE),
         risk_min=70,
         risk_max=95,
-        rule_fallback_risk_min=45,
-        rule_fallback_risk_max=60,
+        rule_fallback_risk_min=65,
+        rule_fallback_risk_max=80,
         rule_fallback=True,
         allowed_actions=(
             "block_process",
@@ -174,8 +174,8 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
         acceptable_verdicts=(FinalVerdict.CONFIRMED_THREAT, FinalVerdict.NONE),
         risk_min=65,
         risk_max=95,
-        rule_fallback_risk_min=45,
-        rule_fallback_risk_max=60,
+        rule_fallback_risk_min=65,
+        rule_fallback_risk_max=80,
         rule_fallback=True,
         allowed_actions=(
             "disable_account",
@@ -193,8 +193,8 @@ SCENARIO_EXPECTATIONS: dict[str, ScenarioExpectation] = {
         acceptable_verdicts=(FinalVerdict.CONFIRMED_THREAT, FinalVerdict.NONE),
         risk_min=70,
         risk_max=95,
-        rule_fallback_risk_min=45,
-        rule_fallback_risk_max=60,
+        rule_fallback_risk_min=65,
+        rule_fallback_risk_max=80,
         rule_fallback=True,
         allowed_actions=("isolate_host", "block_ip", "disable_account", "create_ticket"),
         disposition_required=True,

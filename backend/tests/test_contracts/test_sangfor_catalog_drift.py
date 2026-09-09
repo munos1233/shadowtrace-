@@ -48,6 +48,12 @@ def _load_check_module():
     return mod
 
 
+def _require_source_html() -> None:
+    """The vendor export is private challenge material, not a CI artifact."""
+    if not _HTML.is_file():
+        pytest.skip("private Sangfor OpenAPI HTML is not present in this checkout")
+
+
 def _committed_catalog() -> dict[str, Any]:
     return json.loads(_CATALOG.read_text(encoding="utf-8"))
 
@@ -89,6 +95,7 @@ def _response_nodes(op: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
 
 
 def test_html_post_count_is_94() -> None:
+    _require_source_html()
     html = _HTML.read_text(encoding="utf-8")
     project = parse_project_json(html)
     posts = 0
@@ -104,6 +111,7 @@ def test_html_post_count_is_94() -> None:
 
 
 def test_committed_catalog_matches_fresh_html_extract() -> None:
+    _require_source_html()
     fresh = load_catalog_from_html(_HTML)
     committed = _committed_catalog()
     assert catalog_to_json(fresh) == catalog_to_json(committed)
@@ -115,6 +123,7 @@ def test_committed_catalog_matches_fresh_html_extract() -> None:
 
 
 def test_check_sangfor_catalog_drift_passes() -> None:
+    _require_source_html()
     mod = _load_check_module()
     assert mod.main() == 0
 
