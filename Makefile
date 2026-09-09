@@ -19,7 +19,6 @@ COMPOSE_FILE := $(CURDIR)/infra/docker-compose.yml
 CELERY_SIGKILL_COMPOSE_FILE := $(CURDIR)/infra/docker-compose.celery-sigkill.yml
 OBS_COMPOSE_FILE := $(CURDIR)/infra/observability/docker-compose.observability.yml
 WORKER_COMPOSE_FILE := $(CURDIR)/infra/docker-compose.worker.yml
-LLM_AUDIT_COMPOSE_FILE := $(CURDIR)/infra/docker-compose.llm-audit.yml
 COMPOSE := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
 	BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
@@ -49,17 +48,6 @@ COMPOSE_DEMO := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
 	-f "$(COMPOSE_FILE)" -f "$(WORKER_COMPOSE_FILE)" -f "$(OBS_COMPOSE_FILE)" \
 	--profile demo
 
-# Competition/judge runtime: real LLM + Canonical Mock source/tools/writeback.
-# The overlay pins TASK_MODE=celery and all non-LLM providers to Mock so a stale
-# .env.live cannot redirect the demo to unconfigured production equipment.
-COMPOSE_JUDGE := COMPOSE_PROJECT_NAME="$(COMPOSE_PROJECT_NAME)" \
-	POSTGRES_PORT="$(POSTGRES_PORT)" REDIS_PORT="$(REDIS_PORT)" \
-	BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" \
-	MOCK_XDR_PORT="$(MOCK_XDR_PORT)" \
-	docker compose --project-name "$(COMPOSE_PROJECT_NAME)" \
-	-f "$(COMPOSE_FILE)" -f "$(WORKER_COMPOSE_FILE)" \
-	-f "$(LLM_AUDIT_COMPOSE_FILE)" --profile worker --profile scheduler
-
 # Optional: set WORKER=1 to include the Celery investigation worker (sets TASK_MODE=celery).
 # DB migrations: only the backend container runs alembic; workers use SKIP_DB_MIGRATE (ISSUE-238).
 WORKER ?=
@@ -80,26 +68,10 @@ CELERY_SIGKILL_ARTIFACT_DIR ?= $(CURDIR)/artifacts/issue-283
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
-.PHONY: up down down-v up-judge down-judge bootstrap-judge judge-full-loop bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo bootstrap-demo-analysis bootstrap-demo-full-loop smoke-demo demo-full-loop demo-guard-test up-observability down-observability llm-smoke test test-ci-lite lint fmt migrate migrate-down load-kb up-embedding-remote integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix eval-eventtype-8 adversarial-closure-gates test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
+.PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo bootstrap-demo-analysis bootstrap-demo-full-loop smoke-demo demo-full-loop demo-guard-test up-observability down-observability llm-smoke test test-ci-lite lint fmt migrate migrate-down load-kb up-embedding-remote integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix eval-eventtype-8 adversarial-closure-gates test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
 	$(COMPOSE) $(WORKER_COMPOSE) $(WORKER_PROFILE) $(SCHEDULER_PROFILE) up -d --build
-
-up-judge:
-	@test -f "$(CURDIR)/.env.llm.audit" || { \
-		echo "missing .env.llm.audit; copy infra/.env.llm.audit.example and fill LLM credentials" >&2; \
-		exit 2; \
-	}
-	$(COMPOSE_JUDGE) up -d --build
-
-down-judge:
-	$(COMPOSE_JUDGE) down
-
-bootstrap-judge:
-	@$(MAKE) bootstrap BOOTSTRAP_GENERATE_REPORT=true BOOTSTRAP_INCLUDE_RESPONSE=true
-
-judge-full-loop:
-	@$(MAKE) eval-full-loop EVAL_REQUIRE_CLOSED=1
 
 down:
 	@demo_running=$$($(COMPOSE_DEMO) ps -q 2>/dev/null | wc -l | tr -d ' '); \

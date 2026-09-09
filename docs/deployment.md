@@ -464,25 +464,6 @@ LangGraph checkpoint 在 Redis 读写失败后会 **fail-soft 降级到进程内
 
 ---
 
-## 评委现场：真实 LLM + Canonical Mock 闭环
-
-尚无生产 XDR 时，不要使用 Live XDR 配置。只将 LLM 切到真实端点：
-
-```bash
-cp infra/.env.llm.audit.example .env.llm.audit
-# 填写 LLM_API_BASE_URL、LLM_API_KEY、LLM_PRIMARY_MODEL
-make up-judge
-make bootstrap-judge
-make judge-full-loop
-```
-
-`docker-compose.llm-audit.yml` 会同时固定 API 与 worker 为
-`SOURCE_MODE=mock_xdr`、`DISPOSITION_MODE=mock_xdr`、
-`DISPOSITION_ADAPTER_KIND=mock`、`TOOL_MODE=mock`、
-`SIMULATION_ENABLED=true`，仅从 `.env.llm.audit` 读取 `LLM_*`。因此评委测试
-隔离、账号、进程处置、Saga 回滚、ReAct 重规划和两阶段回读时，走的是完整、
-可重复的 Mock 闭环；界面与审计记录必须如实显示模拟回执，不能宣称已联动生产设备。
-
 ## 切换到 Live 模式
 
 Live 模式**不是** compose profile；通过可选 env 叠加文件启用。复制 `infra/.env.live.example` 为项目根目录 `.env.live` 并填入凭证，

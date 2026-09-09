@@ -118,8 +118,8 @@ services:
       # .env.live file. Do not repeat them here: service ``environment`` has
       # higher precedence than ``env_file`` and would make live overrides inert.
       # Fallback is background. Pin celery via infra/docker-compose.worker.yml
-      # (`make up WORKER=1`) or infra/docker-compose.llm-audit.yml — do not
-      # recreate backend without one of those overlays.
+      # (`make up WORKER=1`) — do not recreate backend without that overlay
+      # while a worker container is running.
       TASK_MODE: ${TASK_MODE:-background}
       CELERY_BROKER_URL: redis://redis:6379/0
 
