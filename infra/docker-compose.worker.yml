@@ -1,6 +1,6 @@
 # Applied by `make up WORKER=1` (and demo). Pins API TASK_MODE to celery so
 # compose interpolation cannot silently fall back to background when a worker
-# container is running (llm-audit recreate, raw `docker compose up backend`).
+# container is running (for example, raw `docker compose up backend`).
 services:
   backend:
     environment:
