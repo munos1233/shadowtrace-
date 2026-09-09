@@ -406,7 +406,7 @@ class FakeRollback:
     async def compensate(
         self,
         event_id: str,
-        failed_action_id: str,
+        failed_action_id: str | list[str],
         operator: str = "SagaCompensation",
         reason: str = "",
     ) -> list[Any]:
@@ -588,6 +588,7 @@ def _services(
         # the real closed loop instead of the (now fail-closed) stub nodes.
         "approval_engine": FakeApprovalEngine(needs_wait=False, evaluated_count=0),
         "action_execution": FakeActionExecution(),
+        "rollback": FakeRollback(),
     }
 
 

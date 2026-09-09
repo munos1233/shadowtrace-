@@ -5979,6 +5979,18 @@
             "title": "Reason Message",
             "default": ""
           },
+          "context_projection_error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Projection Error"
+          },
           "created_at": {
             "anyOf": [
               {

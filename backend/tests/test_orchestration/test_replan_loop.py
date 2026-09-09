@@ -58,6 +58,10 @@ def _base_state(**overrides: Any) -> InvestigationState:
     return state
 
 
+def _noop_rollback() -> MagicMock:
+    return MagicMock(compensate=AsyncMock(return_value=[]))
+
+
 class FakeRuntime:
     """Fake WorkflowRuntimeService for tests."""
 
@@ -291,7 +295,7 @@ class TestReplanGraphNode:
             replan_count=0,
             verify_failed_actions=["act-001"],
         )
-        result = await replan_graph_node(state, handler=handler)
+        result = await replan_graph_node(state, handler=handler, rollback=_noop_rollback())
         assert result["event_status"] == EventStatus.REPLANNING.value
         assert result["replan_count"] == 1
         assert result["escalated"] is False
@@ -305,7 +309,7 @@ class TestReplanGraphNode:
             verify_failed_actions=["act-001"],
             verify_has_partial_success=False,
         )
-        result = await replan_graph_node(state, handler=handler)
+        result = await replan_graph_node(state, handler=handler, rollback=_noop_rollback())
         assert result["escalated"] is True
 
     async def test_compensate_receives_all_failed_actions(self):
@@ -354,6 +358,17 @@ class TestReplanGraphNode:
         assert route_after_replan(result) == "manual"
         assert "saga_compensation_incomplete" in (result.get("degraded_flags") or [])
 
+    async def test_missing_rollback_service_blocks_replan(self):
+        handler = MagicMock(execute_replan=AsyncMock())
+        state = _base_state(verify_failed_actions=["act-fail"])
+
+        result = await replan_graph_node(state, handler=handler, rollback=None)
+
+        handler.execute_replan.assert_not_awaited()
+        assert result["halted"] is True
+        assert result["verify_need_manual_resolution"] is True
+        assert "saga_compensation_incomplete" in result["degraded_flags"]
+
 
 # ── Tests: route_after_replan ───────────────────────────────────────────────
 
@@ -366,6 +381,13 @@ class TestRouteAfterReplan:
         state = _base_state(replan_count=1, escalated=False)
         route = route_after_replan(state)
         assert route == "investigate"
+
+    def test_resolved_saga_tombstone_ignores_union_merged_stale_flag(self):
+        state = _base_state(
+            degraded_flags=["saga_compensation_incomplete=True"],
+            saga_compensation_resolved=True,
+        )
+        assert route_after_replan(state) == "investigate"
 
     def test_escalated_routes_to_report(self):
         """Escalated → ROUTE_REPORT."""
@@ -501,6 +523,7 @@ class TestConvergenceGuardBlocksReplan:
             state,
             handler=handler,
             convergence_guard=guard,
+            rollback=_noop_rollback(),
         )
 
         # Must have called record_step AND should_stop
@@ -536,6 +559,7 @@ class TestConvergenceGuardBlocksReplan:
             state,
             handler=handler,
             convergence_guard=guard,
+            rollback=_noop_rollback(),
         )
 
         guard.record_step.assert_awaited_once()

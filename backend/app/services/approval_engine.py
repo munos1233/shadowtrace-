@@ -63,6 +63,7 @@ SYSTEM_TIMEOUT_OPERATOR = "system_timeout"
 APPROVAL_ENGINE_OPERATOR = "ApprovalEngine"
 
 ResumeHook = Callable[[str], Awaitable[ResumeStatus | None]]
+RollbackApprovalHook = Callable[[str, str], Awaitable[ResumeStatus | None]]
 
 _APPROVAL_TERMINAL = frozenset({ActionStatus.APPROVED, ActionStatus.REJECTED})
 # Lifecycle statuses reachable after a human approve (not the decision itself).
@@ -186,7 +187,14 @@ def evaluate_hard_gates(
     if action.execution_owner is None:
         # Overlay capability gap: persist owner=None as pending-manual, not AUTO_REJECT.
         return None
-    if action.tool_name != TERMINAL_DISPOSITION_TOOL:
+    # Rollback actions are generated from the trusted rollback mapping and run
+    # through the local tool executor.  The source-provider response manifest
+    # intentionally lists forward operations only, so applying it here would
+    # make every generated compensation action impossible to approve.
+    if (
+        action.action_category is not ActionCategory.ROLLBACK
+        and action.tool_name != TERMINAL_DISPOSITION_TOOL
+    ):
         if action.tool_name not in manifest.allowed_operations:
             return ApprovalDecision(
                 decision=ApprovalDecisionKind.AUTO_REJECT,
@@ -342,7 +350,12 @@ class ApprovalEngine:
         self._resume = resume_investigation
         self._impact_assessment = impact_assessment_service
         self._manual_resolution = manual_resolution
+        self._rollback_approval_handler: RollbackApprovalHook | None = None
         self._approval_required_published: set[str] = set()
+
+    def set_rollback_approval_handler(self, handler: RollbackApprovalHook) -> None:
+        """Register the post-approval Saga continuation without a DI cycle."""
+        self._rollback_approval_handler = handler
 
     async def evaluate_plan(
         self,
@@ -482,7 +495,8 @@ class ApprovalEngine:
                 await session.flush()
                 action = _action_from_orm(row)
         await self._publish_approval_updated(action, "rejected", SYSTEM_TIMEOUT_OPERATOR, None)
-        await self._maybe_advance_plan(action.event_id, action.plan_revision)
+        if action.action_category is not ActionCategory.ROLLBACK:
+            await self._maybe_advance_plan(action.event_id, action.plan_revision)
 
     async def _scan_expired_approval_records(
         self,
@@ -515,7 +529,8 @@ class ApprovalEngine:
             record.decided_at = now
             action.status = ActionStatus.REJECTED.value
             action.updated_at = now
-            touched_events.append(record.event_id)
+            if action.action_category != ActionCategory.ROLLBACK.value:
+                touched_events.append(record.event_id)
         return touched_events
 
     async def scan_timeouts(self) -> list[str]:
@@ -542,19 +557,19 @@ class ApprovalEngine:
         approval_cycle: int,
     ) -> None:
         async with self._session_factory() as session:
-            row = await self._load_action_row(session, action_id)
-            if row is None:
-                raise ResourceNotFoundError(
-                    "action not found",
-                    details={"action_id": action_id},
-                )
-            action = _action_from_orm(row)
-            decision = ApprovalDecision(
-                decision=ApprovalDecisionKind.REQUIRE_APPROVAL,
-                rule_applied="manual_review",
-                reason=reason,
-            )
             async with session.begin():
+                row = await self._load_action_row(session, action_id, for_update=True)
+                if row is None:
+                    raise ResourceNotFoundError(
+                        "action not found",
+                        details={"action_id": action_id},
+                    )
+                action = _action_from_orm(row)
+                decision = ApprovalDecision(
+                    decision=ApprovalDecisionKind.REQUIRE_APPROVAL,
+                    rule_applied="manual_review",
+                    reason=reason,
+                )
                 await self._upsert_record(session, action, decision, approval_cycle)
                 await self._set_action_status(session, action, ActionStatus.WAITING_APPROVAL)
         await self._ensure_event_waiting_approval(action.event_id)
@@ -577,6 +592,33 @@ class ApprovalEngine:
     ) -> ApprovalOutcome:
         operation = _approval_operation(target_status)
         payload_hash = _approval_payload_hash(comment=comment)
+
+        # Resolve retries before taking the decision row lock.  This both keeps
+        # the original idempotency contract and allows a retry to finish a
+        # rollback whose approval committed before the process was interrupted.
+        if decision_id:
+            async with self._session_factory() as replay_session:
+                replay_row = await self._load_action_row(replay_session, action_id)
+                if replay_row is not None:
+                    replay_action = _action_from_orm(replay_row)
+                    replay_outcome = await self._resolve_idempotent_replay(
+                        replay_session,
+                        action_id=action_id,
+                        decision_id=decision_id,
+                        operation=operation,
+                        payload_hash=payload_hash,
+                        action_row=replay_row,
+                    )
+                    if replay_outcome is not None:
+                        if replay_action.action_category is ActionCategory.ROLLBACK:
+                            return await self._finish_rollback_decision(
+                                replay_action,
+                                principal=principal,
+                                target_status=target_status,
+                                outcome=replay_outcome,
+                            )
+                        return replay_outcome
+
         async with self._session_factory() as session:
             async with session.begin():
                 row = await self._load_action_row(session, action_id, for_update=True)
@@ -586,20 +628,6 @@ class ApprovalEngine:
                         details={"action_id": action_id},
                     )
                 action = _action_from_orm(row)
-
-                # Idempotent replay must win before first-decision hard-gates/bindings
-                # so same-key safe retries are not blocked by later capability drift.
-                if decision_id:
-                    replay_outcome = await self._resolve_idempotent_replay(
-                        session,
-                        action_id=action_id,
-                        decision_id=decision_id,
-                        operation=operation,
-                        payload_hash=payload_hash,
-                        action_row=row,
-                    )
-                    if replay_outcome is not None:
-                        return replay_outcome
 
                 if target_status is ActionStatus.APPROVED:
                     gate = evaluate_hard_gates(action, manifest=self._manifest)
@@ -702,6 +730,17 @@ class ApprovalEngine:
             principal.subject,
             comment,
         )
+        outcome_result = ApprovalOutcome(
+            persisted_status=target_status,
+            decision_id=decision_id,
+        )
+        if decided_action.action_category is ActionCategory.ROLLBACK:
+            return await self._finish_rollback_decision(
+                decided_action,
+                principal=principal,
+                target_status=target_status,
+                outcome=outcome_result,
+            )
         resume_status = await self._maybe_advance_plan(
             decided_action.event_id,
             decided_action.plan_revision,
@@ -711,6 +750,50 @@ class ApprovalEngine:
             resume_degraded=resume_status == "failed",
             persisted_status=target_status,
             decision_id=decision_id,
+        )
+
+    async def _finish_rollback_decision(
+        self,
+        action: Action,
+        *,
+        principal: Principal,
+        target_status: ActionStatus,
+        outcome: ApprovalOutcome,
+    ) -> ApprovalOutcome:
+        """Execute an approved rollback; rejected rollback keeps the Saga held."""
+        if target_status is not ActionStatus.APPROVED:
+            return outcome
+        handler = self._rollback_approval_handler
+        if handler is None:
+            logger.error(
+                "rollback approval handler missing action=%s event=%s",
+                action.action_id,
+                action.event_id,
+            )
+            return ApprovalOutcome(
+                resume_status="failed",
+                resume_degraded=True,
+                persisted_status=outcome.persisted_status,
+                decision_id=outcome.decision_id,
+                idempotent_replay=outcome.idempotent_replay,
+            )
+        try:
+            resume_status = await handler(action.action_id, principal.subject)
+        except Exception:
+            logger.exception(
+                "approved rollback continuation failed action=%s event=%s",
+                action.action_id,
+                action.event_id,
+            )
+            resume_status = "failed"
+        if resume_status == "deferred":
+            await self._enqueue_approval_plan_resume(action.event_id)
+        return ApprovalOutcome(
+            resume_status=resume_status,
+            resume_degraded=resume_status == "failed",
+            persisted_status=outcome.persisted_status,
+            decision_id=outcome.decision_id,
+            idempotent_replay=outcome.idempotent_replay,
         )
 
     async def _resolve_idempotent_replay(

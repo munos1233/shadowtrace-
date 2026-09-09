@@ -375,18 +375,31 @@ async def _compensate_before_replan(
     rollback: Any | None,
     working_memory: Any | None,
     existing_degraded: list[str],
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], bool]:
     """Compensate prior side effects; incomplete compensation blocks replan."""
-    if rollback is None or not failed_actions:
-        return [], existing_degraded
+    had_saga_flag = any(
+        str(flag).split("=", 1)[0] == SAGA_COMPENSATION_INCOMPLETE_FLAG
+        for flag in existing_degraded
+    )
+    if not failed_actions:
+        # A stale Saga hold without its failure boundary cannot be proven
+        # converged here.  Keep it fail-closed; graph_resume performs the
+        # authoritative rollback/source/writeback reconciliation.
+        return [], existing_degraded, False
+    if rollback is None:
+        if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
+            existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
+        return [], existing_degraded, False
     failed_action_ids = sorted({action.strip() for action in failed_actions if action.strip()})
     if not failed_action_ids:
-        existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
-        return [], existing_degraded
+        if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
+            existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
+        return [], existing_degraded, False
     compensate = getattr(rollback, "compensate", None)
     if not callable(compensate):
-        existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
-        return [], existing_degraded
+        if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
+            existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
+        return [], existing_degraded, False
     try:
         results = await compensate(
             event_id,
@@ -404,12 +417,18 @@ async def _compensate_before_replan(
         )
         if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
             existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
-        return [], existing_degraded
+        return [], existing_degraded, False
     serialized = await _persist_rollback_results(event_id, list(results or []), working_memory)
     if _compensation_incomplete(list(results or [])):
         if SAGA_COMPENSATION_INCOMPLETE_FLAG not in existing_degraded:
             existing_degraded.append(SAGA_COMPENSATION_INCOMPLETE_FLAG)
-    return serialized, existing_degraded
+        return serialized, existing_degraded, False
+    cleaned = [
+        flag
+        for flag in existing_degraded
+        if str(flag).split("=", 1)[0] != SAGA_COMPENSATION_INCOMPLETE_FLAG
+    ]
+    return serialized, cleaned, had_saga_flag
 
 
 async def replan_graph_node(
@@ -464,7 +483,7 @@ async def replan_graph_node(
 
     # Carry forward existing degraded_flags so callers can append.
     existing_degraded = list(state.get("degraded_flags") or [])
-    rollback_dumps, existing_degraded = await _compensate_before_replan(
+    rollback_dumps, existing_degraded, saga_resolved = await _compensate_before_replan(
         event_id,
         failed_actions,
         rollback=rollback,
@@ -486,6 +505,7 @@ async def replan_graph_node(
                 "manual_hold_reason": SAGA_COMPENSATION_INCOMPLETE_FLAG,
                 "degraded_flags": existing_degraded,
                 "rollback_results": rollback_dumps,
+                "saga_compensation_resolved": False,
             },
         )
 
@@ -585,6 +605,7 @@ async def replan_graph_node(
         "replan_count": result.replan_count,
         "escalated": False,
         "halted": False,
+        "saga_compensation_resolved": saga_resolved,
     }
     if existing_degraded:
         patches["degraded_flags"] = existing_degraded

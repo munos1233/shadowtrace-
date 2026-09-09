@@ -146,6 +146,7 @@ VerifyRollbackEffectHook = Callable[
     [ActionModel, ActionModel],  # (original_action, rollback_action)
     Awaitable[RollbackEffectStatus],
 ]
+ResumeInvestigationHook = Callable[[str], Awaitable[str | None]]
 
 
 class RollbackService:
@@ -162,6 +163,8 @@ class RollbackService:
         event_bus: EventBus | None = None,
         command_factory: DispositionCommandFactory | None = None,
         adapter_registry: Any = None,
+        approval_engine: Any = None,
+        resume_investigation: ResumeInvestigationHook | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._audit = audit
@@ -171,6 +174,8 @@ class RollbackService:
         self._bus = event_bus
         self._factory = command_factory or DispositionCommandFactory()
         self._adapter_registry = adapter_registry
+        self._approval_engine = approval_engine
+        self._resume_investigation = resume_investigation
 
     # -----------------------------------------------------------------
     # Public API
@@ -252,6 +257,17 @@ class RollbackService:
                     original.event_id, plan_revision, action_id, rollback_tool
                 )
 
+                # The source row lock serializes competing Saga attempts.  Reuse
+                # the durable rollback action instead of violating the unique
+                # fingerprint constraint on graph replay.
+                existing_rb_row = await session.scalar(
+                    select(orm.Action).where(orm.Action.action_fingerprint == fingerprint)
+                )
+                if existing_rb_row is not None:
+                    existing_rb = _action_from_row(existing_rb_row)
+                else:
+                    existing_rb = None
+
                 tool_index = baseline_tool_index()
                 tool_meta = tool_index.get(rollback_tool)
                 action_level = str(tool_meta.action_level.value) if tool_meta else "l2"
@@ -291,7 +307,7 @@ class RollbackService:
                     automated=automated,
                 )
 
-                rollback_action_id = new_action_id()
+                rollback_action_id = existing_rb.action_id if existing_rb else new_action_id()
                 rb_row = orm.Action(
                     action_id=rollback_action_id,
                     event_id=original.event_id,
@@ -318,42 +334,118 @@ class RollbackService:
                     writeback_status=None,
                     rollback_status=None,
                 )
-                session.add(rb_row)
-                await session.flush()
+                if existing_rb is None:
+                    session.add(rb_row)
+                    await session.flush()
 
-                audit_log_id = await self._audit.log_transition_in_session(
-                    session,
-                    original.event_id,
-                    from_status=original.status.value,
-                    to_status=None,
-                    operator=operator,
-                    reason=f"Rollback initiated for {action_id}: {reason}",
-                )
+                    audit_log_id = await self._audit.log_transition_in_session(
+                        session,
+                        original.event_id,
+                        from_status=original.status.value,
+                        to_status=None,
+                        operator=operator,
+                        reason=f"Rollback initiated for {action_id}: {reason}",
+                    )
+                else:
+                    audit_log_id = None
 
-        if rb_status is ActionStatus.PENDING:
-            pending_result = RollbackResult(
-                action_id=action_id,
-                rollback_action_id=rollback_action_id,
-                rollback_tool=rollback_tool,
-                rollback_effect_status=None,
-                compensation_writeback_required=comp_required,
-                compensation_writeback_readiness=readiness,
-                rolled_back=False,
-                warning="awaiting_approval",
+        if existing_rb is not None:
+            return await self._existing_rollback_result(
+                original,
+                existing_rb,
+                operator=operator,
                 audit_log_id=audit_log_id,
             )
-            await self._publish_rollback_event(
-                event_id=original.event_id,
-                action_id=rollback_action_id,
-                source_action_id=action_id,
-                operator=operator,
-                rolled_back=False,
-                rollback_effect_status=None,
-                warning="awaiting_approval",
-            )
-            return pending_result
 
-        # --- Execute rollback ---------------------------------------------------
+        if rb_status is ActionStatus.PENDING:
+            return await self._register_rollback_approval(
+                original,
+                rollback_action_id=rollback_action_id,
+                rollback_tool=rollback_tool,
+                operator=operator,
+                comp_required=comp_required,
+                readiness=readiness,
+                audit_log_id=audit_log_id,
+            )
+
+        return await self._complete_rollback(
+            original,
+            rollback_action_id=rollback_action_id,
+            rollback_tool=rollback_tool,
+            operator=operator,
+            comp_required=comp_required,
+            readiness=readiness,
+            audit_log_id=audit_log_id,
+        )
+
+    async def complete_approved_rollback(
+        self,
+        rollback_action_id: str,
+        operator: str,
+    ) -> str:
+        """Finish an approved Saga rollback and resume its saved graph."""
+        async with self._session_factory() as session:
+            rb_row = await session.get(orm.Action, rollback_action_id)
+            if (
+                rb_row is None
+                or rb_row.action_category != ActionCategory.ROLLBACK.value
+                or not rb_row.source_action_id
+            ):
+                raise ValueError("approved action is not a persisted rollback action")
+            rollback_action = _action_from_row(rb_row)
+            source_row = await session.get(orm.Action, rb_row.source_action_id)
+            if source_row is None:
+                raise ValueError("rollback source action no longer exists")
+            original = _action_from_row(source_row)
+
+        if (
+            rollback_action.status is ActionStatus.SUCCESS
+            and original.status is ActionStatus.ROLLED_BACK
+        ):
+            result_ok = True
+        elif rollback_action.status in {ActionStatus.APPROVED, ActionStatus.EXECUTING}:
+            result = await self._complete_rollback(
+                original,
+                rollback_action_id=rollback_action.action_id,
+                rollback_tool=rollback_action.tool_name,
+                operator=operator,
+                comp_required=(
+                    rollback_action.writeback_required and rollback_action.writeback_applicable
+                ),
+                readiness=rollback_action.writeback_readiness,
+                audit_log_id=None,
+            )
+            result_ok = result.rolled_back
+        else:
+            logger.error(
+                "approved rollback cannot continue from status=%s action=%s",
+                rollback_action.status.value,
+                rollback_action_id,
+            )
+            return "failed"
+
+        if not result_ok:
+            return "failed"
+        if self._resume_investigation is None:
+            logger.error("resume hook missing after rollback action=%s", rollback_action_id)
+            return "skipped"
+        resume_status = await self._resume_investigation(original.event_id)
+        if resume_status in {"ok", "deferred"}:
+            return resume_status
+        return "failed" if resume_status == "skipped" else "ok"
+
+    async def _complete_rollback(
+        self,
+        original: ActionModel,
+        *,
+        rollback_action_id: str,
+        rollback_tool: str,
+        operator: str,
+        comp_required: bool,
+        readiness: WritebackReadiness,
+        audit_log_id: str | None,
+    ) -> RollbackResult:
+        """Execute, independently verify, and persist one rollback effect."""
         try:
             executed = await self._execute_rollback(rollback_action_id, operator)
         except Exception as exc:
@@ -363,14 +455,14 @@ class RollbackService:
             await self._publish_rollback_event(
                 event_id=original.event_id,
                 action_id=rollback_action_id,
-                source_action_id=action_id,
+                source_action_id=original.action_id,
                 operator=operator,
                 rolled_back=False,
                 rollback_effect_status="failed",
                 warning=f"rollback_execution_error: {exc}",
             )
             return RollbackResult(
-                action_id=action_id,
+                action_id=original.action_id,
                 rollback_action_id=rollback_action_id,
                 rollback_tool=rollback_tool,
                 rollback_effect_status="failed",
@@ -389,7 +481,7 @@ class RollbackService:
 
         # --- CAS original Action → ROLLED_BACK ----------------------------------
         if effect_status in ("verified", "skipped"):
-            rolled_back = await self._cas_rollback_status(action_id, original)
+            rolled_back = await self._cas_rollback_status(original.action_id, original)
         else:
             rolled_back = False
 
@@ -412,7 +504,7 @@ class RollbackService:
             warning = "rollback_effect_not_verified"
 
         result = RollbackResult(
-            action_id=action_id,
+            action_id=original.action_id,
             rollback_action_id=rollback_action_id,
             rollback_tool=rollback_tool,
             rollback_effect_status=effect_status,
@@ -429,7 +521,7 @@ class RollbackService:
         await self._publish_rollback_event(
             event_id=original.event_id,
             action_id=rollback_action_id,
-            source_action_id=action_id,
+            source_action_id=original.action_id,
             operator=operator,
             rolled_back=rolled_back,
             rollback_effect_status=effect_status,
@@ -437,6 +529,116 @@ class RollbackService:
         )
 
         return result
+
+    async def _register_rollback_approval(
+        self,
+        original: ActionModel,
+        *,
+        rollback_action_id: str,
+        rollback_tool: str,
+        operator: str,
+        comp_required: bool,
+        readiness: WritebackReadiness,
+        audit_log_id: str | None,
+    ) -> RollbackResult:
+        warning = "awaiting_approval"
+        require_review = getattr(self._approval_engine, "require_manual_review", None)
+        if callable(require_review):
+            try:
+                await require_review(
+                    rollback_action_id,
+                    f"Saga compensation for {original.action_id} requires human approval",
+                    0,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to register rollback approval action=%s",
+                    rollback_action_id,
+                )
+                warning = "approval_registration_failed"
+        elif self._approval_engine is not None:
+            warning = "approval_registration_failed"
+
+        result = RollbackResult(
+            action_id=original.action_id,
+            rollback_action_id=rollback_action_id,
+            rollback_tool=rollback_tool,
+            rollback_effect_status=None,
+            compensation_writeback_required=comp_required,
+            compensation_writeback_readiness=readiness,
+            rolled_back=False,
+            warning=warning,
+            audit_log_id=audit_log_id,
+        )
+        await self._publish_rollback_event(
+            event_id=original.event_id,
+            action_id=rollback_action_id,
+            source_action_id=original.action_id,
+            operator=operator,
+            rolled_back=False,
+            rollback_effect_status=None,
+            warning=warning,
+        )
+        return result
+
+    async def _existing_rollback_result(
+        self,
+        original: ActionModel,
+        rollback_action: ActionModel,
+        *,
+        operator: str,
+        audit_log_id: str | None,
+    ) -> RollbackResult:
+        """Project or continue the rollback action found by fingerprint."""
+        comp_required = rollback_action.writeback_required and rollback_action.writeback_applicable
+        readiness = rollback_action.writeback_readiness
+        if rollback_action.status is ActionStatus.PENDING:
+            return await self._register_rollback_approval(
+                original,
+                rollback_action_id=rollback_action.action_id,
+                rollback_tool=rollback_action.tool_name,
+                operator=operator,
+                comp_required=comp_required,
+                readiness=readiness,
+                audit_log_id=audit_log_id,
+            )
+        if rollback_action.status is ActionStatus.APPROVED:
+            return await self._complete_rollback(
+                original,
+                rollback_action_id=rollback_action.action_id,
+                rollback_tool=rollback_action.tool_name,
+                operator=operator,
+                comp_required=comp_required,
+                readiness=readiness,
+                audit_log_id=audit_log_id,
+            )
+        if rollback_action.status is ActionStatus.SUCCESS:
+            return RollbackResult(
+                action_id=original.action_id,
+                rollback_action_id=rollback_action.action_id,
+                rollback_tool=rollback_action.tool_name,
+                rollback_effect_status="verified",
+                compensation_writeback_required=comp_required,
+                compensation_writeback_readiness=readiness,
+                rolled_back=original.status is ActionStatus.ROLLED_BACK,
+                audit_log_id=audit_log_id,
+            )
+        warning = (
+            "awaiting_approval"
+            if rollback_action.status is ActionStatus.WAITING_APPROVAL
+            else f"rollback_{rollback_action.status.value}"
+        )
+        return RollbackResult(
+            action_id=original.action_id,
+            rollback_action_id=rollback_action.action_id,
+            rollback_tool=rollback_action.tool_name,
+            rollback_effect_status=None,
+            compensation_writeback_required=comp_required,
+            compensation_writeback_readiness=readiness,
+            rolled_back=False,
+            warning=warning,
+            audit_log_id=audit_log_id,
+        )
 
     async def rollback_event(
         self,

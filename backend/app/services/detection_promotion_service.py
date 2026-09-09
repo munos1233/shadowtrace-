@@ -695,6 +695,15 @@ class DetectionPromotionService:
         ingest_result: TypedIngestResult | None = None,
     ) -> DetectionPromotionResult:
         retry_count = await self._increment_ingest_retry_count(record.promotion_id)
+        if retry_count is None:
+            current = await self._get_by_promotion_id(record.promotion_id)
+            return DetectionPromotionResult(
+                promotion_id=current.promotion_id,
+                status=current.status,
+                record=current,
+                ingest_result=current.ingest_result,
+                resumed=resumed,
+            )
         status = (
             DetectionPromotionStatus.DEAD
             if retry_count >= MAX_PROMOTION_INGEST_RETRIES
@@ -714,7 +723,7 @@ class DetectionPromotionService:
             resumed=resumed,
         )
 
-    async def _increment_ingest_retry_count(self, promotion_id: str) -> int:
+    async def _increment_ingest_retry_count(self, promotion_id: str) -> int | None:
         async with self._session_factory() as session:
             async with session.begin():
                 row = await session.get(
@@ -727,11 +736,26 @@ class DetectionPromotionService:
                         "promotion ledger row not found",
                         details={"promotion_id": promotion_id},
                     )
+                if DetectionPromotionStatus(row.status) not in {
+                    DetectionPromotionStatus.PENDING,
+                    DetectionPromotionStatus.RETRY,
+                }:
+                    return None
                 payload = dict(row.payload or {})
                 count = int(payload.get(PAYLOAD_RETRY_COUNT_KEY, 0)) + 1
                 payload[PAYLOAD_RETRY_COUNT_KEY] = count
                 row.payload = payload
                 return count
+
+    async def _get_by_promotion_id(self, promotion_id: str) -> DetectionPromotionRecord:
+        async with self._session_factory() as session:
+            row = await session.get(DetectionPromotionORM, promotion_id)
+            if row is None:
+                raise ResourceNotFoundError(
+                    "promotion ledger row not found",
+                    details={"promotion_id": promotion_id},
+                )
+            return _row_to_record(row)
 
     async def _get_by_promotion_key(
         self,
@@ -793,18 +817,6 @@ class DetectionPromotionService:
         record: DetectionPromotionRecord,
         **updates: object,
     ) -> DetectionPromotionRecord:
-        payload = record.model_dump()
-        payload.update(updates)
-        if isinstance(payload.get("status"), DetectionPromotionStatus):
-            payload["status"] = payload["status"].value
-        if isinstance(payload.get("ingest_result"), TypedIngestResult):
-            payload["ingest_result"] = payload["ingest_result"].model_dump(mode="json")
-        if payload.get("reason_codes"):
-            payload["reason_codes"] = [
-                code.value if hasattr(code, "value") else code for code in payload["reason_codes"]
-            ]
-        updated = DetectionPromotionRecord.model_validate(payload)
-        updated = updated.model_copy(update={"updated_at": self._now()})
         async with self._session_factory() as session:
             async with session.begin():
                 row = await session.get(
@@ -817,6 +829,41 @@ class DetectionPromotionService:
                         "promotion ledger row not found",
                         details={"promotion_id": record.promotion_id},
                     )
+                current = _row_to_record(row)
+                requested_status_raw = updates.get("status")
+                requested_status = (
+                    requested_status_raw
+                    if isinstance(requested_status_raw, DetectionPromotionStatus)
+                    else DetectionPromotionStatus(str(requested_status_raw))
+                    if requested_status_raw is not None
+                    else None
+                )
+
+                # A caller resumes from a snapshot read before taking this row
+                # lock.  If another worker already moved the saga, return the
+                # authoritative row instead of applying a stale transition.
+                if requested_status is not None and current.status is not record.status:
+                    return current
+                # COMPLETED is terminal and must never regress to RETRY/DEAD
+                # when a slower duplicate ingest reports a late failure.
+                if current.status is DetectionPromotionStatus.COMPLETED:
+                    return current
+
+                payload = current.model_dump()
+                payload.update(updates)
+                if isinstance(payload.get("status"), DetectionPromotionStatus):
+                    payload["status"] = payload["status"].value
+                if isinstance(payload.get("ingest_result"), TypedIngestResult):
+                    payload["ingest_result"] = payload["ingest_result"].model_dump(mode="json")
+                if payload.get("reason_codes"):
+                    payload["reason_codes"] = [
+                        code.value if hasattr(code, "value") else code
+                        for code in payload["reason_codes"]
+                    ]
+                updated_at = self._now()
+                updated = DetectionPromotionRecord.model_validate(payload).model_copy(
+                    update={"updated_at": updated_at}
+                )
                 row.status = updated.status.value
                 row.derived_connector_id = updated.derived_connector_id
                 row.source_record_id = updated.source_record_id
@@ -829,7 +876,10 @@ class DetectionPromotionService:
                 )
                 row.reason_codes = [code.value for code in updated.reason_codes]
                 row.reason_message = updated.reason_message
-        return updated
+                row.updated_at = updated_at
+                await session.flush()
+                authoritative = _row_to_record(row)
+        return authoritative
 
     async def _mark_failed(
         self,

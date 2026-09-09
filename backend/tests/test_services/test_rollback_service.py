@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -22,8 +23,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.agents.response_agent import build_mock_capability_manifest
 from app.agents.rules.rollback_mapping import is_rollbackable
+from app.core.auth import Principal
 from app.db import models as orm
+from app.db.orm.approval import ApprovalRecordORM
 from app.models.action import Action as ActionModel
 from app.models.enums import (
     ActionCategory,
@@ -43,6 +47,8 @@ from app.models.enums import (
 )
 from app.models.ids import new_action_id, new_event_id
 from app.models.rollback_result import RollbackEffectStatus, RollbackResult
+from app.orchestration.graph_resume import _saga_manual_hold_resolved
+from app.services.approval_engine import ApprovalEngine
 from app.services.event_audit_log_service import EventAuditLogService
 from app.services.rollback_service import RollbackService
 
@@ -121,6 +127,7 @@ async def cleanup(
     async with session_factory() as session:
         async with session.begin():
             for table in (
+                ApprovalRecordORM,
                 orm.EventAuditLog,
                 orm.ActionTargetResult,
                 orm.ActionExecutionJob,
@@ -538,6 +545,12 @@ async def test_rollback_action_success_verification_rolls_back_original(
         assert len(log_entries) >= 1
         assert log_entries[0].reason is not None
         assert "rollback" in log_entries[0].reason.lower()
+
+    assert await _saga_manual_hold_resolved(
+        session_factory,
+        [result.rollback_action_id],
+        [result.model_dump(mode="json")],
+    )
 
 
 @pytest.mark.asyncio
@@ -1555,7 +1568,12 @@ async def test_compensate_automated_l2_creates_pending_rollback_action(
         executed_at=t2,
     )
 
-    svc = RollbackService(session_factory, audit=audit)
+    approval_engine = MagicMock(require_manual_review=AsyncMock())
+    svc = RollbackService(
+        session_factory,
+        audit=audit,
+        approval_engine=approval_engine,
+    )
     results = await svc.compensate(
         event_id,
         failed_action_id=failed.action_id,
@@ -1566,12 +1584,101 @@ async def test_compensate_automated_l2_creates_pending_rollback_action(
     assert results[0].warning == "awaiting_approval"
     assert results[0].rolled_back is False
     assert results[0].rollback_action_id is not None
+    approval_engine.require_manual_review.assert_awaited_once_with(
+        results[0].rollback_action_id,
+        f"Saga compensation for {predecessor.action_id} requires human approval",
+        0,
+    )
+
+    replay = await svc.compensate(
+        event_id,
+        failed_action_id=failed.action_id,
+        operator="SagaCompensation",
+    )
+    assert replay[0].rollback_action_id == results[0].rollback_action_id
 
     async with session_factory() as session:
         rb_row = await session.get(orm.Action, results[0].rollback_action_id)
         assert rb_row is not None
         assert ActionStatus(rb_row.status) is ActionStatus.PENDING
         assert rb_row.source_action_id == predecessor.action_id
+        rows = list(
+            await session.scalars(
+                select(orm.Action).where(
+                    orm.Action.source_action_id == predecessor.action_id,
+                    orm.Action.action_category == ActionCategory.ROLLBACK.value,
+                )
+            )
+        )
+        assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_approved_saga_rollback_executes_and_resumes(
+    session_factory: async_sessionmaker[AsyncSession],
+    audit: EventAuditLogService,
+    cleanup: None,
+) -> None:
+    event_id = await _seed_event(session_factory)
+    first_at = _utc_now()
+    failed_at = datetime.fromtimestamp(first_at.timestamp() + 10, tz=UTC)
+    predecessor = await _seed_response_action(
+        session_factory,
+        event_id=event_id,
+        tool_name="block_ip",
+        status=ActionStatus.SUCCESS,
+        executed_at=first_at,
+    )
+    failed = await _seed_response_action(
+        session_factory,
+        event_id=event_id,
+        tool_name="block_domain",
+        target="evil.example",
+        target_type="domain",
+        status=ActionStatus.FAILED,
+        executed_at=failed_at,
+    )
+    approval = ApprovalEngine(
+        session_factory,
+        capability_manifest=build_mock_capability_manifest(),
+    )
+    resume = AsyncMock(return_value="ok")
+    service = RollbackService(
+        session_factory,
+        audit=audit,
+        execute_rollback=_mock_execute_hook(session_factory),
+        verify_rollback_effect=_mock_verify_hook(),
+        approval_engine=approval,
+        resume_investigation=resume,
+    )
+    approval.set_rollback_approval_handler(service.complete_approved_rollback)
+
+    pending = await service.compensate(event_id, failed.action_id)
+    rollback_action_id = pending[0].rollback_action_id
+    assert rollback_action_id is not None
+    async with session_factory() as session:
+        row = await session.get(orm.Action, rollback_action_id)
+        assert row is not None
+        assert row.status == ActionStatus.WAITING_APPROVAL.value
+        approval_record = await session.scalar(
+            select(ApprovalRecordORM).where(ApprovalRecordORM.action_id == rollback_action_id)
+        )
+        assert approval_record is not None
+
+    outcome = await approval.approve(
+        rollback_action_id,
+        Principal(subject="approver-1", roles=["approver"]),
+        "approve Saga compensation",
+        "decision-saga-rollback",
+    )
+
+    assert outcome.resume_status == "ok"
+    resume.assert_awaited_once_with(event_id)
+    async with session_factory() as session:
+        source = await session.get(orm.Action, predecessor.action_id)
+        rollback_row = await session.get(orm.Action, rollback_action_id)
+        assert source is not None and source.status == ActionStatus.ROLLED_BACK.value
+        assert rollback_row is not None and rollback_row.status == ActionStatus.SUCCESS.value
 
 
 class _StubDispositionAdapter:

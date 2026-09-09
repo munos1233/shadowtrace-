@@ -447,7 +447,7 @@ def route_after_writeback_recovery(state: InvestigationState) -> str:
 
 def route_after_replan(state: InvestigationState) -> str:
     """Wait for compensation before allowing a new plan."""
-    if any(
+    if not state.get("saga_compensation_resolved") and any(
         str(flag).split("=", 1)[0] == "saga_compensation_incomplete"
         for flag in (state.get("degraded_flags") or [])
     ):
@@ -1193,7 +1193,7 @@ def build_investigation_graph(
             WritebackReadiness.CAPABILITY_UNKNOWN.value,
         )
         flags = list(state.get("degraded_flags") or [])
-        saga_blocked = any(
+        saga_blocked = not state.get("saga_compensation_resolved") and any(
             str(flag).split("=", 1)[0] == "saga_compensation_incomplete" for flag in flags
         )
         if saga_blocked:
@@ -2462,6 +2462,14 @@ def build_investigation_graph(
                 "saga_compensation_incomplete",
                 event_id=state["event_id"],
                 degraded_flags=degraded_flags,
+            )
+            patches = {**patches, "degraded_flags": persisted}
+        elif patches.get("saga_compensation_resolved"):
+            persisted = await degraded_flags.set_flag(
+                state["event_id"],
+                "saga_compensation_incomplete",
+                False,
+                writer="DegradedFlagService",
             )
             patches = {**patches, "degraded_flags": persisted}
         return _patch_state(_trace(NODE_REPLAN), patches)

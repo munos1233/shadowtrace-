@@ -10,6 +10,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, TypeAlias, runtime_checkable
@@ -29,6 +30,14 @@ from app.core.telemetry import traced_operation
 from app.db import models as orm
 
 logger = logging.getLogger(__name__)
+
+# The provider client is a process-wide singleton, while requests are concurrent.
+# Keep the per-call timeout in task-local context so one event cannot overwrite
+# another event's HTTP timeout between ``_attempt`` and ``_request``.
+_ACTIVE_REQUEST_TIMEOUT: ContextVar[float | None] = ContextVar(
+    "llm_active_request_timeout",
+    default=None,
+)
 
 # Bounded durable failure classes for llm_call_log.error_class (ISSUE-240).
 LLM_CALL_ERROR_CLASSES: frozenset[str] = frozenset(
@@ -436,7 +445,10 @@ class BaseLLMClient(ABC):
         self.budget_service = budget_service
         self.message_budgeter = message_budgeter
         self.max_input_tokens = max_input_tokens
-        self._active_request_timeout: float | None = None
+
+    def _request_timeout(self) -> float:
+        """Return the timeout bound to the current async request."""
+        return _ACTIVE_REQUEST_TIMEOUT.get() or self.timeout_seconds
 
     async def chat(
         self,
@@ -659,7 +671,7 @@ class BaseLLMClient(ABC):
                 await self._check_budget(event_id=event_id, agent_name=agent_name)
                 try:
                     effective_timeout = timeout if timeout is not None else self.timeout_seconds
-                    self._active_request_timeout = effective_timeout
+                    timeout_token = _ACTIVE_REQUEST_TIMEOUT.set(effective_timeout)
                     try:
                         async with asyncio.timeout(effective_timeout):
                             raw = await self._request(
@@ -670,7 +682,7 @@ class BaseLLMClient(ABC):
                                 json_mode=json_mode,
                             )
                     finally:
-                        self._active_request_timeout = None
+                        _ACTIVE_REQUEST_TIMEOUT.reset(timeout_token)
                 except TimeoutError as exc:
                     raise LLMTimeoutError(
                         "LLM request timed out",

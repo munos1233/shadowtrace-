@@ -62,6 +62,8 @@ class InvestigationState(TypedDict, total=False):
     verify_has_partial_success: bool
     # Saga compensate summaries from replan_node (RollbackResult dumps).
     rollback_results: list[dict[str, Any]] | None
+    # Authoritative tombstone for a stale union-merged Saga degraded flag.
+    saga_compensation_resolved: bool
     # When False and no verify_failed_actions → MANUAL_RESOLUTION
     execution_ok: bool
     include_rag: bool

@@ -681,6 +681,7 @@ async def _build_production_investigation_graph(
             ("action_execution", services["action_execution"]),
             ("disposition_sync", services["disposition_sync"]),
             ("event_disposition", services["event_disposition"]),
+            ("rollback", services["rollback"]),
             ("memory_agent", memory_agent),
         )
         if dep is None
@@ -719,6 +720,7 @@ async def get_rollback_service() -> Any:
         from app.services.rollback_service import RollbackService, build_execute_rollback_hook
 
         action_execution = await get_action_execution()
+        approval_engine = await get_approval_engine()
         _rollback_service = RollbackService(
             _get_session_factory(),
             audit=_get_audit_log(),
@@ -726,7 +728,10 @@ async def get_rollback_service() -> Any:
             disposition_sync=await get_disposition_sync(),
             event_bus=_get_event_bus(),
             adapter_registry=_get_adapter_registry(),
+            approval_engine=approval_engine,
+            resume_investigation=_resume_investigation,
         )
+        approval_engine.set_rollback_approval_handler(_rollback_service.complete_approved_rollback)
     return _rollback_service
 
 

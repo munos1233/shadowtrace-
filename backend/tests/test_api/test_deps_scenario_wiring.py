@@ -70,6 +70,7 @@ def _patch_production_graph_build_baseline(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(deps, "get_disposition_sync", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "get_approval_engine", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "get_action_execution", AsyncMock(return_value=MagicMock()))
+    monkeypatch.setattr(deps, "get_rollback_service", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "_get_workflow_runtime", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "_get_redis", lambda: MagicMock())
     monkeypatch.setattr(deps, "_get_agent_task_service", lambda: MagicMock())
@@ -112,6 +113,10 @@ def _patch_production_graph_build_baseline(monkeypatch: pytest.MonkeyPatch) -> N
             lambda mp: mp.setattr(
                 deps, "get_event_disposition_service", AsyncMock(return_value=None)
             ),
+        ),
+        (
+            "rollback",
+            lambda mp: mp.setattr(deps, "get_rollback_service", AsyncMock(return_value=None)),
         ),
     ],
 )

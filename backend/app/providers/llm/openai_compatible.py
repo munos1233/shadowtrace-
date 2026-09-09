@@ -253,9 +253,7 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         payload: dict[str, Any],
         headers: dict[str, str],
     ) -> httpx.Response:
-        timeout_s = getattr(self, "_active_request_timeout", None)
-        if timeout_s is None:
-            timeout_s = self.timeout_seconds
+        timeout_s = self._request_timeout()
         return await client.post(
             f"{self._base_url}/chat/completions",
             json=payload,

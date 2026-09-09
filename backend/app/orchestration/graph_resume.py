@@ -24,6 +24,8 @@ from app.core.errors import ValidationError
 from app.db import models as orm
 from app.models.agent_io import EvidenceOutput, RiskAssessment
 from app.models.enums import (
+    ActionCategory,
+    ActionStatus,
     DispositionIntentKind,
     DispositionPolicy,
     EventStatus,
@@ -86,6 +88,82 @@ def _has_legitimate_manual_hold(degraded_flags: list[Any]) -> bool:
     return any(
         _degraded_flag_name(flag) in _LEGITIMATE_MANUAL_DEGRADED_PREFIXES for flag in degraded_flags
     )
+
+
+async def _saga_manual_hold_resolved(
+    session_factory: async_sessionmaker[AsyncSession],
+    pending_ids: list[str],
+    rollback_results: list[Any],
+) -> bool:
+    """Verify every rollback named by the manual hold reached durable convergence."""
+    unresolved_results = [
+        item
+        for item in rollback_results
+        if isinstance(item, dict) and not bool(item.get("rolled_back"))
+    ]
+    if any(not item.get("rollback_action_id") for item in unresolved_results):
+        # A non-rollbackable or otherwise unmaterialized compensation has no
+        # durable action whose later state could prove convergence.
+        return False
+
+    rollback_ids = {
+        str(item["rollback_action_id"])
+        for item in unresolved_results
+        if item.get("rollback_action_id")
+    }
+    if not rollback_ids:
+        rollback_ids = {str(value) for value in pending_ids if value}
+    if not rollback_ids:
+        return False
+    async with session_factory() as session:
+        rollback_rows = list(
+            await session.scalars(
+                select(orm.Action).where(
+                    orm.Action.action_id.in_(rollback_ids),
+                    orm.Action.action_category == ActionCategory.ROLLBACK.value,
+                )
+            )
+        )
+        if len(rollback_rows) != len(rollback_ids):
+            return False
+        if any(row.status != ActionStatus.SUCCESS.value for row in rollback_rows):
+            return False
+
+        source_ids = [str(row.source_action_id) for row in rollback_rows if row.source_action_id]
+        source_rows = list(
+            await session.scalars(select(orm.Action).where(orm.Action.action_id.in_(source_ids)))
+        )
+        if len(source_rows) != len(source_ids) or any(
+            row.status != ActionStatus.ROLLED_BACK.value for row in source_rows
+        ):
+            return False
+
+        compensation_rows = (
+            await session.execute(
+                select(
+                    orm.DispositionOutbox.action_id,
+                    orm.DispositionOutbox.latest_writeback_status,
+                ).where(
+                    orm.DispositionOutbox.action_id.in_(
+                        [str(row.action_id) for row in rollback_rows]
+                    ),
+                    orm.DispositionOutbox.intent_kind
+                    == DispositionIntentKind.COMPENSATION_RECORD.value,
+                    orm.DispositionOutbox.superseded_by_disposition_id.is_(None),
+                )
+            )
+        ).all()
+
+    statuses_by_action: dict[str, list[str | None]] = {}
+    for action_id, status in compensation_rows:
+        statuses_by_action.setdefault(str(action_id), []).append(status)
+    for row in rollback_rows:
+        if not (row.writeback_required and row.writeback_applicable):
+            continue
+        statuses = statuses_by_action.get(str(row.action_id), [])
+        if not statuses or any(status != WritebackStatus.CONFIRMED.value for status in statuses):
+            return False
+    return True
 
 
 def _strip_stale_verify_degraded(degraded_flags: list[Any]) -> list[Any]:
@@ -230,6 +308,30 @@ async def _reconcile_verify_resume_patch(
         return patch
 
     degraded_flags = list(values.get("degraded_flags") or [])
+    saga_flagged = any(
+        _degraded_flag_name(flag) == "saga_compensation_incomplete" for flag in degraded_flags
+    )
+    saga_resolved = saga_flagged and await _saga_manual_hold_resolved(
+        session_factory,
+        [str(value) for value in (values.get("manual_hold_pending_ids") or [])],
+        list(values.get("rollback_results") or []),
+    )
+    if saga_resolved:
+        degraded_flags = [
+            flag
+            for flag in degraded_flags
+            if _degraded_flag_name(flag) != "saga_compensation_incomplete"
+        ]
+        patch.update(
+            {
+                "saga_compensation_resolved": True,
+                "verify_need_manual_resolution": False,
+                "execution_substate": ExecutionSubstate.NONE.value,
+                "manual_hold_reason": "",
+                "manual_hold_pending_ids": [],
+                "degraded_flags": degraded_flags,
+            }
+        )
     legitimate_manual = _has_legitimate_manual_hold(degraded_flags)
     outbox_rows = await _active_outbox_writeback_rows(session_factory, event_id)
     wb_statuses = [status for _intent, status in outbox_rows]

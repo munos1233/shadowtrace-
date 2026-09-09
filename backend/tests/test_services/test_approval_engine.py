@@ -626,6 +626,53 @@ async def test_approve_and_reject_flow(
 
 
 @pytest.mark.asyncio
+async def test_rollback_approval_executes_continuation_and_idempotent_replay(
+    session_factory: async_sessionmaker[AsyncSession],
+    store: EventContextStore,
+    engine: ApprovalEngine,
+) -> None:
+    event_id = await _create_event(
+        session_factory,
+        store,
+        status=EventStatus.VERIFYING,
+    )
+    action = await _insert_action(
+        session_factory,
+        event_id,
+        _action_model(
+            action_category=ActionCategory.ROLLBACK,
+            action_name="unblock ip",
+            tool_name="unblock_ip",
+            action_level=ActionLevel.L2,
+            status=ActionStatus.PENDING,
+        ),
+    )
+    await engine.require_manual_review(action.action_id, "Saga compensation", 0)
+    continuation = AsyncMock(return_value="ok")
+    engine.set_rollback_approval_handler(continuation)
+    principal = Principal(subject="approver-1", roles=["approver"])
+
+    first = await engine.approve(
+        action.action_id,
+        principal,
+        "approved compensation",
+        "decision-rollback-1",
+    )
+    replay = await engine.approve(
+        action.action_id,
+        principal,
+        "approved compensation",
+        "decision-rollback-1",
+    )
+
+    assert first.resume_status == "ok"
+    assert replay.idempotent_replay is True
+    assert replay.resume_status == "ok"
+    assert continuation.await_count == 2
+    continuation.assert_awaited_with(action.action_id, "approver-1")
+
+
+@pytest.mark.asyncio
 async def test_approve_non_waiting_returns_400(
     session_factory: async_sessionmaker[AsyncSession],
     store: EventContextStore,
