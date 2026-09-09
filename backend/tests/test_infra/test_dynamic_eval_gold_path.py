@@ -659,6 +659,14 @@ def test_makefile_eval_full_loop_target() -> None:
     assert "--seed-via-compose" in eventtype8_recipe
 
 
+def test_evaluation_targets_support_clean_release_archives() -> None:
+    text = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert "SOURCE_REVISION_FILE ?= $(CURDIR)/SOURCE_REVISION" in text
+    assert "EVAL_CODE_SHA ?=" in text
+    assert text.count('--code-sha "$(EVAL_CODE_SHA)"') == 4
+    assert '--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)"' not in text
+
+
 def _makefile_recipe_commands(text: str, start: str, end: str) -> str:
     block = text[text.index(start) : text.index(end)]
     return "\n".join(
