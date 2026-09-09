@@ -140,6 +140,7 @@ NODE_CLOSE = "close_node"
 NODE_PLANNER = "planner_node"
 NODE_EVIDENCE = "evidence_node"
 NODE_FP_ADJUDICATION = "fp_adjudication_node"
+NODE_REACT = "react_node"
 NODE_GRAPH = "graph_node"
 NODE_RAG = "rag_node"
 NODE_RISK = "risk_node"
@@ -445,7 +446,12 @@ def route_after_writeback_recovery(state: InvestigationState) -> str:
 
 
 def route_after_replan(state: InvestigationState) -> str:
-    """After replan_node: if escalated, go to report; otherwise loop to planner."""
+    """Wait for compensation before allowing a new plan."""
+    if not state.get("saga_compensation_resolved") and any(
+        str(flag).split("=", 1)[0] == "saga_compensation_incomplete"
+        for flag in (state.get("degraded_flags") or [])
+    ):
+        return ROUTE_MANUAL
     if state.get("escalated"):
         return ROUTE_REPORT
     return ROUTE_INVESTIGATE  # goes back to planner_node
@@ -1187,15 +1193,23 @@ def build_investigation_graph(
             WritebackReadiness.CAPABILITY_UNKNOWN.value,
         )
         flags = list(state.get("degraded_flags") or [])
-        entry = f"disposition_writeback_blocked={readiness}"
-        if entry not in flags:
-            flags.append(entry)
-        flags = await degraded_flags.set_flag(
-            state["event_id"],
-            "disposition_writeback_blocked",
-            readiness,
-            writer="DegradedFlagService",
+        saga_blocked = not state.get("saga_compensation_resolved") and any(
+            str(flag).split("=", 1)[0] == "saga_compensation_incomplete" for flag in flags
         )
+        if saga_blocked:
+            flags = await degraded_flags.set_flag(
+                state["event_id"],
+                "saga_compensation_incomplete",
+                True,
+                writer="DegradedFlagService",
+            )
+        else:
+            flags = await degraded_flags.set_flag(
+                state["event_id"],
+                "disposition_writeback_blocked",
+                readiness,
+                writer="DegradedFlagService",
+            )
         pending_ids = list(
             dict.fromkeys(
                 [
@@ -1203,11 +1217,18 @@ def build_investigation_graph(
                     *(state.get("verify_recoverable_writeback_ids") or []),
                     *(state.get("verify_pending_writeback_action_ids") or []),
                     *(state.get("verify_failed_actions") or []),
+                    *(
+                        item["rollback_action_id"]
+                        for item in (state.get("rollback_results") or [])
+                        if item.get("rollback_action_id") and not item.get("rolled_back")
+                    ),
                 ]
             )
         )
         reason = "verify_need_manual_resolution"
-        if state.get("verify_need_manual_resolution"):
+        if any(str(flag).split("=", 1)[0] == "saga_compensation_incomplete" for flag in flags):
+            reason = "saga_compensation_incomplete"
+        elif state.get("verify_need_manual_resolution"):
             reason = "verify_need_manual_resolution"
         elif any(str(flag).startswith("disposition_writeback_blocked=") for flag in flags):
             reason = "disposition_writeback_blocked"
@@ -1529,6 +1550,56 @@ def build_investigation_graph(
             _trace(NODE_FP_ADJUDICATION),
             {"fp_adjudication": result.model_dump(mode="json")},
         )
+
+    async def react_graph_node(state: InvestigationState) -> InvestigationState:
+        from app.orchestration.react_fill import (
+            execution_plan_has_react_step,
+            react_step_from_plan,
+            run_readonly_react_fill,
+        )
+
+        react_enabled = bool(services.get("react_enabled", get_settings().react_enabled))
+        patch: dict[str, Any] = {}
+        if not react_enabled or not execution_plan_has_react_step(state.get("execution_plan")):
+            return _patch_state(_trace(NODE_REACT), patch)
+        context: dict[str, Any] = {
+            "event_id": state["event_id"],
+            "gaps": "只读补证：查询缺口证据，不生成处置动作",
+        }
+        evidence = state.get("evidence_output")
+        if evidence is not None:
+            context["evidence_summary"] = str(evidence)[:2000]
+        triage = state.get("triage_result")
+        if isinstance(triage, dict):
+            context["observation"] = str(triage.get("reasoning") or "")[:2000]
+        snapshot = state.get("source_snapshot")
+        try:
+            result = await run_readonly_react_fill(
+                state["event_id"],
+                context,
+                llm_client=services.get("llm_client"),
+                executor_factory=services.get("react_executor_factory"),
+                plan_step=react_step_from_plan(state.get("execution_plan")),
+                working_memory=services.get("working_memory"),
+                convergence_guard=services.get("convergence_guard"),
+                trace_sink=services.get("trace_service"),
+                source_snapshot=snapshot if isinstance(snapshot, dict) else None,
+                react_enabled=react_enabled,
+            )
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.exception("react_node failed event=%s", state["event_id"])
+            result = None
+        if result is None or getattr(getattr(result, "stop_reason", None), "value", "") == "error":
+            flags = await _persist_degraded_flag(
+                state,
+                "react_fill_degraded",
+                event_id=state["event_id"],
+                degraded_flags=degraded_flags,
+            )
+            patch["degraded_flags"] = flags
+        return _patch_state(_trace(NODE_REACT), patch)
 
     async def rag_graph_node(state: InvestigationState) -> InvestigationState:
         if rag_agent is None:
@@ -2381,7 +2452,26 @@ def build_investigation_graph(
             state,
             handler=_replan_handler,
             convergence_guard=_convergence_guard,
+            rollback=services.get("rollback"),
+            working_memory=services.get("working_memory"),
         )
+        flags = list(patches.get("degraded_flags") or [])
+        if any(str(flag).split("=", 1)[0] == "saga_compensation_incomplete" for flag in flags):
+            persisted = await _persist_degraded_flag(
+                state,
+                "saga_compensation_incomplete",
+                event_id=state["event_id"],
+                degraded_flags=degraded_flags,
+            )
+            patches = {**patches, "degraded_flags": persisted}
+        elif patches.get("saga_compensation_resolved"):
+            persisted = await degraded_flags.set_flag(
+                state["event_id"],
+                "saga_compensation_incomplete",
+                False,
+                writer="DegradedFlagService",
+            )
+            patches = {**patches, "degraded_flags": persisted}
         return _patch_state(_trace(NODE_REPLAN), patches)
 
     async def writeback_recovery_node(state: InvestigationState) -> InvestigationState:
@@ -2545,6 +2635,9 @@ def build_investigation_graph(
     register(NODE_PLANNER, planner_graph_node)
     register(NODE_EVIDENCE, evidence_node)
     register(NODE_FP_ADJUDICATION, fp_adjudication_node)
+    react_enabled = bool(services.get("react_enabled", get_settings().react_enabled))
+    if react_enabled:
+        register(NODE_REACT, react_graph_node)
     register(NODE_GRAPH, graph_node)
     register(NODE_RISK, risk_node)
     register(NODE_RESPONSE, response_node)
@@ -2590,17 +2683,28 @@ def build_investigation_graph(
     graph.add_edge(NODE_EVIDENCE, NODE_FP_ADJUDICATION)
     # RAG and graph only share evidence; run them in the same superstep so
     # retrieval latency does not serialize behind path ranking (and vice versa).
+    analysis_source = NODE_REACT if react_enabled else NODE_FP_ADJUDICATION
     if rag_agent is not None:
-        graph.add_edge(NODE_FP_ADJUDICATION, NODE_RAG)
-        graph.add_edge(NODE_FP_ADJUDICATION, NODE_GRAPH)
+        if react_enabled:
+            graph.add_edge(NODE_FP_ADJUDICATION, NODE_REACT)
+        graph.add_edge(analysis_source, NODE_RAG)
+        graph.add_edge(analysis_source, NODE_GRAPH)
         graph.add_edge(NODE_RAG, NODE_RISK)
         graph.add_edge(NODE_GRAPH, NODE_RISK)
     else:
-        graph.add_conditional_edges(
-            NODE_FP_ADJUDICATION,
-            route_after_fp_adjudication,
-            {ROUTE_CONTINUE: NODE_GRAPH},
-        )
+        if react_enabled:
+            graph.add_edge(NODE_FP_ADJUDICATION, NODE_REACT)
+            graph.add_conditional_edges(
+                NODE_REACT,
+                route_after_fp_adjudication,
+                {ROUTE_CONTINUE: NODE_GRAPH},
+            )
+        else:
+            graph.add_conditional_edges(
+                NODE_FP_ADJUDICATION,
+                route_after_fp_adjudication,
+                {ROUTE_CONTINUE: NODE_GRAPH},
+            )
         graph.add_edge(NODE_GRAPH, NODE_RISK)
     graph.add_conditional_edges(
         NODE_RISK,
@@ -2674,6 +2778,7 @@ def build_investigation_graph(
         NODE_REPLAN,
         route_after_replan,
         {
+            ROUTE_MANUAL: NODE_MANUAL_HOLD,
             ROUTE_REPORT: NODE_REPORT,
             ROUTE_INVESTIGATE: NODE_PLANNER,
         },
@@ -2838,6 +2943,7 @@ __all__ = [
     "NODE_MANUAL_HOLD",
     "NODE_PLANNER",
     "NODE_RAG",
+    "NODE_REACT",
     "NODE_REPLAN",
     "NODE_REPORT",
     "NODE_RESPONSE",

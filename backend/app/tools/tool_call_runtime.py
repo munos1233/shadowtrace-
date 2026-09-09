@@ -113,7 +113,10 @@ class ReactToolExecutorFactory:
     ) -> ReadOnlyReActExecutor:
         resolved_tenant = (tenant_id or resolve_tenant_id(source_snapshot) or "").strip()
         if not resolved_tenant:
-            resolved_tenant = self.settings.retrieval_default_tenant_id.strip()
+            raise ToolCallGrantUnavailableError(
+                "event tenant is required for dynamic ReAct",
+                details={"event_id": event_id, "reason": "missing_event_tenant"},
+            )
 
         if not self.settings.tool_call_grant_required:
             return ReadOnlyReActExecutor(self.inner_executor, event_id=event_id)

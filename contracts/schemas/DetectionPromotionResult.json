@@ -198,6 +198,17 @@
           ],
           "default": null
         },
+        "context_projection_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DetectionContextProjectionError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "reason_codes": {
           "items": {
             "$ref": "#/$defs/DetectionPromotionReasonCode"

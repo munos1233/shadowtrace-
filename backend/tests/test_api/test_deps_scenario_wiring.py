@@ -62,6 +62,7 @@ def _patch_production_graph_build_baseline(monkeypatch: pytest.MonkeyPatch) -> N
         "state_machine": MagicMock(),
         "context_store": MagicMock(),
         "degraded_flags": MagicMock(),
+        "memory": MagicMock(),
     }
     monkeypatch.setattr(deps, "_get_investigation_stack", AsyncMock(return_value=fake_stack))
     monkeypatch.setattr(deps, "_get_event_bus", lambda: MagicMock())
@@ -69,6 +70,7 @@ def _patch_production_graph_build_baseline(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(deps, "get_disposition_sync", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "get_approval_engine", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "get_action_execution", AsyncMock(return_value=MagicMock()))
+    monkeypatch.setattr(deps, "get_rollback_service", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "_get_workflow_runtime", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(deps, "_get_redis", lambda: MagicMock())
     monkeypatch.setattr(deps, "_get_agent_task_service", lambda: MagicMock())
@@ -112,6 +114,10 @@ def _patch_production_graph_build_baseline(monkeypatch: pytest.MonkeyPatch) -> N
                 deps, "get_event_disposition_service", AsyncMock(return_value=None)
             ),
         ),
+        (
+            "rollback",
+            lambda mp: mp.setattr(deps, "get_rollback_service", AsyncMock(return_value=None)),
+        ),
     ],
 )
 async def test_production_graph_fails_fast_on_missing_di(
@@ -129,6 +135,23 @@ async def test_production_graph_fails_fast_on_missing_di(
             convergence_guard=MagicMock(),
         )
     assert missing_name in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_production_graph_fails_fast_on_missing_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.errors import ConfigurationError
+
+    _patch_production_graph_build_baseline(monkeypatch)
+    stacked = await deps._get_investigation_stack()
+    missing_memory = {key: value for key, value in stacked.items() if key != "memory"}
+    monkeypatch.setattr(deps, "_get_investigation_stack", AsyncMock(return_value=missing_memory))
+    with pytest.raises(ConfigurationError, match="memory_agent"):
+        await deps._build_production_investigation_graph(
+            planner_agent=MagicMock(),
+            convergence_guard=MagicMock(),
+        )
 
 
 @pytest.mark.asyncio

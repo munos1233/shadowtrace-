@@ -10,6 +10,7 @@ circular imports with ``app.api.v1.schemas`` → ``app.services.context_service`
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends
@@ -61,6 +62,7 @@ _memory_governance: Any = None  # MemoryGovernance (ISSUE-081)
 _knowledge_query_service: Any = None  # KnowledgeQueryService (ISSUE-279)
 _detection_governance: Any = None  # DetectionGovernanceService (ISSUE-125)
 _detection_promotion: Any = None  # DetectionPromotionService (ISSUE-124)
+_detection_rule_runtime: Any = None  # DetectionRuleRuntimeService
 _detection_context_projector: Any = None  # DetectionContextProjector (ISSUE-127)
 _detection_context_service: Any = None  # DetectionContextService (ISSUE-127)
 _decision_record_service: Any = None  # DecisionRecordService (ISSUE-131)
@@ -364,6 +366,18 @@ def get_detection_governance_service() -> Any:
 DetectionGovernanceDep = Annotated[Any, Depends(get_detection_governance_service)]
 
 
+def get_detection_rule_runtime_service() -> Any:
+    global _detection_rule_runtime
+    if _detection_rule_runtime is None:
+        from app.services.detection_rule_runtime import DetectionRuleRuntimeService
+
+        _detection_rule_runtime = DetectionRuleRuntimeService(_get_session_factory())
+    return _detection_rule_runtime
+
+
+DetectionRuleRuntimeDep = Annotated[Any, Depends(get_detection_rule_runtime_service)]
+
+
 def get_detection_context_projector() -> Any:
     """Return the shared detection context projector (ISSUE-127)."""
     global _detection_context_projector
@@ -537,6 +551,42 @@ async def get_disposition_source_service() -> Any:
     return _disposition_source
 
 
+def _make_planner_react_fill(
+    stack: dict[str, Any],
+) -> Callable[[str, dict[str, Any]], Awaitable[Any]]:
+    """Bind investigation-stack ReAct fill for PlannerAgent LLM-failure recovery."""
+
+    async def _react_fill(event_id: str, context: dict[str, Any]) -> Any:
+        from app.orchestration.react_fill import run_readonly_react_fill
+
+        snapshot = context.get("source_snapshot")
+        return await run_readonly_react_fill(
+            event_id,
+            context,
+            llm_client=stack.get("llm_client"),
+            executor_factory=stack.get("react_executor_factory"),
+            working_memory=stack.get("wm"),
+            convergence_guard=stack.get("convergence_guard"),
+            trace_sink=stack.get("trace_service"),
+            source_snapshot=snapshot if isinstance(snapshot, dict) else None,
+        )
+
+    return _react_fill
+
+
+def _require_stack_dep(stack: dict[str, Any], key: str, label: str) -> Any:
+    """Fail closed with ConfigurationError when investigation DI is missing."""
+    from app.core.errors import ConfigurationError
+
+    value = stack.get(key)
+    if value is None:
+        raise ConfigurationError(
+            f"production investigation graph miswired — missing dependencies: {label}",
+            details={"missing": label},
+        )
+    return value
+
+
 async def _build_production_investigation_graph(
     *,
     planner_agent: Any,
@@ -551,6 +601,7 @@ async def _build_production_investigation_graph(
     stack = await _get_investigation_stack()
     wm = stack["wm"]
     event_bus = _get_event_bus()
+    memory_agent = _require_stack_dep(stack, "memory", "memory_agent")
     from app.adapters.sangfor.capability_manifest import response_agent_overrides_for_kind
 
     settings = get_settings()
@@ -593,7 +644,7 @@ async def _build_production_investigation_graph(
         "verify_agent": verify_agent,
         "rag_agent": stack["rag"],
         "graph_agent": stack["graph_agent"],
-        "memory_agent": stack["memory"],
+        "memory_agent": memory_agent,
     }
     services = {
         "state_machine": stack["state_machine"],
@@ -613,6 +664,10 @@ async def _build_production_investigation_graph(
         "agent_artifact_service": _get_agent_artifact_service(),
         "content_projection_service": _get_content_projection_service(),
         "knowledge_store": stack.get("knowledge_store"),
+        "rollback": await get_rollback_service(),
+        "react_executor_factory": stack.get("react_executor_factory"),
+        "llm_client": stack.get("llm_client"),
+        "react_enabled": settings.react_enabled,
     }
     # ISSUE-218: fail fast on production miswiring — if a key service/agent
     # is missing the graph would previously "succeed" through stub nodes
@@ -626,6 +681,8 @@ async def _build_production_investigation_graph(
             ("action_execution", services["action_execution"]),
             ("disposition_sync", services["disposition_sync"]),
             ("event_disposition", services["event_disposition"]),
+            ("rollback", services["rollback"]),
+            ("memory_agent", memory_agent),
         )
         if dep is None
     ]
@@ -663,6 +720,7 @@ async def get_rollback_service() -> Any:
         from app.services.rollback_service import RollbackService, build_execute_rollback_hook
 
         action_execution = await get_action_execution()
+        approval_engine = await get_approval_engine()
         _rollback_service = RollbackService(
             _get_session_factory(),
             audit=_get_audit_log(),
@@ -670,7 +728,10 @@ async def get_rollback_service() -> Any:
             disposition_sync=await get_disposition_sync(),
             event_bus=_get_event_bus(),
             adapter_registry=_get_adapter_registry(),
+            approval_engine=approval_engine,
+            resume_investigation=_resume_investigation,
         )
+        approval_engine.set_rollback_approval_handler(_rollback_service.complete_approved_rollback)
     return _rollback_service
 
 
@@ -1096,6 +1157,7 @@ async def get_pipeline() -> Any:
         from app.services.analysis_only_pipeline import AnalysisOnlyPipeline
 
         stack = await _get_investigation_stack()
+        memory_agent = _require_stack_dep(stack, "memory", "memory_agent")
         _pipeline = AnalysisOnlyPipeline(
             event_service=stack["event_service"],
             state_machine=stack["state_machine"],
@@ -1110,7 +1172,7 @@ async def get_pipeline() -> Any:
             working_memory=stack["wm"],
             degraded_flags=stack["degraded_flags"],
             settings=stack["settings"],
-            memory_agent=stack["memory"],
+            memory_agent=memory_agent,
             agent_task_service=_get_agent_task_service(),
             agent_artifact_service=_get_agent_artifact_service(),
             content_projection_service=_get_content_projection_service(),
@@ -1145,6 +1207,7 @@ async def get_super_agent() -> Any:
         stack = await _get_investigation_stack()
         settings = stack["settings"]
         wm = stack["wm"]
+        memory_agent = _require_stack_dep(stack, "memory", "memory_agent")
 
         planner = PlannerAgent(
             llm_client=stack["llm_client"],
@@ -1153,6 +1216,7 @@ async def get_super_agent() -> Any:
             output_guard=stack["output_guard"],
             trace_service=stack["trace_service"],
             event_bus=_get_event_bus(),
+            react_fill=_make_planner_react_fill(stack),
         )
         # ISSUE-168: reuse the single guard wired during stack assembly so the
         # LLM client / ToolExecutor / investigation graph all share one counter
@@ -1181,7 +1245,7 @@ async def get_super_agent() -> Any:
             react_executor_factory=stack["react_executor_factory"],
             react_llm_client=stack["llm_client"],
             investigation_graph=investigation_graph,
-            memory_agent=stack["memory"],
+            memory_agent=memory_agent,
             audit_service=_get_audit_log(),
             graph_agent=stack["graph_agent"],
             storyline_service=stack["storyline_service"],
@@ -1218,7 +1282,8 @@ def reset_loop_bound_redis_resources() -> None:
     global _impact_assessment_service
     global _tool_call_grant_service, _agent_task_service
     global _memory_governance, _knowledge_query_service, _detection_governance
-    global _detection_promotion, _detection_context_projector, _detection_context_service
+    global _detection_promotion, _detection_rule_runtime
+    global _detection_context_projector, _detection_context_service
     global _decision_record_service, _execution_job_query
 
     client = _redis_client
@@ -1252,6 +1317,7 @@ def reset_loop_bound_redis_resources() -> None:
     _knowledge_query_service = None
     _detection_governance = None
     _detection_promotion = None
+    _detection_rule_runtime = None
     _detection_context_projector = None
     _detection_context_service = None
 

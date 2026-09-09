@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -106,6 +106,22 @@ class DetectionPromotionService:
                 record.promotion_id,
                 tenant_id=record.tenant_id,
             )
+            if record.context_projection_error is not None:
+                async with self._session_factory() as session:
+                    async with session.begin():
+                        row = await session.get(
+                            DetectionPromotionORM, record.promotion_id, with_for_update=True
+                        )
+                        if row is not None:
+                            payload = dict(row.payload or {})
+                            payload.pop(PAYLOAD_PROJECTION_ERROR_KEY, None)
+                            row.payload = payload
+                            row.reason_codes = [
+                                code
+                                for code in (row.reason_codes or [])
+                                if code
+                                != DetectionPromotionReasonCode.CONTEXT_PROJECTION_FAILED.value
+                            ]
             return None
         except ValidationError as exc:
             reason = (
@@ -187,8 +203,34 @@ class DetectionPromotionService:
         finalized = self._finalize_promotion_result(result)
         projection_error = await self._maybe_project_detection_context(finalized.record)
         if projection_error is None:
+            if (
+                self._context_projector is not None
+                and finalized.status is DetectionPromotionStatus.COMPLETED
+            ):
+                return finalized.model_copy(
+                    update={
+                        "record": finalized.record.model_copy(
+                            update={
+                                "context_projection_error": None,
+                                "reason_codes": [
+                                    code
+                                    for code in finalized.record.reason_codes
+                                    if code
+                                    is not DetectionPromotionReasonCode.CONTEXT_PROJECTION_FAILED
+                                ],
+                            }
+                        )
+                    }
+                )
             return finalized
-        return finalized.model_copy(update={"context_projection_error": projection_error})
+        return finalized.model_copy(
+            update={
+                "context_projection_error": projection_error,
+                "record": finalized.record.model_copy(
+                    update={"context_projection_error": projection_error}
+                ),
+            }
+        )
 
     async def promote_candidate(
         self,
@@ -653,6 +695,15 @@ class DetectionPromotionService:
         ingest_result: TypedIngestResult | None = None,
     ) -> DetectionPromotionResult:
         retry_count = await self._increment_ingest_retry_count(record.promotion_id)
+        if retry_count is None:
+            current = await self._get_by_promotion_id(record.promotion_id)
+            return DetectionPromotionResult(
+                promotion_id=current.promotion_id,
+                status=current.status,
+                record=current,
+                ingest_result=current.ingest_result,
+                resumed=resumed,
+            )
         status = (
             DetectionPromotionStatus.DEAD
             if retry_count >= MAX_PROMOTION_INGEST_RETRIES
@@ -672,7 +723,7 @@ class DetectionPromotionService:
             resumed=resumed,
         )
 
-    async def _increment_ingest_retry_count(self, promotion_id: str) -> int:
+    async def _increment_ingest_retry_count(self, promotion_id: str) -> int | None:
         async with self._session_factory() as session:
             async with session.begin():
                 row = await session.get(
@@ -685,11 +736,26 @@ class DetectionPromotionService:
                         "promotion ledger row not found",
                         details={"promotion_id": promotion_id},
                     )
+                if DetectionPromotionStatus(row.status) not in {
+                    DetectionPromotionStatus.PENDING,
+                    DetectionPromotionStatus.RETRY,
+                }:
+                    return None
                 payload = dict(row.payload or {})
                 count = int(payload.get(PAYLOAD_RETRY_COUNT_KEY, 0)) + 1
                 payload[PAYLOAD_RETRY_COUNT_KEY] = count
                 row.payload = payload
                 return count
+
+    async def _get_by_promotion_id(self, promotion_id: str) -> DetectionPromotionRecord:
+        async with self._session_factory() as session:
+            row = await session.get(DetectionPromotionORM, promotion_id)
+            if row is None:
+                raise ResourceNotFoundError(
+                    "promotion ledger row not found",
+                    details={"promotion_id": promotion_id},
+                )
+            return _row_to_record(row)
 
     async def _get_by_promotion_key(
         self,
@@ -751,18 +817,6 @@ class DetectionPromotionService:
         record: DetectionPromotionRecord,
         **updates: object,
     ) -> DetectionPromotionRecord:
-        payload = record.model_dump()
-        payload.update(updates)
-        if isinstance(payload.get("status"), DetectionPromotionStatus):
-            payload["status"] = payload["status"].value
-        if isinstance(payload.get("ingest_result"), TypedIngestResult):
-            payload["ingest_result"] = payload["ingest_result"].model_dump(mode="json")
-        if payload.get("reason_codes"):
-            payload["reason_codes"] = [
-                code.value if hasattr(code, "value") else code for code in payload["reason_codes"]
-            ]
-        updated = DetectionPromotionRecord.model_validate(payload)
-        updated = updated.model_copy(update={"updated_at": self._now()})
         async with self._session_factory() as session:
             async with session.begin():
                 row = await session.get(
@@ -775,6 +829,41 @@ class DetectionPromotionService:
                         "promotion ledger row not found",
                         details={"promotion_id": record.promotion_id},
                     )
+                current = _row_to_record(row)
+                requested_status_raw = updates.get("status")
+                requested_status = (
+                    requested_status_raw
+                    if isinstance(requested_status_raw, DetectionPromotionStatus)
+                    else DetectionPromotionStatus(str(requested_status_raw))
+                    if requested_status_raw is not None
+                    else None
+                )
+
+                # A caller resumes from a snapshot read before taking this row
+                # lock.  If another worker already moved the saga, return the
+                # authoritative row instead of applying a stale transition.
+                if requested_status is not None and current.status is not record.status:
+                    return current
+                # COMPLETED is terminal and must never regress to RETRY/DEAD
+                # when a slower duplicate ingest reports a late failure.
+                if current.status is DetectionPromotionStatus.COMPLETED:
+                    return current
+
+                payload = current.model_dump()
+                payload.update(updates)
+                if isinstance(payload.get("status"), DetectionPromotionStatus):
+                    payload["status"] = payload["status"].value
+                if isinstance(payload.get("ingest_result"), TypedIngestResult):
+                    payload["ingest_result"] = payload["ingest_result"].model_dump(mode="json")
+                if payload.get("reason_codes"):
+                    payload["reason_codes"] = [
+                        code.value if hasattr(code, "value") else code
+                        for code in payload["reason_codes"]
+                    ]
+                updated_at = self._now()
+                updated = DetectionPromotionRecord.model_validate(payload).model_copy(
+                    update={"updated_at": updated_at}
+                )
                 row.status = updated.status.value
                 row.derived_connector_id = updated.derived_connector_id
                 row.source_record_id = updated.source_record_id
@@ -787,7 +876,10 @@ class DetectionPromotionService:
                 )
                 row.reason_codes = [code.value for code in updated.reason_codes]
                 row.reason_message = updated.reason_message
-        return updated
+                row.updated_at = updated_at
+                await session.flush()
+                authoritative = _row_to_record(row)
+        return authoritative
 
     async def _mark_failed(
         self,
@@ -811,7 +903,54 @@ class DetectionPromotionService:
                 existing = await session.get(DetectionPromotionORM, promotion_id)
                 if existing is None:
                     return promotion_id
-        raise RuntimeError("failed to allocate detection promotion_id")
+        raise RuntimeError("failed to allocate detection_promotion_id")
+
+    async def get_promotion(
+        self,
+        promotion_id: str,
+        *,
+        tenant_id: str,
+    ) -> DetectionPromotionRecord:
+        async with self._session_factory() as session:
+            row = await session.get(DetectionPromotionORM, promotion_id)
+        if row is None or row.tenant_id != tenant_id:
+            raise ResourceNotFoundError(
+                "detection promotion not found",
+                details={"promotion_id": promotion_id, "tenant_id": tenant_id},
+            )
+        return _row_to_record(row)
+
+    async def list_promotions(
+        self,
+        *,
+        tenant_id: str,
+        candidate_detection_id: str | None = None,
+        status: DetectionPromotionStatus | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[DetectionPromotionRecord], int]:
+        filters = [DetectionPromotionORM.tenant_id == tenant_id]
+        if candidate_detection_id:
+            filters.append(DetectionPromotionORM.candidate_detection_id == candidate_detection_id)
+        if status is not None:
+            filters.append(DetectionPromotionORM.status == status.value)
+        async with self._session_factory() as session:
+            total = int(
+                await session.scalar(
+                    select(func.count()).select_from(DetectionPromotionORM).where(*filters)
+                )
+                or 0
+            )
+            rows = list(
+                await session.scalars(
+                    select(DetectionPromotionORM)
+                    .where(*filters)
+                    .order_by(DetectionPromotionORM.updated_at.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+        return [_row_to_record(row) for row in rows], total
 
 
 def _row_to_record(row: DetectionPromotionORM) -> DetectionPromotionRecord:
@@ -820,7 +959,18 @@ def _row_to_record(row: DetectionPromotionORM) -> DetectionPromotionRecord:
         if row.ingest_result is not None
         else None
     )
+    raw_error = (row.payload or {}).get(PAYLOAD_PROJECTION_ERROR_KEY)
+    projection_error = (
+        DetectionContextProjectionError(
+            reason=raw_error["reason"],
+            message=raw_error.get("message", ""),
+            recorded_at=raw_error.get("at"),
+        )
+        if isinstance(raw_error, dict)
+        else None
+    )
     return DetectionPromotionRecord(
+        context_projection_error=projection_error,
         promotion_id=row.promotion_id,
         tenant_id=row.tenant_id,
         promotion_key=row.promotion_key,

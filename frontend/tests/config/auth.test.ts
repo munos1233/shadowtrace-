@@ -11,21 +11,21 @@ describe("config/auth", () => {
   it("uses VITE_AUTH_ROLES override when set", async () => {
     vi.stubEnv("VITE_AUTH_ROLES", "analyst");
     vi.stubEnv("VITE_DEV_AUTH_TOKEN", "e2e-token");
-    const { currentAuthRoles, canPromoteKnowledgeReviews } = await import(
-      "../../src/config/auth"
-    );
+    const { currentAuthRoles, canPromoteKnowledgeReviews, canDecideDetectionGovernance } =
+      await import("../../src/config/auth");
     expect(currentAuthRoles()).toEqual(["analyst"]);
     expect(canPromoteKnowledgeReviews()).toBe(false);
+    expect(canDecideDetectionGovernance()).toBe(false);
   });
 
   it("derives roles from known VITE_DEV_AUTH_TOKEN when roles unset", async () => {
     vi.stubEnv("VITE_AUTH_ROLES", "");
     vi.stubEnv("VITE_DEV_AUTH_TOKEN", "e2e-token");
-    const { currentAuthRoles, canPromoteKnowledgeReviews } = await import(
-      "../../src/config/auth"
-    );
+    const { currentAuthRoles, canPromoteKnowledgeReviews, canDecideDetectionGovernance } =
+      await import("../../src/config/auth");
     expect(currentAuthRoles()).toEqual(["analyst", "approver"]);
     expect(canPromoteKnowledgeReviews()).toBe(true);
+    expect(canDecideDetectionGovernance()).toBe(true);
   });
 
   it("maps bootstrap-token to compose roles", async () => {
@@ -39,11 +39,11 @@ describe("config/auth", () => {
   it("defaults unknown dev token to analyst-only", async () => {
     vi.stubEnv("VITE_AUTH_ROLES", "");
     vi.stubEnv("VITE_DEV_AUTH_TOKEN", "custom-analyst-token");
-    const { currentAuthRoles, canPromoteKnowledgeReviews } = await import(
-      "../../src/config/auth"
-    );
+    const { currentAuthRoles, canPromoteKnowledgeReviews, canDecideDetectionGovernance } =
+      await import("../../src/config/auth");
     expect(currentAuthRoles()).toEqual(["analyst"]);
     expect(canPromoteKnowledgeReviews()).toBe(true);
+    expect(canDecideDetectionGovernance()).toBe(true);
   });
 
   it("hasKnownAuthRoles: known dev token pins roles (single-token mode)", async () => {

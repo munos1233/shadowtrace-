@@ -1083,6 +1083,44 @@ async def test_concurrent_promotion_completes_once(
 
 @pytest.mark.asyncio
 @requires_postgres
+async def test_stale_failure_cannot_regress_completed_promotion(
+    session_factory: async_sessionmaker[AsyncSession],
+    promotion_service: DetectionPromotionService,
+) -> None:
+    seeded, candidate, artifact, decision, _ = await _seed_governed_candidate(session_factory)
+    completed = await promotion_service.promote_candidate(
+        artifact,
+        DetectionPromotionRequest(
+            tenant_id=seeded.source_tenant_id,
+            candidate_detection_id=candidate.candidate_detection_id,
+            decision_id=decision.decision_id,
+        ),
+    )
+    stale = completed.record.model_copy(
+        update={
+            "status": DetectionPromotionStatus.PENDING,
+            "source_record_id": None,
+            "event_id": None,
+            "ingest_result": None,
+        }
+    )
+
+    authoritative = await promotion_service._update_ledger(
+        stale,
+        status=DetectionPromotionStatus.RETRY,
+        reason_codes=[DetectionPromotionReasonCode.INGEST_FAILED],
+        reason_message="late duplicate failure",
+    )
+
+    assert authoritative.status is DetectionPromotionStatus.COMPLETED
+    assert authoritative.source_record_id == completed.record.source_record_id
+    assert authoritative.event_id == completed.record.event_id
+    assert authoritative.ingest_result == completed.record.ingest_result
+    assert await promotion_service._increment_ingest_retry_count(stale.promotion_id) is None
+
+
+@pytest.mark.asyncio
+@requires_postgres
 async def test_promotion_reingest_records_idempotent_outcome(
     session_factory: async_sessionmaker[AsyncSession],
     promotion_service: DetectionPromotionService,

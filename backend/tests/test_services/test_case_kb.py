@@ -97,7 +97,7 @@ def knowledge_store(
     session_factory: async_sessionmaker[AsyncSession],
     embed_service: EmbeddingService,
 ) -> KnowledgeStore:
-    return KnowledgeStore(session_factory, embed_service)
+    return KnowledgeStore(session_factory, embed_service, tenant_isolation_strict=True)
 
 
 @pytest_asyncio.fixture
@@ -209,21 +209,27 @@ def _ops_change_window_case() -> FalsePositiveCase:
     )
 
 
-def _make_fp_chunk(case: FalsePositiveCase) -> KnowledgeChunk:
+def _make_fp_chunk(case: FalsePositiveCase, *, tenant_id: str | None = None) -> KnowledgeChunk:
+    metadata = fp_case_metadata(case)
+    if tenant_id:
+        metadata["tenant_id"] = tenant_id
     return KnowledgeChunk(
         chunk_id=make_chunk_id(FP_KB_NAME, case.case_id),
         kb_name=FP_KB_NAME,
         content=fp_case_to_text(case),
-        metadata=fp_case_metadata(case),
+        metadata=metadata,
     )
 
 
-def _make_history_chunk(case: HistoryCase) -> KnowledgeChunk:
+def _make_history_chunk(case: HistoryCase, *, tenant_id: str | None = None) -> KnowledgeChunk:
+    metadata = history_case_metadata(case)
+    if tenant_id:
+        metadata["tenant_id"] = tenant_id
     return KnowledgeChunk(
         chunk_id=make_chunk_id(HISTORY_KB_NAME, case.case_id),
         kb_name=HISTORY_KB_NAME,
         content=history_case_to_text(case),
-        metadata=history_case_metadata(case),
+        metadata=metadata,
     )
 
 
@@ -324,9 +330,10 @@ class TestSeedLoading:
                 confirmed_at="2024-05-20T15:00:00Z",
             ),
         ]
-        chunks = [_make_fp_chunk(c) for c in cases]
+        tenant_id = f"tenant-seed-{uuid4().hex[:8]}"
+        chunks = [_make_fp_chunk(c, tenant_id=tenant_id) for c in cases]
         await knowledge_store.upsert_chunks(FP_KB_NAME, chunks)
-        assert await knowledge_store.count(FP_KB_NAME) == len(cases)
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == len(cases)
         assert len(cases) >= 10
 
     @pytest.mark.asyncio
@@ -334,12 +341,13 @@ class TestSeedLoading:
         self, knowledge_store: KnowledgeStore, clean_knowledge: None
     ) -> None:
         """Repeated upsert must not duplicate chunks."""
+        tenant_id = f"tenant-seed-{uuid4().hex[:8]}"
         case = _ops_change_window_case()
-        chunk = _make_fp_chunk(case)
+        chunk = _make_fp_chunk(case, tenant_id=tenant_id)
         await knowledge_store.upsert_chunks(FP_KB_NAME, [chunk])
-        assert await knowledge_store.count(FP_KB_NAME) == 1
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == 1
         await knowledge_store.upsert_chunks(FP_KB_NAME, [chunk])
-        assert await knowledge_store.count(FP_KB_NAME) == 1
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == 1
 
     @pytest.mark.asyncio
     async def test_history_cases_seed_count(
@@ -374,9 +382,10 @@ class TestSeedLoading:
                         closed_at="2024-01-15T10:00:00Z",
                     )
                 )
-        chunks = [_make_history_chunk(c) for c in cases]
+        tenant_id = f"tenant-seed-{uuid4().hex[:8]}"
+        chunks = [_make_history_chunk(c, tenant_id=tenant_id) for c in cases]
         await knowledge_store.upsert_chunks(HISTORY_KB_NAME, chunks)
-        assert await knowledge_store.count(HISTORY_KB_NAME) == len(cases)
+        assert await knowledge_store.count(HISTORY_KB_NAME, tenant_id=tenant_id) == len(cases)
         assert len(cases) == 16
 
     @pytest.mark.asyncio
@@ -388,9 +397,10 @@ class TestSeedLoading:
         cases = [FalsePositiveCase.model_validate(row) for row in raw]
         assert len(cases) >= 10
 
-        chunks = [_make_fp_chunk(case) for case in cases]
+        tenant_id = f"tenant-seed-{uuid4().hex[:8]}"
+        chunks = [_make_fp_chunk(case, tenant_id=tenant_id) for case in cases]
         await knowledge_store.upsert_chunks(FP_KB_NAME, chunks)
-        assert await knowledge_store.count(FP_KB_NAME) == len(cases)
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == len(cases)
 
     @pytest.mark.asyncio
     async def test_history_cases_json_file_loads(
@@ -410,9 +420,10 @@ class TestSeedLoading:
         assert "7z.exe" in hosts_by_id["case-10000017"]
         assert "PC-FIN-041" in hosts_by_id["case-10000017"]
 
-        chunks = [_make_history_chunk(case) for case in cases]
+        tenant_id = f"tenant-seed-{uuid4().hex[:8]}"
+        chunks = [_make_history_chunk(case, tenant_id=tenant_id) for case in cases]
         await knowledge_store.upsert_chunks(HISTORY_KB_NAME, chunks)
-        assert await knowledge_store.count(HISTORY_KB_NAME) == len(cases)
+        assert await knowledge_store.count(HISTORY_KB_NAME, tenant_id=tenant_id) == len(cases)
 
     @pytest.mark.asyncio
     async def test_fp_json_upsert_idempotent(
@@ -421,12 +432,13 @@ class TestSeedLoading:
         """Repeated upsert from JSON seed must not duplicate chunks."""
         raw = json.loads(FP_CASES_FILE.read_text(encoding="utf-8"))
         cases = [FalsePositiveCase.model_validate(row) for row in raw[:3]]
-        chunks = [_make_fp_chunk(case) for case in cases]
+        tenant_id = f"tenant-seed-{uuid4().hex[:8]}"
+        chunks = [_make_fp_chunk(case, tenant_id=tenant_id) for case in cases]
 
         await knowledge_store.upsert_chunks(FP_KB_NAME, chunks)
-        assert await knowledge_store.count(FP_KB_NAME) == len(chunks)
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == len(chunks)
         await knowledge_store.upsert_chunks(FP_KB_NAME, chunks)
-        assert await knowledge_store.count(FP_KB_NAME) == len(chunks)
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == len(chunks)
 
 
 # ── Search tests ─────────────────────────────────────────────────────
@@ -440,7 +452,8 @@ class TestFpCaseSearch:
         """account_anomaly_fp alert text must retrieve ops change window pattern as top1."""
         # Seed the ops change window FP case.
         case = _ops_change_window_case()
-        await knowledge_store.upsert_chunks(FP_KB_NAME, [_make_fp_chunk(case)])
+        tenant_id = f"tenant-fp-{uuid4().hex[:8]}"
+        await knowledge_store.upsert_chunks(FP_KB_NAME, [_make_fp_chunk(case, tenant_id=tenant_id)])
 
         # Also seed a few distractor FP cases.
         distractors = [
@@ -463,16 +476,18 @@ class TestFpCaseSearch:
                 confirmed_at="2024-07-15T12:30:00Z",
             ),
         ]
-        await knowledge_store.upsert_chunks(FP_KB_NAME, [_make_fp_chunk(d) for d in distractors])
+        await knowledge_store.upsert_chunks(
+            FP_KB_NAME, [_make_fp_chunk(d, tenant_id=tenant_id) for d in distractors]
+        )
 
         # Verify the ops case was stored and is searchable.
-        assert await knowledge_store.count(FP_KB_NAME) == 3
+        assert await knowledge_store.count(FP_KB_NAME, tenant_id=tenant_id) == 3
 
         alert_text = (
             "Bulk login by ops account during change window: ops-change-bot "
             "executed automated password rotation from PC-OPS-JUMP-01"
         )
-        results = await case_kb_service.search_fp_cases(alert_text, top_k=5)
+        results = await case_kb_service.search_fp_cases(alert_text, top_k=5, tenant_id=tenant_id)
         assert len(results) >= 1
         top = results[0]
         assert top.metadata.get("case_id") == "case-00000001"
@@ -484,7 +499,9 @@ class TestFpCaseSearch:
         self, case_kb_service: CaseKBService, clean_knowledge: None
     ) -> None:
         """Empty KB returns empty list."""
-        results = await case_kb_service.search_fp_cases("anything", top_k=5)
+        results = await case_kb_service.search_fp_cases(
+            "anything", top_k=5, tenant_id=f"tenant-empty-{uuid4().hex[:8]}"
+        )
         assert results == []
 
 
@@ -534,12 +551,13 @@ class TestHistoryCaseSearch:
                 closed_at="2024-11-12T06:00:00Z",
             ),
         ]
-        chunks = [_make_history_chunk(c) for c in cases]
+        tenant_id = f"tenant-hist-{uuid4().hex[:8]}"
+        chunks = [_make_history_chunk(c, tenant_id=tenant_id) for c in cases]
         await knowledge_store.upsert_chunks(HISTORY_KB_NAME, chunks)
 
         # Unfiltered: all 3 should appear (top_k large enough)
         all_results = await case_kb_service.search_history_cases(
-            "data exfiltration lateral movement", top_k=5
+            "data exfiltration lateral movement", top_k=5, tenant_id=tenant_id
         )
         assert any(r.metadata["event_type"] == "data_exfiltration" for r in all_results)
 
@@ -548,6 +566,7 @@ class TestHistoryCaseSearch:
             "data exfiltration lateral movement",
             event_type="lateral_movement",
             top_k=5,
+            tenant_id=tenant_id,
         )
         assert len(lm_results) >= 1
         for r in lm_results:
@@ -558,7 +577,9 @@ class TestHistoryCaseSearch:
         self, case_kb_service: CaseKBService, clean_knowledge: None
     ) -> None:
         """Empty KB returns empty list."""
-        results = await case_kb_service.search_history_cases("anything", top_k=5)
+        results = await case_kb_service.search_history_cases(
+            "anything", top_k=5, tenant_id=f"tenant-empty-{uuid4().hex[:8]}"
+        )
         assert results == []
 
 

@@ -44,6 +44,17 @@ def _build_standard_plan(
         )
     offset = len(steps)
 
+    offset += 1
+    steps.append(
+        PlanStep(
+            step_order=offset,
+            step_goal="只读补证：查询缺口证据，不生成处置动作",
+            assigned_agent="react",
+            required_tools=[],
+            success_criteria="ReAct 只读查询完成或降级跳过",
+        )
+    )
+
     if include_graph:
         offset += 1
         steps.append(

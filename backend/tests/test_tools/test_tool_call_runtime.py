@@ -262,3 +262,38 @@ async def test_react_factory_reuses_grant_on_step_retry() -> None:
     assert isinstance(second, ReadOnlyReActExecutor)
     assert idempotency_keys == [expected_key, expected_key]
     grant_service.load_grant_trusted.assert_awaited_once_with("tcg-retry01")
+
+
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.asyncio
+async def test_event_react_missing_tenant_never_uses_default(required):
+    registry = ToolRegistry()
+    grants = MagicMock()
+    factory = ReactToolExecutorFactory(
+        inner_executor=ToolExecutor(registry=registry),
+        grant_service=grants,
+        settings=Settings(
+            TOOL_CALL_GRANT_REQUIRED=required, RETRIEVAL_DEFAULT_TENANT_ID="tenant-a"
+        ),
+        projection_service=SafeToolProjectionService(registry),
+    )
+    with pytest.raises(ToolCallGrantUnavailableError, match="event tenant is required"):
+        await factory.for_event("evt-tenant-b", source_snapshot={})
+    grants.issue_grant.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_react_grant_uses_snapshot_tenant_instead_of_default():
+    registry = ToolRegistry()
+    registry.auto_discover()
+    grants = MagicMock(available=True)
+    grants.issue_grant = AsyncMock(side_effect=RuntimeError("stop after tenant binding"))
+    factory = ReactToolExecutorFactory(
+        inner_executor=ToolExecutor(registry=registry),
+        grant_service=grants,
+        settings=Settings(TOOL_CALL_GRANT_REQUIRED=True, RETRIEVAL_DEFAULT_TENANT_ID="tenant-a"),
+        projection_service=SafeToolProjectionService(registry),
+    )
+    with pytest.raises(RuntimeError, match="stop after tenant binding"):
+        await factory.for_event("evt-tenant-b", source_snapshot={"source_tenant_id": "tenant-b"})
+    assert grants.issue_grant.call_args.args[0].tenant_id == "tenant-b"

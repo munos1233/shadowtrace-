@@ -17,6 +17,7 @@ from app.models.enums import (
 )
 from app.orchestration.graph_resume import (
     _reconcile_verify_resume_patch,
+    _saga_manual_hold_resolved,
     maybe_catchup_approval_resume_same_lease,
     prepare_graph_resume_state,
     resume_investigation_from_checkpoint,
@@ -252,6 +253,70 @@ async def test_reconcile_verify_resume_keeps_legitimate_manual_hold() -> None:
     )
     assert patch.get("halted") is False
     assert "verify_need_manual_resolution" not in patch
+
+
+@pytest.mark.asyncio
+async def test_reconcile_verify_resume_clears_converged_saga_hold() -> None:
+    saga_resolved = AsyncMock(return_value=True)
+    with patch(
+        "app.orchestration.graph_resume._saga_manual_hold_resolved",
+        new=saga_resolved,
+    ):
+        resume_patch = await _reconcile_verify_resume_patch(
+            _SessionFactory(EventStatus.VERIFYING.value),
+            "evt-saga-resolved",
+            {
+                "halted": True,
+                "verify_need_manual_resolution": True,
+                "verify_need_action_replan": True,
+                "manual_hold_pending_ids": ["act-rollback"],
+                "rollback_results": [
+                    {
+                        "action_id": "act-source",
+                        "rollback_action_id": "act-rollback",
+                        "rolled_back": False,
+                    }
+                ],
+                "degraded_flags": ["saga_compensation_incomplete=True"],
+                "disposition_policy": DispositionPolicy.NOT_REQUIRED.value,
+            },
+        )
+
+    assert saga_resolved.await_count == 1
+    assert saga_resolved.await_args.args[1:] == (
+        ["act-rollback"],
+        [
+            {
+                "action_id": "act-source",
+                "rollback_action_id": "act-rollback",
+                "rolled_back": False,
+            }
+        ],
+    )
+
+    assert resume_patch["halted"] is False
+    assert resume_patch["verify_need_manual_resolution"] is False
+    assert resume_patch["saga_compensation_resolved"] is True
+    assert resume_patch["manual_hold_pending_ids"] == []
+    assert "saga_compensation_incomplete=True" not in resume_patch["degraded_flags"]
+
+
+@pytest.mark.asyncio
+async def test_saga_hold_keeps_unmaterialized_compensation_blocked() -> None:
+    resolved = await _saga_manual_hold_resolved(
+        _SessionFactory(EventStatus.VERIFYING.value),
+        ["act-failed-boundary"],
+        [
+            {
+                "action_id": "act-nonrollbackable",
+                "rollback_action_id": None,
+                "rolled_back": False,
+                "warning": "not_rollbackable",
+            }
+        ],
+    )
+
+    assert resolved is False
 
 
 @pytest.mark.asyncio

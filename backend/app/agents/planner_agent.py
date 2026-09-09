@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -37,6 +38,7 @@ from app.agents.rules.default_plans import (
     get_default_plan,
     get_revised_default_plan,
 )
+from app.core.config import get_settings
 from app.core.llm.base import LLMMessage
 from app.core.llm.prompt_quality import resolve_structured_prompt_timeout
 from app.models.agent_io import (
@@ -56,6 +58,7 @@ from app.models.enums import EventType, Severity
 logger = logging.getLogger(__name__)
 
 _VALID_AGENT_NAMES: frozenset[str] = frozenset(_AGENT_INPUT_BY_NAME.keys())
+ReactFillFn = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
 # evidence_agent tools must match EVIDENCE_QUERY_ORDER / QUERY_TOOL_METAS.
 # rag_agent uses RetrievalPipeline (no ToolProvider tools).
@@ -119,12 +122,6 @@ def _wire_step_has_non_assignable_agent(wire_steps: list[PlanStepLLM]) -> bool:
 
 def _validate_plan_step(step: PlanStep) -> PlanStep | None:
     """Validate and sanitize a single PlanStep."""
-    if step.assigned_agent not in _VALID_AGENT_NAMES:
-        logger.warning(
-            "PlannerAgent: dropping step with invalid assigned_agent=%r",
-            step.assigned_agent,
-        )
-        return None
     if step.assigned_agent not in PLAN_STEP_ASSIGNABLE_AGENTS:
         logger.warning(
             "PlannerAgent: dropping step with non-executable assigned_agent=%r",
@@ -160,17 +157,17 @@ def _steps_from_wire(wire_steps: list[PlanStepLLM]) -> list[PlanStep]:
     steps: list[PlanStep] = []
     for idx, step in enumerate(wire_steps, start=1):
         agent = step.assigned_agent
-        if agent not in _VALID_AGENT_NAMES:
-            logger.warning(
-                "PlannerAgent: dropping wire step with invalid assigned_agent=%r",
-                agent,
-            )
-            continue
         if agent not in PLAN_STEP_ASSIGNABLE_AGENTS:
-            logger.warning(
-                "PlannerAgent: dropping wire step with non-executable assigned_agent=%r",
-                agent,
-            )
+            if agent in _VALID_AGENT_NAMES:
+                logger.warning(
+                    "PlannerAgent: dropping wire step with non-executable assigned_agent=%r",
+                    agent,
+                )
+            else:
+                logger.warning(
+                    "PlannerAgent: dropping wire step with invalid assigned_agent=%r",
+                    agent,
+                )
             continue
         steps.append(
             PlanStep(
@@ -252,6 +249,7 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
         audit_service: Any | None = None,
         event_bus: Any | None = None,
         rag_enabled: bool = False,
+        react_fill: ReactFillFn | None = None,
     ) -> None:
         super().__init__(
             llm_client=llm_client,
@@ -264,6 +262,7 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             event_bus=event_bus,
         )
         self._rag_enabled = rag_enabled
+        self._react_fill = react_fill
 
     async def plan(self, event_context: EventContext) -> ExecutionPlan:
         """Generate an investigation plan via LLM (or rule fallback)."""
@@ -278,7 +277,9 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
             triage = _conservative_fallback_triage(
                 reasoning="triage unavailable — using conservative rule-based plan",
             )
-        return await self._plan_impl(ec_event_id, triage)
+        return await self._plan_impl(
+            ec_event_id, triage, source_snapshot=event_context.source_snapshot
+        )
 
     async def plan_disposition_only(self, event_context: EventContext) -> ExecutionPlan:
         """Generate a deterministic single-step plan for disposition-only."""
@@ -295,7 +296,12 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
     ) -> ExecutionPlan:
         """Revise an existing plan based on a failure reason."""
         event_id = event_context.event.event_id if event_context.event else "unknown"
-        return await self._revise_impl(event_id, failure_reason, previous_plan)
+        return await self._revise_impl(
+            event_id,
+            failure_reason,
+            previous_plan,
+            source_snapshot=event_context.source_snapshot,
+        )
 
     async def _run(self, input: PlannerAgentInput) -> ExecutionPlan:
         event_id = input.event_id
@@ -319,6 +325,8 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
         self,
         event_id: str,
         triage_result: TriageResult,
+        *,
+        source_snapshot: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         """Core plan generation: try LLM, fall back to DEFAULT_PLANS."""
         existing = await self._read_existing_plan(event_id, revision=0)
@@ -359,10 +367,30 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
                 raise
             except Exception:
                 logger.warning(
-                    "PlannerAgent: LLM plan generation failed for event=%s, "
-                    "falling back to DEFAULT_PLANS",
+                    "PlannerAgent: LLM plan generation failed for event=%s",
                     event_id,
                     exc_info=True,
+                )
+                fill_note = await self._maybe_react_fill(
+                    event_id, triage_result, source_snapshot=source_snapshot
+                )
+                if fill_note:
+                    seed = get_default_plan(
+                        event_id,
+                        triage_result.event_type,
+                        _generate_plan_id(event_id, 0),
+                        rag_enabled=self._rag_enabled,
+                    )
+                    return await self._revise_impl(
+                        event_id,
+                        f"llm_plan_failed; {fill_note}",
+                        seed,
+                        already_filled=True,
+                        source_snapshot=source_snapshot,
+                    )
+                logger.warning(
+                    "PlannerAgent: falling back to DEFAULT_PLANS for event=%s",
+                    event_id,
                 )
 
         plan = get_default_plan(
@@ -384,6 +412,9 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
         event_id: str,
         failure_reason: str,
         previous_plan: ExecutionPlan,
+        *,
+        already_filled: bool = False,
+        source_snapshot: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         """Core plan revision: try LLM, fall back to rule-based revision."""
         new_revision = previous_plan.revision + 1
@@ -435,6 +466,12 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
                     event_id,
                     exc_info=True,
                 )
+                if not already_filled:
+                    fill_note = await self._maybe_react_fill(
+                        event_id, None, source_snapshot=source_snapshot
+                    )
+                    if fill_note:
+                        failure_reason = f"{failure_reason}; {fill_note}"
 
         triage = await self._read_triage_from_memory(event_id)
         event_type = triage.event_type if triage else EventType.OTHER
@@ -448,6 +485,49 @@ class PlannerAgent(BaseAgent[PlannerAgentInput, ExecutionPlan]):
         )
         await self._persist_plan(event_id, plan)
         return plan
+
+    async def _maybe_react_fill(
+        self,
+        event_id: str,
+        triage_result: TriageResult | None,
+        *,
+        source_snapshot: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Optional read-only ReAct fill after planner LLM failure."""
+        if self._react_fill is None or not get_settings().react_enabled:
+            return None
+        if source_snapshot is None and self.working_memory is not None:
+            try:
+                raw = await self.working_memory.read(event_id, "source_snapshot")
+                source_snapshot = raw if isinstance(raw, dict) else None
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception:
+                logger.warning("PlannerAgent: source snapshot unavailable event=%s", event_id)
+        context: dict[str, Any] = {
+            "source_snapshot": source_snapshot,
+            "event_id": event_id,
+            "gaps": "planner LLM failed — fill evidence gaps before revise",
+        }
+        if triage_result is not None:
+            context["observation"] = str(triage_result.reasoning or "")[:2000]
+            context["event_type"] = triage_result.event_type.value
+        try:
+            result = await self._react_fill(event_id, context)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            logger.warning(
+                "PlannerAgent: react fill failed for event=%s — continuing",
+                event_id,
+                exc_info=True,
+            )
+            return None
+        if result is None:
+            return None
+        from app.orchestration.react_fill import summarize_react_fill
+
+        return summarize_react_fill(result)
 
     async def _llm_plan(
         self,

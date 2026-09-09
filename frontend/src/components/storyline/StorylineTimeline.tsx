@@ -107,7 +107,6 @@ export default function StorylineTimeline({
       setStoryline(response.data);
       setLoadState("ready");
     } catch (error) {
-      const apiError = error as { error_code?: unknown; response?: { status?: number } };
       const notReady = isStorylineNotReady(error);
       if (hadStoryline && !notReady) {
         setLoadState("ready");

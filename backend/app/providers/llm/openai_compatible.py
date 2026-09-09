@@ -165,16 +165,12 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        thinking_requested = False
-        thinking_stripped = False
-        first_http_status: int | None = None
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
             if _should_disable_thinking(model_name=model_name, base_url=self._base_url):
                 # glm-5.x thinking mode leaves content empty / non-JSON; structured
                 # agents need the answer channel, not the chain-of-thought channel.
                 payload["thinking"] = {"type": "disabled"}
-                thinking_requested = True
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
         try:
@@ -188,14 +184,12 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
                 "LLM transport failed", details={"model_name": model_name}
             ) from exc
 
-        first_http_status = response.status_code
         if (
             json_mode
             and response.status_code >= 400
             and "thinking" in payload
             and response.status_code not in {401, 403, 429}
         ):
-            thinking_stripped = True
             payload.pop("thinking", None)
             try:
                 response = await self._post_chat(client, payload, headers)
@@ -228,15 +222,6 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
             body = response.json()
             choice = body["choices"][0]
             message = choice["message"]
-            raw_content = message.get("content")
-            reasoning_alt = next(
-                (
-                    message.get(key)
-                    for key in ("reasoning_content", "reasoning", "thinking")
-                    if isinstance(message.get(key), str) and str(message.get(key)).strip()
-                ),
-                "",
-            )
             content = _completion_text(message, prefer_json=json_mode)
             finish_reason = choice.get("finish_reason")
             if finish_reason is not None and not isinstance(finish_reason, str):
@@ -268,9 +253,7 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         payload: dict[str, Any],
         headers: dict[str, str],
     ) -> httpx.Response:
-        timeout_s = getattr(self, "_active_request_timeout", None)
-        if timeout_s is None:
-            timeout_s = self.timeout_seconds
+        timeout_s = self._request_timeout()
         return await client.post(
             f"{self._base_url}/chat/completions",
             json=payload,

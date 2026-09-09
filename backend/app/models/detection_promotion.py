@@ -137,6 +137,7 @@ class DetectionPromotionRecord(BaseModel):
     event_id: str | None = Field(default=None, max_length=128)
     link_revision: int = Field(default=1, ge=1)
     ingest_result: TypedIngestResult | None = None
+    context_projection_error: DetectionContextProjectionError | None = None
     reason_codes: list[DetectionPromotionReasonCode] = Field(default_factory=list)
     reason_message: str = Field(default="", max_length=1024)
     created_at: datetime | None = None

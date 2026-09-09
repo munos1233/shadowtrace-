@@ -8,8 +8,13 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from app.api.v1 import schemas as s
-from app.api.v1.deps import DetectionGovernanceDep
+from app.api.v1.deps import DetectionGovernanceDep, DetectionRuleRuntimeDep
 from app.core.auth import ROLE_ANALYST, ROLE_APPROVER, Principal, require_roles
+from app.core.errors import ResourceNotFoundError
+from app.evaluation.detection.artifact_io import (
+    list_evaluation_artifact_summaries,
+    load_evaluation_artifact,
+)
 from app.evaluation.threshold import confine_threshold_manifest_path
 from app.models.detection_evaluation import DetectionEvaluationArtifact
 from app.models.detection_governance import (
@@ -17,6 +22,8 @@ from app.models.detection_governance import (
     DetectionGovernanceDecisionRequest,
     DetectionGovernanceRevokeRequest,
 )
+from app.models.detection_rule import CandidateDetectionQuery
+from app.services.detection_governance_service import assert_governance_tenant_access
 
 router = APIRouter(tags=["detection-governance"])
 
@@ -151,3 +158,94 @@ async def evaluate_detection_promotion_gate(
         principal=principal,
     )
     return s.DetectionGovernancePromotionGateResponse.model_validate(result.model_dump())
+
+
+@router.get(
+    "/detection/evaluation/artifacts",
+    response_model=s.DetectionEvaluationArtifactListResponse,
+)
+async def list_detection_evaluation_artifacts(
+    principal: Annotated[Principal, require_roles(ROLE_ANALYST, ROLE_APPROVER)],
+    root: str = Query(default="detection_shadow_v1", min_length=1, max_length=256),
+) -> s.DetectionEvaluationArtifactListResponse:
+    items = []
+    for item in list_evaluation_artifact_summaries(root):
+        try:
+            assert_governance_tenant_access(principal, item["tenant_id"])
+        except ResourceNotFoundError:
+            continue
+        items.append(item)
+    return s.DetectionEvaluationArtifactListResponse(
+        items=[s.DetectionEvaluationArtifactSummary.model_validate(item) for item in items]
+    )
+
+
+@router.get(
+    "/detection/evaluation/artifacts/by-path",
+    response_model=s.DetectionEvaluationArtifactResponse,
+)
+async def get_detection_evaluation_artifact_by_path(
+    path: Annotated[str, Query(min_length=1, max_length=512)],
+    principal: Annotated[Principal, require_roles(ROLE_ANALYST, ROLE_APPROVER)],
+) -> s.DetectionEvaluationArtifactResponse:
+    artifact, relative = load_evaluation_artifact(path)
+    assert_governance_tenant_access(principal, artifact.tenant_id)
+    return s.DetectionEvaluationArtifactResponse(
+        path=relative,
+        artifact=artifact.model_dump(mode="json"),
+    )
+
+
+@router.get(
+    "/detection/candidates",
+    response_model=s.DetectionCandidateListResponse,
+)
+async def list_detection_candidates(
+    tenant_id: Annotated[str, Query(min_length=1, max_length=128)],
+    principal: Annotated[Principal, require_roles(ROLE_ANALYST, ROLE_APPROVER)],
+    runtime: DetectionRuleRuntimeDep,
+    package_id: str | None = Query(default=None, max_length=128),
+    detection_scope_id: str | None = Query(default=None, max_length=128),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> s.DetectionCandidateListResponse:
+    assert_governance_tenant_access(principal, tenant_id)
+    result = await runtime.query_candidates(
+        CandidateDetectionQuery(
+            source_tenant_id=tenant_id,
+            package_id=package_id,
+            detection_scope_id=detection_scope_id,
+            page=page,
+            page_size=page_size,
+        )
+    )
+    return s.DetectionCandidateListResponse(
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+        items=[item.model_dump(mode="json") for item in result.items],
+    )
+
+
+@router.post(
+    "/detection/governance/decisions/from-path",
+    response_model=s.DetectionGovernanceDecisionResponse,
+)
+async def record_detection_governance_decision_from_path(
+    body: s.DetectionGovernanceDecisionFromPathRequest,
+    principal: Annotated[Principal, require_roles(ROLE_APPROVER)],
+    governance: DetectionGovernanceDep,
+) -> s.DetectionGovernanceDecisionResponse:
+    artifact, _relative = load_evaluation_artifact(body.artifact_path)
+    request = DetectionGovernanceDecisionRequest(
+        decision=DetectionGovernanceDecisionKind(body.decision),
+        reason_note=body.reason_note,
+        expires_at=body.expires_at,
+    )
+    decision = await governance.record_decision(
+        principal,
+        artifact,
+        request,
+        threshold_manifest_path=_confined_manifest_path(body.threshold_manifest_path),
+    )
+    return s.DetectionGovernanceDecisionResponse.model_validate(decision.model_dump())

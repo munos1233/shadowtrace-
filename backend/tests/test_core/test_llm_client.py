@@ -838,6 +838,52 @@ async def test_per_call_timeout_overrides_httpx_client_timeout() -> None:
     assert float(read_timeout) == 180.0
 
 
+@pytest.mark.asyncio
+async def test_concurrent_calls_keep_task_local_http_timeouts() -> None:
+    captured: dict[int, float] = {}
+    both_started = asyncio.Event()
+    arrivals = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal arrivals
+        payload = json.loads(request.content)
+        arrivals += 1
+        if arrivals == 2:
+            both_started.set()
+        await both_started.wait()
+        timeout = request.extensions["timeout"]
+        captured[int(payload["max_tokens"])] = float(timeout["read"])
+        return httpx.Response(
+            200,
+            json=_response("ok", model="primary-model"),
+            request=request,
+        )
+
+    audit = InMemoryLLMCallAuditRecorder()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = _client(http_client, audit=audit, timeout_seconds=30.0)
+        await asyncio.gather(
+            client.chat(
+                MESSAGES,
+                event_id="evt-timeout-a",
+                agent_name="RiskAgent",
+                prompt_key="risk_score",
+                max_tokens=101,
+                timeout=3.0,
+            ),
+            client.chat(
+                MESSAGES,
+                event_id="evt-timeout-b",
+                agent_name="RiskAgent",
+                prompt_key="risk_score",
+                max_tokens=202,
+                timeout=7.0,
+            ),
+        )
+
+    assert captured == {101: 3.0, 202: 7.0}
+
+
 def test_fallback_chain_deduplicates_primary_and_repeated_models() -> None:
     client = OpenAICompatibleLLMClient(
         base_url="https://llm.example/v1",

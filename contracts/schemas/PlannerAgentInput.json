@@ -531,22 +531,33 @@
           "type": "string"
         },
         "assigned_agent": {
-          "enum": [
-            "super_agent",
-            "planner_agent",
-            "triage_agent",
-            "evidence_agent",
-            "graph_agent",
-            "rag_agent",
-            "risk_agent",
-            "response_agent",
-            "verify_agent",
-            "report_agent",
-            "memory_agent",
-            "tool_agent"
+          "anyOf": [
+            {
+              "enum": [
+                "super_agent",
+                "planner_agent",
+                "triage_agent",
+                "evidence_agent",
+                "graph_agent",
+                "rag_agent",
+                "risk_agent",
+                "response_agent",
+                "verify_agent",
+                "report_agent",
+                "memory_agent",
+                "tool_agent"
+              ],
+              "type": "string"
+            },
+            {
+              "enum": [
+                "storyline_service",
+                "react"
+              ],
+              "type": "string"
+            }
           ],
-          "title": "Assigned Agent",
-          "type": "string"
+          "title": "Assigned Agent"
         },
         "required_tools": {
           "items": {

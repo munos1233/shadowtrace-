@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -134,7 +135,7 @@ def query_service(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> KnowledgeQueryService:
     embed_service = EmbeddingService(Settings(embedding_mode="mock"))
-    store = KnowledgeStore(session_factory, embed_service)
+    store = KnowledgeStore(session_factory, embed_service, tenant_isolation_strict=True)
     return KnowledgeQueryService(store)
 
 
@@ -144,6 +145,7 @@ async def test_pagination_is_stable(
     clean_knowledge: None,
     query_service: KnowledgeQueryService,
 ) -> None:
+    tenant_id = f"tenant-kq-{uuid4().hex[:8]}"
     store = query_service._store
     await store.upsert_chunks(
         "playbook_kb",
@@ -152,7 +154,7 @@ async def test_pagination_is_stable(
                 chunk_id=f"chk-playbook{i:02d}",
                 kb_name="playbook_kb",
                 content=f"Playbook step {i}",
-                metadata={"step": i},
+                metadata={"step": i, "tenant_id": tenant_id},
             )
             for i in range(3)
         ],
@@ -162,11 +164,13 @@ async def test_pagination_is_stable(
         page=1,
         page_size=2,
         kb_name="playbook_kb",
+        tenant_id=tenant_id,
     )
     _, page_two = await query_service.list_knowledge(
         page=2,
         page_size=2,
         kb_name="playbook_kb",
+        tenant_id=tenant_id,
     )
 
     assert total == 3

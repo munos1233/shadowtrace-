@@ -543,7 +543,7 @@ describe("EventDetailPage", () => {
   it("integrates decision trace and trajectory metrics in the audit tab", async () => {
     renderPage("/events/evt-70#audit");
 
-    expect(await screen.findByText("RiskAgent 完成风险评估")).toBeInTheDocument();
+    expect(await screen.findByText("完成风险评估")).toBeInTheDocument();
     expect(screen.getByText("高风险异常登录")).toBeInTheDocument();
     expect(screen.getByText("轨迹质量摘要")).toBeInTheDocument();
     expect(screen.getByText("80%")).toBeInTheDocument();

@@ -59,6 +59,10 @@ DEGRADED_FLAG_ALLOWLIST: frozenset[str] = frozenset(
         "state_transition_projection_degraded",
         # ISSUE-305 plan steps targeting non-graph agents (memory/tool/etc.)
         "plan_step_not_executable",
+        # Saga compensate before replan did not fully roll back predecessors.
+        "saga_compensation_incomplete",
+        # Read-only ReAct fill failed or was denied; pipeline continues.
+        "react_fill_degraded",
     }
 )
 

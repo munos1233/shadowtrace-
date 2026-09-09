@@ -58,6 +58,10 @@ def _base_state(**overrides: Any) -> InvestigationState:
     return state
 
 
+def _noop_rollback() -> MagicMock:
+    return MagicMock(compensate=AsyncMock(return_value=[]))
+
+
 class FakeRuntime:
     """Fake WorkflowRuntimeService for tests."""
 
@@ -291,7 +295,7 @@ class TestReplanGraphNode:
             replan_count=0,
             verify_failed_actions=["act-001"],
         )
-        result = await replan_graph_node(state, handler=handler)
+        result = await replan_graph_node(state, handler=handler, rollback=_noop_rollback())
         assert result["event_status"] == EventStatus.REPLANNING.value
         assert result["replan_count"] == 1
         assert result["escalated"] is False
@@ -305,8 +309,65 @@ class TestReplanGraphNode:
             verify_failed_actions=["act-001"],
             verify_has_partial_success=False,
         )
-        result = await replan_graph_node(state, handler=handler)
+        result = await replan_graph_node(state, handler=handler, rollback=_noop_rollback())
         assert result["escalated"] is True
+
+    async def test_compensate_receives_all_failed_actions(self):
+        sm = FakeStateMachine()
+        handler = ReplanHandler(state_machine=sm, runtime=FakeRuntime())
+        rollback = MagicMock()
+        rollback.compensate = AsyncMock(
+            return_value=[SimpleNamespace(rolled_back=True, warning=None)]
+        )
+        state = _base_state(
+            replan_count=0,
+            verify_failed_actions=["act-fail", "act-other"],
+        )
+        result = await replan_graph_node(state, handler=handler, rollback=rollback)
+        rollback.compensate.assert_awaited_once_with(
+            "evt-test-replan-001",
+            ["act-fail", "act-other"],
+            operator="SagaCompensation",
+            reason="verify need_action_replan — compensating prior SUCCESS actions",
+        )
+        assert result["event_status"] == EventStatus.REPLANNING.value
+        assert result["rollback_results"]
+
+    async def test_compensate_skipped_without_failed_actions(self):
+        sm = FakeStateMachine()
+        handler = ReplanHandler(state_machine=sm, runtime=FakeRuntime())
+        rollback = MagicMock()
+        rollback.compensate = AsyncMock()
+        state = _base_state(replan_count=0, verify_failed_actions=[])
+        result = await replan_graph_node(state, handler=handler, rollback=rollback)
+        rollback.compensate.assert_not_called()
+        assert "rollback_results" not in result
+
+    async def test_compensate_failure_blocks_replan(self):
+        sm = FakeStateMachine()
+        handler = ReplanHandler(state_machine=sm, runtime=FakeRuntime())
+        rollback = MagicMock()
+        rollback.compensate = AsyncMock(side_effect=RuntimeError("adapter down"))
+        state = _base_state(
+            replan_count=0,
+            verify_failed_actions=["act-fail"],
+        )
+        result = await replan_graph_node(state, handler=handler, rollback=rollback)
+        assert result["halted"] is True
+        assert result["replan_count"] == 0
+        assert route_after_replan(result) == "manual"
+        assert "saga_compensation_incomplete" in (result.get("degraded_flags") or [])
+
+    async def test_missing_rollback_service_blocks_replan(self):
+        handler = MagicMock(execute_replan=AsyncMock())
+        state = _base_state(verify_failed_actions=["act-fail"])
+
+        result = await replan_graph_node(state, handler=handler, rollback=None)
+
+        handler.execute_replan.assert_not_awaited()
+        assert result["halted"] is True
+        assert result["verify_need_manual_resolution"] is True
+        assert "saga_compensation_incomplete" in result["degraded_flags"]
 
 
 # ── Tests: route_after_replan ───────────────────────────────────────────────
@@ -320,6 +381,13 @@ class TestRouteAfterReplan:
         state = _base_state(replan_count=1, escalated=False)
         route = route_after_replan(state)
         assert route == "investigate"
+
+    def test_resolved_saga_tombstone_ignores_union_merged_stale_flag(self):
+        state = _base_state(
+            degraded_flags=["saga_compensation_incomplete=True"],
+            saga_compensation_resolved=True,
+        )
+        assert route_after_replan(state) == "investigate"
 
     def test_escalated_routes_to_report(self):
         """Escalated → ROUTE_REPORT."""
@@ -455,6 +523,7 @@ class TestConvergenceGuardBlocksReplan:
             state,
             handler=handler,
             convergence_guard=guard,
+            rollback=_noop_rollback(),
         )
 
         # Must have called record_step AND should_stop
@@ -490,6 +559,7 @@ class TestConvergenceGuardBlocksReplan:
             state,
             handler=handler,
             convergence_guard=guard,
+            rollback=_noop_rollback(),
         )
 
         guard.record_step.assert_awaited_once()
@@ -533,3 +603,58 @@ class TestReplanGraphNodeValidation:
         state = _base_state(event_id="", replan_count=0)
         with pytest.raises(ValueError, match="missing required field: event_id"):
             await replan_graph_node(state, handler=handler)
+
+
+@pytest.mark.parametrize("warning", ["awaiting_approval", "not_rollbackable", "rollback_error"])
+@pytest.mark.asyncio
+async def test_incomplete_compensation_never_calls_planner_transition(warning):
+    handler = MagicMock(execute_replan=AsyncMock())
+    rollback = MagicMock(
+        compensate=AsyncMock(
+            return_value=[
+                {
+                    "action_id": "act-old",
+                    "rollback_action_id": "act-rollback",
+                    "rolled_back": False,
+                    "warning": warning,
+                }
+            ]
+        )
+    )
+    result = await replan_graph_node(
+        _base_state(replan_count=0, verify_failed_actions=["act-fail"]),
+        handler=handler,
+        rollback=rollback,
+    )
+    handler.execute_replan.assert_not_awaited()
+    assert result["halted"] is True
+    assert result["replan_count"] == 0
+    assert route_after_replan(result) == "manual"
+    assert result["rollback_results"][0]["warning"] == warning
+
+
+@pytest.mark.parametrize(
+    "results",
+    [
+        None,
+        [
+            {
+                "action_id": "act-old",
+                "rolled_back": True,
+                "compensation_writeback_required": True,
+                "compensation_writeback_status": "pending",
+            }
+        ],
+    ],
+)
+@pytest.mark.asyncio
+async def test_missing_result_or_pending_compensation_writeback_blocks_replan(results):
+    handler = MagicMock(execute_replan=AsyncMock())
+    rollback = MagicMock(compensate=AsyncMock(return_value=results))
+    result = await replan_graph_node(
+        _base_state(verify_failed_actions=["act-fail"]),
+        handler=handler,
+        rollback=rollback,
+    )
+    handler.execute_replan.assert_not_awaited()
+    assert route_after_replan(result) == "manual"

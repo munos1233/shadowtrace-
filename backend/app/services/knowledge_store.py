@@ -553,10 +553,6 @@ class KnowledgeStore:
             ]
             return total, hits
 
-    async def count(self, kb_name: str) -> int:
-        """Return the number of chunks stored in *kb_name*."""
-        sql = text("SELECT COUNT(*) AS cnt FROM knowledge_chunk WHERE kb_name = :kb_name")
-        async with self._session_factory() as session:
-            result = await session.execute(sql, {"kb_name": kb_name})
-            row = result.fetchone()
-            return int(row.cnt) if row else 0
+    async def count(self, kb_name: str, *, tenant_id: str | None = None) -> int:
+        """Return the number of chunks stored in *kb_name*, optionally tenant-scoped."""
+        return await self.count_chunks(kb_name=kb_name, tenant_id=tenant_id)

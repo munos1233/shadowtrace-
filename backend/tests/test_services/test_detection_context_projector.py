@@ -637,6 +637,31 @@ async def test_promotion_records_projection_failure_on_blocked_projection(
     assert promotion.context_projection_error is not None
     assert promotion.context_projection_error.reason == "candidate_content_hash_mismatch"
     assert "candidate hash mismatch" in promotion.context_projection_error.message
+    from app.services.detection_promotion_service import _row_to_record
+
+    record = _row_to_record(row)
+    assert record.context_projection_error is not None
+    assert record.context_projection_error.reason == "candidate_content_hash_mismatch"
+
+    listed, _ = await promotion_service.list_promotions(tenant_id=seeded.source_tenant_id)
+    assert listed[0].context_projection_error is not None
+    mock_projector.project_from_promotion.side_effect = None
+    mock_projector.project_from_promotion.return_value = None
+    retried = await promotion_service.promote_candidate(
+        artifact,
+        DetectionPromotionRequest(
+            tenant_id=seeded.source_tenant_id,
+            candidate_detection_id=candidate.candidate_detection_id,
+            decision_id=decision.decision_id,
+        ),
+    )
+    assert retried.record.context_projection_error is None
+    refreshed = await promotion_service.get_promotion(
+        promotion.promotion_id,
+        tenant_id=seeded.source_tenant_id,
+    )
+    assert refreshed.context_projection_error is None
+    assert DetectionPromotionReasonCode.CONTEXT_PROJECTION_FAILED not in refreshed.reason_codes
 
 
 def test_build_detection_context_snapshot_same_inputs_same_hash() -> None:
