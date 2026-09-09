@@ -68,6 +68,13 @@ CELERY_SIGKILL_ARTIFACT_DIR ?= $(CURDIR)/artifacts/issue-283
 CI_DATABASE_URL ?= postgresql+asyncpg://shadowtrace:shadowtrace@localhost:$(POSTGRES_PORT)/shadowtrace
 CI_REDIS_URL ?= redis://localhost:$(REDIS_PORT)/0
 
+# Evaluation artifacts must bind to a stable source revision. Clean release
+# archives carry SOURCE_REVISION instead of a .git directory, so prefer that
+# file before Git (which could otherwise discover an unrelated parent repo).
+# EVAL_CODE_SHA remains explicitly overrideable by CI or release tooling.
+SOURCE_REVISION_FILE ?= $(CURDIR)/SOURCE_REVISION
+EVAL_CODE_SHA ?= $(shell if [ -s "$(SOURCE_REVISION_FILE)" ]; then sed -n '1p' "$(SOURCE_REVISION_FILE)"; elif revision=$$(git -C "$(CURDIR)" rev-parse HEAD 2>/dev/null); then printf '%s' "$$revision"; else printf '%s' 0000000; fi)
+
 .PHONY: up down down-v bootstrap smoke-bootstrap up-demo down-demo bootstrap-demo bootstrap-demo-analysis bootstrap-demo-full-loop smoke-demo demo-full-loop demo-guard-test up-observability down-observability llm-smoke test test-ci-lite lint fmt migrate migrate-down load-kb up-embedding-remote integration-test orchestration-test worker-smoke-test worker-nightly-pytest worker-nightly-smoke worker-nightly-matrix ingestion-scheduler-test auto-investigate-test autonomous-mock-e2e autonomous-mock-e2e-pytest autonomous-mock-e2e-worker-pytest autonomous-mock-e2e-worker-sigkill eval-full-loop eval-full-loop-matrix eval-eventtype-8 adversarial-closure-gates test-tools test-system test-regression update-baseline test-e2e-frontend frontend-test ci-lint ci-test ci-build update-contracts check-contract-drift check-migration-revisions evaluation-run evaluation-test detection-evaluation-run detection-production-comparison-run
 
 up:
@@ -736,7 +743,7 @@ evaluation-run:
 	DATABASE_URL="$(CI_DATABASE_URL)" $(PYTHON) -m alembic upgrade head; \
 	DATABASE_URL="$(CI_DATABASE_URL)" $(PYTHON) -m scripts.run_evaluation \
 		--output "$(CURDIR)/artifacts/evaluation/latest_run.json" \
-		--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)" \
+		--code-sha "$(EVAL_CODE_SHA)" \
 		--seed 42 \
 		--threshold-manifest "$(CURDIR)/data/evaluation/shadowtrace_demo_v1/threshold_manifest.json" \
 		--compare-baseline "$(CURDIR)/data/evaluation/shadowtrace_demo_v1/baseline_artifact.json"
@@ -791,7 +798,7 @@ detection-evaluation-run:
 	DATABASE_URL="$(CI_DATABASE_URL)" $(PYTHON) -m alembic upgrade head; \
 	DATABASE_URL="$(CI_DATABASE_URL)" $(PYTHON) -m scripts.run_detection_evaluation \
 		--output "$(CURDIR)/artifacts/evaluation/detection_latest_run.json" \
-		--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)" \
+		--code-sha "$(EVAL_CODE_SHA)" \
 		--seed 42 \
 		--threshold-manifest "$(CURDIR)/data/evaluation/detection_shadow_v1/threshold_manifest.json" \
 		--compare-baseline "$(CURDIR)/data/evaluation/detection_shadow_v1/baseline_artifact.json"
@@ -820,7 +827,7 @@ detection-production-comparison-run:
 	DETECTION_PHASE_A="$(CURDIR)/artifacts/evaluation/detection_latest_run.json"; \
 	DATABASE_URL="$(CI_DATABASE_URL)" $(PYTHON) -m scripts.run_detection_evaluation \
 		--output "$$DETECTION_PHASE_A" \
-		--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)" \
+		--code-sha "$(EVAL_CODE_SHA)" \
 		--seed 42 \
 		--threshold-manifest "$(CURDIR)/data/evaluation/detection_shadow_v1/threshold_manifest.json"; \
 	DATABASE_URL="$(CI_DATABASE_URL)" REDIS_URL="$(CI_REDIS_URL)" \
@@ -833,7 +840,7 @@ detection-production-comparison-run:
 		--phase-a-artifact "$$DETECTION_PHASE_A" \
 		--dataset-dir "$(CURDIR)/data/evaluation/detection_production_v1" \
 		--output "$(CURDIR)/artifacts/evaluation/detection_production_latest.json" \
-		--code-sha "$$(git -C "$(CURDIR)" rev-parse HEAD)" \
+		--code-sha "$(EVAL_CODE_SHA)" \
 		--seed 42 \
 		--compare-baseline "$(CURDIR)/data/evaluation/detection_production_v1/baseline_comparison_artifact.json"
 
